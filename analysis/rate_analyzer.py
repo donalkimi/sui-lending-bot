@@ -1,0 +1,273 @@
+"""
+Rate analyzer to find the best protocol pair and token combination
+"""
+
+import pandas as pd
+import numpy as np
+from typing import List, Dict, Tuple
+import sys
+import os
+
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from config import settings
+from analysis.position_calculator import PositionCalculator
+
+
+class RateAnalyzer:
+    """Analyze all protocol and token combinations to find the best strategy"""
+    
+    def __init__(
+        self, 
+        lend_rates: pd.DataFrame,
+        borrow_rates: pd.DataFrame,
+        collateral_ratios: pd.DataFrame,
+        liquidation_distance: float = None
+    ):
+        """
+        Initialize the rate analyzer
+        
+        Args:
+            lend_rates: DataFrame with lending rates (tokens x protocols)
+            borrow_rates: DataFrame with borrow rates (tokens x protocols)
+            collateral_ratios: DataFrame with collateral ratios (tokens x protocols)
+            liquidation_distance: Safety buffer (default from settings)
+        """
+        self.lend_rates = lend_rates
+        self.borrow_rates = borrow_rates
+        self.collateral_ratios = collateral_ratios
+        self.liquidation_distance = liquidation_distance or settings.DEFAULT_LIQUIDATION_DISTANCE
+        
+        # Get list of protocols from column headers (excluding first column which is token names)
+        self.protocols = list(lend_rates.columns[1:])
+        
+        # Dynamically build token lists from Google Sheets
+        token_column_name = lend_rates.columns[0]  # First column name (usually "Token")
+        all_tokens_in_sheets = lend_rates[token_column_name].dropna().tolist()
+        
+        # OTHER_TOKENS = all tokens from sheets EXCEPT stablecoins
+        self.OTHER_TOKENS = [token for token in all_tokens_in_sheets 
+                             if token not in settings.STABLECOINS]
+        
+        # ALL_TOKENS = stablecoins + dynamically detected other tokens
+        self.ALL_TOKENS = settings.STABLECOINS + self.OTHER_TOKENS
+        
+        # Initialize calculator
+        self.calculator = PositionCalculator(self.liquidation_distance)
+        
+        print(f"\n🔧 Initialized Rate Analyzer:")
+        print(f"   Protocols: {len(self.protocols)} ({', '.join(self.protocols)})")
+        print(f"   Tokens: {len(self.ALL_TOKENS)} (Stablecoins: {len(settings.STABLECOINS)}, High-Yield: {len(self.OTHER_TOKENS)})")
+        print(f"   Stablecoins: {', '.join(settings.STABLECOINS)}")
+        print(f"   High-Yield Tokens: {', '.join(self.OTHER_TOKENS)}")
+        print(f"   Liquidation Distance: {self.liquidation_distance*100:.0f}%")
+    
+    def get_rate(self, df: pd.DataFrame, token: str, protocol: str) -> float:
+        """
+        Safely get a rate from a dataframe
+        
+        Args:
+            df: DataFrame with rates
+            token: Token name
+            protocol: Protocol name
+            
+        Returns:
+            Rate as decimal, or np.nan if not found
+        """
+        # Set the first column as index if it isn't already
+        if df.index.name != df.columns[0]:
+            df_indexed = df.set_index(df.columns[0])
+        else:
+            df_indexed = df
+        
+        try:
+            # Get the rate
+            if token in df_indexed.index and protocol in df_indexed.columns:
+                rate = df_indexed.loc[token, protocol]
+                return float(rate) if pd.notna(rate) else np.nan
+            else:
+                return np.nan
+        except:
+            return np.nan
+    
+    def analyze_all_combinations(self, tokens: List[str] = None) -> pd.DataFrame:
+        """
+        Analyze all possible protocol pairs and token combinations
+        
+        IMPORTANT: Token1 must be a stablecoin to avoid price exposure.
+        The strategy starts by lending a stablecoin to remain market neutral.
+        
+        Args:
+            tokens: List of tokens to analyze (default: all tokens from settings)
+            
+        Returns:
+            DataFrame with all results sorted by net APR
+        """
+        if tokens is None:
+            tokens = self.ALL_TOKENS  # Use dynamically built token list
+        
+        print(f"\n🔍 Analyzing all combinations...")
+        print(f"   Tokens to analyze: {len(tokens)}")
+        print(f"   Protocol pairs: {len(self.protocols) * (len(self.protocols) - 1)} (bidirectional)")
+        print(f"   ⚠️  Enforcing: Token1 must be a stablecoin (market neutral requirement)")
+        
+        results = []
+        analyzed = 0
+        valid = 0
+        
+        # For each token pair
+        # CRITICAL: token1 must be a stablecoin to avoid price exposure
+        for token1 in tokens:
+            # Enforce that token1 is a stablecoin
+            if token1 not in settings.STABLECOINS:
+                continue
+            
+            for token2 in tokens:
+                # Skip if same token
+                if token1 == token2:
+                    continue
+                
+                # For each protocol pair (bidirectional)
+                for protocol_A in self.protocols:
+                    for protocol_B in self.protocols:
+                        # Skip if same protocol
+                        if protocol_A == protocol_B:
+                            continue
+                        
+                        analyzed += 1
+                        
+                        # Get all the rates
+                        lend_rate_1A = self.get_rate(self.lend_rates, token1, protocol_A)
+                        borrow_rate_2A = self.get_rate(self.borrow_rates, token2, protocol_A)
+                        lend_rate_2B = self.get_rate(self.lend_rates, token2, protocol_B)
+                        borrow_rate_1B = self.get_rate(self.borrow_rates, token1, protocol_B)
+                        
+                        # Get collateral ratios
+                        collateral_1A = self.get_rate(self.collateral_ratios, token1, protocol_A)
+                        collateral_2B = self.get_rate(self.collateral_ratios, token2, protocol_B)
+                        
+                        # Skip if any rates are missing
+                        if any(np.isnan([lend_rate_1A, borrow_rate_2A, lend_rate_2B, 
+                                        borrow_rate_1B, collateral_1A, collateral_2B])):
+                            continue
+                        
+                        # Analyze this strategy
+                        result = self.calculator.analyze_strategy(
+                            token1=token1,
+                            token2=token2,
+                            protocol_A=protocol_A,
+                            protocol_B=protocol_B,
+                            lend_rate_token1_A=lend_rate_1A,
+                            borrow_rate_token2_A=borrow_rate_2A,
+                            lend_rate_token2_B=lend_rate_2B,
+                            borrow_rate_token1_B=borrow_rate_1B,
+                            collateral_ratio_token1_A=collateral_1A,
+                            collateral_ratio_token2_B=collateral_2B
+                        )
+                        
+                        if result['valid']:
+                            valid += 1
+                            results.append(result)
+        
+        print(f"   ✓ Analyzed {analyzed} combinations")
+        print(f"   ✓ {valid} valid strategies found")
+        
+        # Convert to DataFrame and sort by net APR
+        if results:
+            df_results = pd.DataFrame(results)
+            
+            # Add flag for stablecoin-only strategies (both tokens are stablecoins)
+            df_results['is_stablecoin_only'] = df_results.apply(
+                lambda row: row['token1'] in settings.STABLECOINS and row['token2'] in settings.STABLECOINS,
+                axis=1
+            )
+            
+            # Sort by net APR (descending), then by stablecoin-only (True first) as tiebreaker
+            df_results = df_results.sort_values(
+                by=['net_apr', 'is_stablecoin_only'],
+                ascending=[False, False]
+            )
+            
+            return df_results
+        else:
+            return pd.DataFrame()
+    
+    def find_best_protocol_pair(self, tokens: List[str] = None) -> Tuple[str, str, pd.DataFrame]:
+        """
+        Find the best protocol pair based on maximum spread across any token
+        
+        Args:
+            tokens: List of tokens to consider (default: all tokens)
+            
+        Returns:
+            Tuple of (protocol_A, protocol_B, detailed_results_df)
+        """
+        # Analyze all combinations
+        all_results = self.analyze_all_combinations(tokens)
+        
+        if all_results.empty:
+            print("✗ No valid strategies found!")
+            return None, None, pd.DataFrame()
+        
+        # Get the best strategy
+        best = all_results.iloc[0]
+        
+        # Determine strategy type
+        is_stablecoin_only = best['token1'] in settings.STABLECOINS and best['token2'] in settings.STABLECOINS
+        strategy_type = "Stablecoin-only" if is_stablecoin_only else "Stablecoin + High-yield"
+        
+        print(f"\n🏆 BEST STRATEGY FOUND ({strategy_type}):")
+        print(f"   Protocol A: {best['protocol_A']}")
+        print(f"   Protocol B: {best['protocol_B']}")
+        print(f"   Token 1: {best['token1']}")
+        print(f"   Token 2: {best['token2']}")
+        print(f"   Net APR: {best['net_apr']:.2f}%")
+        print(f"   Liquidation Distance: {best['liquidation_distance']:.0f}%")
+        
+        return best['protocol_A'], best['protocol_B'], all_results
+    
+    def find_best_stablecoin_pairs(
+        self, 
+        protocol_A: str, 
+        protocol_B: str
+    ) -> pd.DataFrame:
+        """
+        Find the best stablecoin pairs for the given protocol pair
+        
+        Args:
+            protocol_A: First protocol
+            protocol_B: Second protocol
+            
+        Returns:
+            DataFrame with stablecoin strategies sorted by net APR
+        """
+        print(f"\n💰 Finding best stablecoin pairs for {protocol_A} <-> {protocol_B}...")
+        
+        # Analyze only stablecoin combinations for these protocols
+        all_results = self.analyze_all_combinations(settings.STABLECOINS)
+        
+        # Filter for the specified protocol pair
+        filtered = all_results[
+            ((all_results['protocol_A'] == protocol_A) & 
+             (all_results['protocol_B'] == protocol_B)) |
+            ((all_results['protocol_A'] == protocol_B) & 
+             (all_results['protocol_B'] == protocol_A))
+        ]
+        
+        if filtered.empty:
+            print("   ✗ No valid stablecoin strategies found for this protocol pair")
+            return pd.DataFrame()
+        
+        print(f"   ✓ Found {len(filtered)} valid stablecoin strategies")
+        print(f"\n   Top 5 Strategies:")
+        for idx, row in filtered.head(5).iterrows():
+            print(f"   {row['token1']:>8} <-> {row['token2']:<8}: {row['net_apr']:>6.2f}% APR "
+                  f"(Liq Dist: {row['liquidation_distance']:.0f}%)")
+        
+        return filtered
+
+
+# Example usage
+if __name__ == "__main__":
+    # This would normally come from sheets_reader
+    print("This is an example - normally you'd load data from Google Sheets")
+    print("Run main.py to see the full analysis with real data")
