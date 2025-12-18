@@ -84,11 +84,16 @@ class SlackNotifier:
         message = f"🚀 High APR Opportunity: {strategy['net_apr']:.2f}%"
         
         # Prepare variables for Slack Workflows
+        has_conversion = strategy['token1'] != strategy['token3']
+        conversion_note = f" → {strategy['token1']}" if has_conversion else ""
+        
         variables = {
             "net_apr": f"{strategy['net_apr']:.2f}",
             "liquidation_distance": f"{strategy['liquidation_distance']:.0f}",
             "token1": strategy['token1'],
             "token2": strategy['token2'],
+            "token3": strategy['token3'],
+            "conversion_note": conversion_note,
             "protocol_A": strategy['protocol_A'],
             "protocol_B": strategy['protocol_B'],
             "lend_amount": f"{strategy['L_A']:.2f}",
@@ -98,7 +103,7 @@ class SlackNotifier:
             "lend_rate_1A": f"{strategy['lend_rate_1A']:.2f}",
             "borrow_rate_2A": f"{strategy['borrow_rate_2A']:.2f}",
             "lend_rate_2B": f"{strategy['lend_rate_2B']:.2f}",
-            "borrow_rate_1B": f"{strategy['borrow_rate_1B']:.2f}",
+            "borrow_rate_3B": f"{strategy['borrow_rate_3B']:.2f}",
             "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')
         }
         
@@ -142,7 +147,8 @@ class SlackNotifier:
                         f"• Lend {strategy['L_A']:.2f} {strategy['token1']} in {strategy['protocol_A']} @ {strategy['lend_rate_1A']:.2f}%\n"
                         f"• Borrow {strategy['B_A']:.2f} {strategy['token2']} from {strategy['protocol_A']} @ {strategy['borrow_rate_2A']:.2f}%\n"
                         f"• Lend {strategy['L_B']:.2f} {strategy['token2']} in {strategy['protocol_B']} @ {strategy['lend_rate_2B']:.2f}%\n"
-                        f"• Borrow {strategy['B_B']:.2f} {strategy['token1']} from {strategy['protocol_B']} @ {strategy['borrow_rate_1B']:.2f}%"
+                        f"• Borrow {strategy['B_B']:.2f} {strategy['token3']} from {strategy['protocol_B']} @ {strategy['borrow_rate_3B']:.2f}%\n"
+                        + (f"• Convert {strategy['token3']} → {strategy['token1']} (1:1)" if has_conversion else "")
                     )
                 }
             },

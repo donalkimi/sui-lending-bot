@@ -126,47 +126,54 @@ class RateAnalyzer:
                 if token1 == token2:
                     continue
                 
-                # For each protocol pair (bidirectional)
-                for protocol_A in self.protocols:
-                    for protocol_B in self.protocols:
-                        # Skip if same protocol
-                        if protocol_A == protocol_B:
-                            continue
-                        
-                        analyzed += 1
-                        
-                        # Get all the rates
-                        lend_rate_1A = self.get_rate(self.lend_rates, token1, protocol_A)
-                        borrow_rate_2A = self.get_rate(self.borrow_rates, token2, protocol_A)
-                        lend_rate_2B = self.get_rate(self.lend_rates, token2, protocol_B)
-                        borrow_rate_1B = self.get_rate(self.borrow_rates, token1, protocol_B)
-                        
-                        # Get collateral ratios
-                        collateral_1A = self.get_rate(self.collateral_ratios, token1, protocol_A)
-                        collateral_2B = self.get_rate(self.collateral_ratios, token2, protocol_B)
-                        
-                        # Skip if any rates are missing
-                        if any(np.isnan([lend_rate_1A, borrow_rate_2A, lend_rate_2B, 
-                                        borrow_rate_1B, collateral_1A, collateral_2B])):
-                            continue
-                        
-                        # Analyze this strategy
-                        result = self.calculator.analyze_strategy(
-                            token1=token1,
-                            token2=token2,
-                            protocol_A=protocol_A,
-                            protocol_B=protocol_B,
-                            lend_rate_token1_A=lend_rate_1A,
-                            borrow_rate_token2_A=borrow_rate_2A,
-                            lend_rate_token2_B=lend_rate_2B,
-                            borrow_rate_token1_B=borrow_rate_1B,
-                            collateral_ratio_token1_A=collateral_1A,
-                            collateral_ratio_token2_B=collateral_2B
-                        )
-                        
-                        if result['valid']:
-                            valid += 1
-                            results.append(result)
+                # For each closing stablecoin (CHANGE1: Stablecoin fungibility)
+                for token3 in settings.STABLECOINS:
+                    # Skip if token3 same as token2
+                    if token3 == token2:
+                        continue
+                    
+                    # For each protocol pair (bidirectional)
+                    for protocol_A in self.protocols:
+                        for protocol_B in self.protocols:
+                            # Skip if same protocol
+                            if protocol_A == protocol_B:
+                                continue
+                            
+                            analyzed += 1
+                            
+                            # Get all the rates
+                            lend_rate_1A = self.get_rate(self.lend_rates, token1, protocol_A)
+                            borrow_rate_2A = self.get_rate(self.borrow_rates, token2, protocol_A)
+                            lend_rate_2B = self.get_rate(self.lend_rates, token2, protocol_B)
+                            borrow_rate_3B = self.get_rate(self.borrow_rates, token3, protocol_B)  # Changed: use token3
+                            
+                            # Get collateral ratios
+                            collateral_1A = self.get_rate(self.collateral_ratios, token1, protocol_A)
+                            collateral_2B = self.get_rate(self.collateral_ratios, token2, protocol_B)
+                            
+                            # Skip if any rates are missing
+                            if any(np.isnan([lend_rate_1A, borrow_rate_2A, lend_rate_2B, 
+                                            borrow_rate_3B, collateral_1A, collateral_2B])):
+                                continue
+                            
+                            # Analyze this strategy
+                            result = self.calculator.analyze_strategy(
+                                token1=token1,
+                                token2=token2,
+                                token3=token3,  # New: closing stablecoin
+                                protocol_A=protocol_A,
+                                protocol_B=protocol_B,
+                                lend_rate_token1_A=lend_rate_1A,
+                                borrow_rate_token2_A=borrow_rate_2A,
+                                lend_rate_token2_B=lend_rate_2B,
+                                borrow_rate_token3_B=borrow_rate_3B,  # Changed: use token3 rate
+                                collateral_ratio_token1_A=collateral_1A,
+                                collateral_ratio_token2_B=collateral_2B
+                            )
+                            
+                            if result['valid']:
+                                valid += 1
+                                results.append(result)
         
         print(f"   ✓ Analyzed {analyzed} combinations")
         print(f"   ✓ {valid} valid strategies found")
@@ -213,13 +220,26 @@ class RateAnalyzer:
         
         # Determine strategy type
         is_stablecoin_only = best['token1'] in settings.STABLECOINS and best['token2'] in settings.STABLECOINS
-        strategy_type = "Stablecoin-only" if is_stablecoin_only else "Stablecoin + High-yield"
+        has_conversion = best['token1'] != best['token3']
+        
+        if is_stablecoin_only:
+            strategy_type = "Stablecoin-only"
+        else:
+            strategy_type = "Stablecoin + High-yield"
+        
+        if has_conversion:
+            strategy_type += " (with conversion)"
         
         print(f"\n🏆 BEST STRATEGY FOUND ({strategy_type}):")
         print(f"   Protocol A: {best['protocol_A']}")
         print(f"   Protocol B: {best['protocol_B']}")
-        print(f"   Token 1: {best['token1']}")
-        print(f"   Token 2: {best['token2']}")
+        print(f"   Token 1 (Start): {best['token1']}")
+        print(f"   Token 2 (Middle): {best['token2']}")
+        print(f"   Token 3 (Close): {best['token3']}", end="")
+        if has_conversion:
+            print(f" → Convert to {best['token1']}")
+        else:
+            print()  # Just newline
         print(f"   Net APR: {best['net_apr']:.2f}%")
         print(f"   Liquidation Distance: {best['liquidation_distance']:.0f}%")
         

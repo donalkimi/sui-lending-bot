@@ -117,12 +117,13 @@ class PositionCalculator:
         self,
         token1: str,
         token2: str,
+        token3: str,  # NEW: Closing stablecoin (can differ from token1)
         protocol_A: str,
         protocol_B: str,
         lend_rate_token1_A: float,
         borrow_rate_token2_A: float,
         lend_rate_token2_B: float,
-        borrow_rate_token1_B: float,
+        borrow_rate_token3_B: float,  # Changed: token3 borrow rate
         collateral_ratio_token1_A: float,
         collateral_ratio_token2_B: float
     ) -> Dict:
@@ -132,12 +133,13 @@ class PositionCalculator:
         Args:
             token1: Stablecoin (starting lend to remain market neutral)
             token2: High-yield token (borrowed for yield generation)
+            token3: Closing stablecoin (borrowed from Protocol B, converted to token1)
             protocol_A: First protocol
             protocol_B: Second protocol
             lend_rate_token1_A: Stablecoin lending rate in Protocol A
             borrow_rate_token2_A: High-yield token borrow rate from Protocol A
             lend_rate_token2_B: High-yield token lending rate in Protocol B
-            borrow_rate_token1_B: Stablecoin borrow rate from Protocol B
+            borrow_rate_token3_B: Closing stablecoin borrow rate from Protocol B
             collateral_ratio_token1_A: Stablecoin collateral ratio in Protocol A
             collateral_ratio_token2_B: High-yield token collateral ratio in Protocol B
         
@@ -152,17 +154,19 @@ class PositionCalculator:
             )
             
             # Calculate net APR
+            # Note: token3 is converted 1:1 to token1, so we use token3's borrow rate
             net_apr = self.calculate_net_apr(
                 positions,
                 lend_rate_token1_A,
                 borrow_rate_token2_A,
                 lend_rate_token2_B,
-                borrow_rate_token1_B
+                borrow_rate_token3_B  # Changed: use token3 borrow rate
             )
             
             return {
                 'token1': token1,
                 'token2': token2,
+                'token3': token3,  # NEW: Track closing stablecoin
                 'protocol_A': protocol_A,
                 'protocol_B': protocol_B,
                 'net_apr': net_apr,
@@ -174,7 +178,7 @@ class PositionCalculator:
                 'lend_rate_1A': lend_rate_token1_A * 100,
                 'borrow_rate_2A': borrow_rate_token2_A * 100,
                 'lend_rate_2B': lend_rate_token2_B * 100,
-                'borrow_rate_1B': borrow_rate_token1_B * 100,
+                'borrow_rate_3B': borrow_rate_token3_B * 100,  # Changed: token3 borrow rate
                 'valid': True,
                 'error': None
             }
@@ -183,6 +187,7 @@ class PositionCalculator:
             return {
                 'token1': token1,
                 'token2': token2,
+                'token3': token3,  # Include token3 in error case too
                 'protocol_A': protocol_A,
                 'protocol_B': protocol_B,
                 'net_apr': None,

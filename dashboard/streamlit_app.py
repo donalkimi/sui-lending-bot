@@ -145,17 +145,28 @@ def main():
             # Strategy details
             st.subheader("📋 Strategy Details")
             
+            # Check if conversion is happening
+            has_conversion = best['token1'] != best['token3']
+            
             col1, col2 = st.columns(2)
             
             with col1:
+                token_flow = f"{best['token1']} ↔ {best['token2']}"
+                if has_conversion:
+                    token_flow += f" ↔ {best['token3']} → {best['token1']}"
+                
+                conversion_info = ""
+                if has_conversion:
+                    conversion_info = f"\n- **Convert** {best['token3']} → {best['token1']} (1:1)"
+                
                 st.markdown(f"""
-                **Token Pair:** {best['token1']} ↔ {best['token2']}
+                **Token Flow:** {token_flow}
                 
                 **Position Sizes:**
                 - Lend {best['L_A']:.4f} {best['token1']} in {best['protocol_A']}
                 - Borrow {best['B_A']:.4f} {best['token2']} from {best['protocol_A']}
                 - Lend {best['L_B']:.4f} {best['token2']} in {best['protocol_B']}
-                - Borrow {best['B_B']:.4f} {best['token1']} from {best['protocol_B']}
+                - Borrow {best['B_B']:.4f} {best['token3']} from {best['protocol_B']}{conversion_info}
                 """)
             
             with col2:
@@ -164,12 +175,12 @@ def main():
                 - Lend {best['token1']} @ {best['lend_rate_1A']:.2f}% APY
                 - Borrow {best['token2']} @ {best['borrow_rate_2A']:.2f}% APY
                 - Lend {best['token2']} @ {best['lend_rate_2B']:.2f}% APY
-                - Borrow {best['token1']} @ {best['borrow_rate_1B']:.2f}% APY
+                - Borrow {best['token3']} @ {best['borrow_rate_3B']:.2f}% APY
                 """)
             
             # Top 10 strategies
             st.subheader("📊 Top 10 Strategies")
-            display_cols = ['token1', 'token2', 'protocol_A', 'protocol_B', 'net_apr', 'liquidation_distance']
+            display_cols = ['token1', 'token2', 'token3', 'protocol_A', 'protocol_B', 'net_apr', 'liquidation_distance']
             st.dataframe(
                 all_results.head(10)[display_cols],
                 use_container_width=True,
@@ -221,7 +232,7 @@ def main():
             st.info(f"Showing {len(filtered_results)} of {len(all_results)} strategies")
             
             # Display table
-            display_cols = ['token1', 'token2', 'protocol_A', 'protocol_B', 
+            display_cols = ['token1', 'token2', 'token3', 'protocol_A', 'protocol_B', 
                           'net_apr', 'liquidation_distance', 'L_A', 'B_A', 'L_B', 'B_B']
             st.dataframe(
                 filtered_results[display_cols],
@@ -265,7 +276,7 @@ def main():
                 
                 # All stablecoin strategies
                 st.subheader("All Stablecoin Combinations")
-                display_cols = ['token1', 'token2', 'protocol_A', 'protocol_B', 'net_apr', 'liquidation_distance']
+                display_cols = ['token1', 'token2', 'token3', 'protocol_A', 'protocol_B', 'net_apr', 'liquidation_distance']
                 st.dataframe(
                     stablecoin_results[display_cols],
                     use_container_width=True,
