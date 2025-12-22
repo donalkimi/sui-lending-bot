@@ -112,6 +112,15 @@ def main():
         # ---- END CHANGE ----
 
         st.markdown("---")
+        
+        # Toggle to force token3 = token1
+        force_token3_equals_token1 = st.toggle(
+            "Force token3 = token1 (no conversion)",
+            value=False,
+            help="When enabled, only shows strategies where the closing stablecoin matches the starting stablecoin"
+        )
+
+        st.markdown("---")
 
         st.subheader("📊 Data Source")
         st.info("Data loaded from Google Sheets")
@@ -141,7 +150,8 @@ def main():
         lend_rates=lend_rates,
         borrow_rates=borrow_rates,
         collateral_ratios=collateral_ratios,
-        liquidation_distance=liquidation_distance
+        liquidation_distance=liquidation_distance,
+        force_token3_equals_token1=force_token3_equals_token1
     )
 
     # Tabs (UNCHANGED)
