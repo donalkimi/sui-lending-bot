@@ -67,21 +67,54 @@ def main():
     with st.sidebar:
         st.header("⚙️ Settings")
         
-        liquidation_distance = st.slider(
-            "Liquidation Distance (%)",
-            min_value=10,
-            max_value=50,
-            value=int(settings.DEFAULT_LIQUIDATION_DISTANCE * 100),
-            step=5,
-            help="Safety buffer from liquidation price"
-        ) / 100
+        st.markdown("**Liquidation Distance**")
+        
+        # Initialize session state for liquidation distance if not exists
+        if 'liq_dist' not in st.session_state:
+            st.session_state.liq_dist = float(settings.DEFAULT_LIQUIDATION_DISTANCE * 100)
+        
+        col1, col2 = st.columns([4, 1])  # Slider wider, number box narrow
+        
+        with col1:
+            liq_dist_slider = st.slider(
+                "",
+                min_value=1.0,
+                max_value=100.0,
+                value=st.session_state.liq_dist,
+                step=1.0,
+                format="%.0f%%",
+                label_visibility="collapsed",
+                key="liq_slider"
+            )
+        
+        with col2:
+            liq_dist_input = st.number_input(
+                "",
+                min_value=1.0,
+                max_value=100.0,
+                value=st.session_state.liq_dist,
+                step=1.0,
+                format="%.0f",
+                label_visibility="collapsed",
+                key="liq_input"
+            )
+        
+        # Update session state based on which one changed
+        # Number input takes precedence if different from slider
+        if liq_dist_input != liq_dist_slider:
+            st.session_state.liq_dist = liq_dist_input
+            st.rerun()
+        else:
+            st.session_state.liq_dist = liq_dist_slider
+        
+        liquidation_distance = st.session_state.liq_dist / 100
         
         st.markdown("---")
         
         st.subheader("📊 Data Source")
         st.info("Data loaded from Google Sheets")
         
-        if st.button("🔄 Refresh Data", use_container_width=True):
+        if st.button("🔄 Refresh Data", width="stretch"):
             st.cache_data.clear()
             st.rerun()
         
@@ -183,7 +216,7 @@ def main():
             display_cols = ['token1', 'token2', 'token3', 'protocol_A', 'protocol_B', 'net_apr', 'liquidation_distance']
             st.dataframe(
                 all_results.head(10)[display_cols],
-                use_container_width=True,
+                width="stretch",
                 hide_index=True
             )
         else:
@@ -236,7 +269,7 @@ def main():
                           'net_apr', 'liquidation_distance', 'L_A', 'B_A', 'L_B', 'B_B']
             st.dataframe(
                 filtered_results[display_cols],
-                use_container_width=True,
+                width="stretch",
                 hide_index=True
             )
             
@@ -249,7 +282,7 @@ def main():
                 title='Distribution of Net APR Across All Strategies',
                 labels={'net_apr': 'Net APR (%)'}
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
     
     # Tab 3: Stablecoin Focus
     with tab3:
@@ -279,7 +312,7 @@ def main():
                 display_cols = ['token1', 'token2', 'token3', 'protocol_A', 'protocol_B', 'net_apr', 'liquidation_distance']
                 st.dataframe(
                     stablecoin_results[display_cols],
-                    use_container_width=True,
+                    width="stretch",
                     hide_index=True
                 )
                 
@@ -301,7 +334,7 @@ def main():
                     aspect="auto",
                     color_continuous_scale="RdYlGn"
                 )
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width="stretch")
             else:
                 st.warning("No stablecoin strategies found for the selected protocol pair.")
     
@@ -313,14 +346,14 @@ def main():
         
         with col1:
             st.subheader("💵 Lending Rates")
-            st.dataframe(lend_rates, use_container_width=True, hide_index=True)
+            st.dataframe(lend_rates, width="stretch", hide_index=True)
         
         with col2:
             st.subheader("💸 Borrow Rates")
-            st.dataframe(borrow_rates, use_container_width=True, hide_index=True)
+            st.dataframe(borrow_rates, width="stretch", hide_index=True)
         
         st.subheader("🔒 Collateral Ratios")
-        st.dataframe(collateral_ratios, use_container_width=True, hide_index=True)
+        st.dataframe(collateral_ratios, width="stretch", hide_index=True)
 
 
 if __name__ == "__main__":
