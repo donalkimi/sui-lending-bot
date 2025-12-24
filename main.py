@@ -6,6 +6,7 @@ import time
 from datetime import datetime
 from config import settings
 from data.sheets_reader import SheetsReader
+from data.api_enricher import enrich_with_navi_data
 from analysis.rate_analyzer import RateAnalyzer
 from alerts.slack_notifier import SlackNotifier
 
@@ -38,6 +39,11 @@ class SuiLendingBot:
             if lend_rates.empty or borrow_rates.empty or collateral_ratios.empty:
                 print("✗ No data available")
                 return
+            
+            # Enrich with live API data (Navi)
+            lend_rates, borrow_rates, collateral_ratios, api_metadata = enrich_with_navi_data(
+                lend_rates, borrow_rates, collateral_ratios
+            )
             
             # Initialize analyzer
             analyzer = RateAnalyzer(
