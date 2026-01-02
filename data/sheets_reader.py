@@ -75,9 +75,14 @@ class SheetsReader:
             df = pd.DataFrame(data[1:], columns=data[0])
             
             # Convert numeric columns (all except first column which is token names)
-            for col in df.columns[1:]:
-                df[col] = pd.to_numeric(df[col].str.rstrip('%'), errors='coerce') / 100
-            
+            # Convert numeric columns (protocol % columns), but keep Contract as text
+            skip_cols = {"Token", "Contract"}  # Token is already skipped, but keep for clarity
+
+            for col in df.columns:
+                if col in skip_cols:
+                    continue
+                df[col] = pd.to_numeric(df[col].astype(str).str.rstrip('%'), errors='coerce') / 100
+
             return df
             
         except gspread.exceptions.WorksheetNotFound:

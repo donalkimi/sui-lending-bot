@@ -36,15 +36,21 @@ class SuiLendingBot:
             # Load data from Google Sheets
             lend_rates, borrow_rates, collateral_ratios = self.reader.get_all_data()
             
+            print("\n\n\t\tDEBUG: Sheets data\n\n")
+            print(lend_rates.columns.tolist())
+            print(lend_rates[['Token', 'Contract']].head(3))
+            print("\n\n\t\tDEBUG END\n\n")
             if lend_rates.empty or borrow_rates.empty or collateral_ratios.empty:
                 print("✗ No data available")
                 return
-            
+                
+
             # Enrich with live API data (Navi)
             lend_rates, borrow_rates, collateral_ratios, api_metadata = enrich_with_navi_data(
                 lend_rates, borrow_rates, collateral_ratios
             )
-            
+
+
             # Initialize analyzer
             analyzer = RateAnalyzer(
                 lend_rates=lend_rates,

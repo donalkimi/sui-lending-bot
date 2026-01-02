@@ -64,7 +64,7 @@ def enrich_with_navi_data(
         reader.session.timeout = timeout
         
         navi_lend, navi_borrow, navi_collateral = reader.get_all_data()
-        
+
         metadata['navi_source'] = 'API'
         metadata['navi_updated_at'] = datetime.now().isoformat()
         
