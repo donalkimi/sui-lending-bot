@@ -6,7 +6,7 @@ import time
 from datetime import datetime
 from config import settings
 from data.sheets_reader import SheetsReader
-from data.api_enricher import enrich_with_navi_data
+from data.api_enricher import enrich_with_navi_data, enrich_with_alphafi_data
 from analysis.rate_analyzer import RateAnalyzer
 from alerts.slack_notifier import SlackNotifier
 
@@ -36,20 +36,21 @@ class SuiLendingBot:
             # Load data from Google Sheets
             lend_rates, borrow_rates, collateral_ratios = self.reader.get_all_data()
             
-            print("\n\n\t\tDEBUG: Sheets data\n\n")
-            print(lend_rates.columns.tolist())
-            print(lend_rates[['Token', 'Contract']].head(3))
-            print("\n\n\t\tDEBUG END\n\n")
             if lend_rates.empty or borrow_rates.empty or collateral_ratios.empty:
                 print("✗ No data available")
                 return
                 
 
             # Enrich with live API data (Navi)
-            lend_rates, borrow_rates, collateral_ratios, api_metadata = enrich_with_navi_data(
+            lend_rates, borrow_rates, collateral_ratios, navi_meta = enrich_with_navi_data(
                 lend_rates, borrow_rates, collateral_ratios
             )
 
+            # Enrich with live SDK data (AlphaFi via Node)
+            lend_rates, borrow_rates, collateral_ratios, alphafi_meta = enrich_with_alphafi_data(
+                lend_rates, borrow_rates, collateral_ratios,
+                node_script_path="data/alphalend_reader-sdk.mjs"  # adjust if needed
+            )
 
             # Initialize analyzer
             analyzer = RateAnalyzer(
