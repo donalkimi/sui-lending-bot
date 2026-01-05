@@ -49,7 +49,7 @@ class SuiLendingBot:
             # Enrich with live SDK data (AlphaFi via Node)
             lend_rates, borrow_rates, collateral_ratios, alphafi_meta = enrich_with_alphafi_data(
                 lend_rates, borrow_rates, collateral_ratios,
-                node_script_path="data/alphalend_reader-sdk.mjs"  # adjust if needed
+                node_script_path="data/alphalend/alphalend_reader-sdk.mjs"  # adjust if needed
             )
 
             # Initialize analyzer

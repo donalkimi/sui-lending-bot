@@ -9,7 +9,7 @@ import pandas as pd
 
 @dataclass
 class AlphaFiReaderConfig:
-    node_script_path: str  # e.g. "data/alphalend_reader-sdk.mjs" or absolute path
+    node_script_path: str  # e.g. "data/alphalend/alphalend_reader-sdk.mjs" or absolute path
     rpc_url: str = "https://rpc.mainnet.sui.io"
     network: str = "mainnet"
 
