@@ -9,7 +9,7 @@ import pandas as pd
 from pathlib import Path
 
 
-def get_suilend_data(node_script_path: str = "data/suilend_reader-sdk.mjs") -> pd.DataFrame:
+def get_suilend_data(node_script_path: str = "data/suilend/suilend_reader-sdk.mjs") -> pd.DataFrame:
     """
     Call the Suilend Node.js SDK script and return a formatted DataFrame
     
@@ -102,7 +102,7 @@ def get_suilend_data(node_script_path: str = "data/suilend_reader-sdk.mjs") -> p
         utilization = market.get("utilizationRate", 0)
         
         rows.append({
-            "lending_market_id": "SUILEND_MAIN",  # Default market name
+            "lending_market_id": "SUILEND_MAIN",
             "token": token_symbol,
             "coin_type": coin_type,
             "lend_apr": supply_interest_apr,
