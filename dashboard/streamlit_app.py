@@ -1,5 +1,7 @@
 """
 Streamlit dashboard for Sui Lending Bot
+streamlit run dashboard/streamlit_app.py
+
 """
 
 import streamlit as st
@@ -12,7 +14,8 @@ import os
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import settings
-from data.sheets_reader import SheetsReader
+from config.stablecoins import STABLECOIN_CONTRACTS
+from data.protocol_merger import merge_protocol_data
 from analysis.rate_analyzer import RateAnalyzer
 from analysis.position_calculator import PositionCalculator
 
@@ -62,11 +65,11 @@ st.markdown("""
 
 @st.cache_data(ttl=300)  # Cache for 5 minutes
 def load_data():
-    """Load data from Google Sheets"""
+    """Load data from all protocols via protocol merger"""
     try:
-        reader = SheetsReader()
-        reader.connect()
-        lend_rates, borrow_rates, collateral_ratios = reader.get_all_data()
+        lend_rates, borrow_rates, collateral_ratios = merge_protocol_data(
+            stablecoin_contracts=STABLECOIN_CONTRACTS
+        )
         return lend_rates, borrow_rates, collateral_ratios, None
     except Exception as e:
         return None, None, None, str(e)
@@ -83,7 +86,7 @@ def main():
     with st.sidebar:
         st.header("⚙️ Settings")
 
-        # ---- Liquidation Distance (UPDATED ONLY THIS BLOCK) ----
+        # Liquidation Distance
         st.markdown('<div class="liq-row">', unsafe_allow_html=True)
         st.markdown(
             '<div class="liq-label">Liquidation Dist (%)</div>',
@@ -109,7 +112,6 @@ def main():
             st.stop()
 
         liquidation_distance = liq_value / 100
-        # ---- END CHANGE ----
 
         st.markdown("---")
         
@@ -123,9 +125,9 @@ def main():
         st.markdown("---")
 
         st.subheader("📊 Data Source")
-        st.info("Data loaded from Google Sheets")
+        st.info(f"Live data from {len(['Navi', 'AlphaFi', 'Suilend'])} protocols")
 
-        if st.button("🔄 Refresh Data", width="stretch"):
+        if st.button("🔄 Refresh Data", use_container_width=True):
             st.cache_data.clear()
             st.rerun()
 
@@ -133,16 +135,16 @@ def main():
         st.caption(f"Last updated: {datetime.now().strftime('%H:%M:%S')}")
 
     # Load data
-    with st.spinner("Loading data from Google Sheets..."):
+    with st.spinner("Loading data from protocols..."):
         lend_rates, borrow_rates, collateral_ratios, error = load_data()
 
     if error:
         st.error(f"❌ Error loading data: {error}")
-        st.info("💡 Make sure you've set up Google Sheets credentials in config/settings.py")
+        st.info("💡 Check that all protocol APIs are accessible")
         st.stop()
 
     if lend_rates is None or lend_rates.empty:
-        st.warning("⚠️ No data available. Please check your Google Sheets configuration.")
+        st.warning("⚠️ No data available. Please check protocol connections.")
         st.stop()
 
     # Initialize analyzer
@@ -154,7 +156,7 @@ def main():
         force_token3_equals_token1=force_token3_equals_token1
     )
 
-    # Tabs (UNCHANGED)
+    # Tabs
     tab1, tab2, tab3, tab4 = st.tabs([
         "🏆 Best Opportunities",
         "📊 All Strategies",
@@ -177,6 +179,21 @@ def main():
             col2.metric("Liquidation Distance", f"{best['liquidation_distance']:.0f}%")
             col3.metric("Protocol A", protocol_A)
             col4.metric("Protocol B", protocol_B)
+
+            st.subheader("Strategy Details")
+            st.write(f"**Token 1 (Start):** {best['token1']}")
+            st.write(f"**Token 2 (Middle):** {best['token2']}")
+            st.write(f"**Token 3 (Close):** {best['token3']}")
+            
+            if best['token1'] != best['token3']:
+                st.info(f"💱 This strategy includes stablecoin conversion: {best['token3']} → {best['token1']}")
+
+            st.subheader("Top 10 Strategies")
+            st.dataframe(
+                all_results.head(10)[['token1', 'token2', 'token3', 'protocol_A', 'protocol_B', 'net_apr', 'liquidation_distance']],
+                use_container_width=True,
+                hide_index=True
+            )
 
     # ---------------- Tab 2 ----------------
     with tab2:
@@ -216,7 +233,11 @@ def main():
                     filtered_results['protocol_B'].isin(protocol_filter)
                 ]
 
-            st.dataframe(filtered_results, width="stretch", hide_index=True)
+            st.dataframe(
+                filtered_results[['token1', 'token2', 'token3', 'protocol_A', 'protocol_B', 'net_apr', 'liquidation_distance']],
+                use_container_width=True,
+                hide_index=True
+            )
 
     # ---------------- Tab 3 ----------------
     with tab3:
@@ -226,7 +247,11 @@ def main():
             stablecoin_results = analyzer.find_best_stablecoin_pairs(protocol_A, protocol_B)
 
             if not stablecoin_results.empty:
-                st.dataframe(stablecoin_results, width="stretch", hide_index=True)
+                st.dataframe(
+                    stablecoin_results[['token1', 'token2', 'token3', 'protocol_A', 'protocol_B', 'net_apr', 'liquidation_distance']],
+                    use_container_width=True,
+                    hide_index=True
+                )
 
     # ---------------- Tab 4 ----------------
     with tab4:
@@ -234,13 +259,13 @@ def main():
 
         col1, col2 = st.columns(2)
         col1.subheader("💵 Lending Rates")
-        col1.dataframe(lend_rates, width="stretch", hide_index=True)
+        col1.dataframe(lend_rates, use_container_width=True, hide_index=True)
 
         col2.subheader("💸 Borrow Rates")
-        col2.dataframe(borrow_rates, width="stretch", hide_index=True)
+        col2.dataframe(borrow_rates, use_container_width=True, hide_index=True)
 
         st.subheader("🔒 Collateral Ratios")
-        st.dataframe(collateral_ratios, width="stretch", hide_index=True)
+        st.dataframe(collateral_ratios, use_container_width=True, hide_index=True)
 
 
 if __name__ == "__main__":

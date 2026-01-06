@@ -5,8 +5,8 @@ Main orchestration script for Sui Lending Bot
 import time
 from datetime import datetime
 from config import settings
-from data.sheets_reader import SheetsReader
-from data.api_enricher import enrich_with_navi_data, enrich_with_alphafi_data, enrich_with_suilend_data
+from config.stablecoins import STABLECOIN_CONTRACTS
+from data.protocol_merger import merge_protocol_data
 from analysis.rate_analyzer import RateAnalyzer
 from alerts.slack_notifier import SlackNotifier
 
@@ -16,7 +16,6 @@ class SuiLendingBot:
     
     def __init__(self):
         """Initialize the bot"""
-        self.reader = SheetsReader()
         self.notifier = SlackNotifier()
         self.last_best_strategy = None
         
@@ -26,6 +25,7 @@ class SuiLendingBot:
         print(f"Started at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"Check interval: {settings.CHECK_INTERVAL_MINUTES} minutes")
         print(f"Liquidation distance: {settings.DEFAULT_LIQUIDATION_DISTANCE*100:.0f}%")
+        print(f"Stablecoins: {len(STABLECOIN_CONTRACTS)} configured")
         print("="*80 + "\n")
     
     def run_analysis(self):
@@ -33,29 +33,18 @@ class SuiLendingBot:
         try:
             print(f"\n⏰ [{datetime.now().strftime('%H:%M:%S')}] Running analysis...")
             
-            # Load data from Google Sheets
-            lend_rates, borrow_rates, collateral_ratios = self.reader.get_all_data()
+            # Load and merge data from all protocols
+            print("\n📊 Fetching and merging protocol data...")
+            lend_rates, borrow_rates, collateral_ratios = merge_protocol_data(
+                stablecoin_contracts=STABLECOIN_CONTRACTS
+            )
             
             if lend_rates.empty or borrow_rates.empty or collateral_ratios.empty:
                 print("✗ No data available")
                 return
-                
-
-            # Enrich with live API data (Navi)
-            lend_rates, borrow_rates, collateral_ratios, navi_meta = enrich_with_navi_data(
-                lend_rates, borrow_rates, collateral_ratios
-            )
-
-            # Enrich with live SDK data (AlphaFi via Node)
-            lend_rates, borrow_rates, collateral_ratios, alphafi_meta = enrich_with_alphafi_data(
-                lend_rates, borrow_rates, collateral_ratios,
-                node_script_path="data/alphalend/alphalend_reader-sdk.mjs"  # adjust if needed
-            )
-             # Enrich with live SDK data (Suilend via Node)
-            lend_rates, borrow_rates, collateral_ratios, suilend_meta = enrich_with_suilend_data(
-                lend_rates, borrow_rates, collateral_ratios,
-                node_script_path="data/suilend/suilend_reader-sdk.mjs"
-            )
+            
+            print(f"✓ Loaded data for {len(lend_rates)} tokens")
+            
             # Initialize analyzer
             analyzer = RateAnalyzer(
                 lend_rates=lend_rates,
@@ -100,24 +89,25 @@ class SuiLendingBot:
         except Exception as e:
             error_msg = f"Error during analysis: {str(e)}"
             print(f"✗ {error_msg}")
+            import traceback
+            traceback.print_exc()
             self.notifier.alert_error(error_msg)
     
     def run_once(self):
         """Run analysis once and exit"""
         try:
-            self.reader.connect()
             self.run_analysis()
         except KeyboardInterrupt:
-            print("\n\n⏹️  Bot stopped by user")
+            print("\n\nℹ️  Bot stopped by user")
         except Exception as e:
             print(f"\n✗ Fatal error: {e}")
+            import traceback
+            traceback.print_exc()
             self.notifier.alert_error(f"Fatal error: {str(e)}")
     
     def run_continuously(self):
         """Run analysis on a schedule"""
         try:
-            self.reader.connect()
-            
             print("🔄 Running in continuous mode")
             print(f"Will check every {settings.CHECK_INTERVAL_MINUTES} minutes")
             print("Press Ctrl+C to stop\n")
@@ -133,9 +123,11 @@ class SuiLendingBot:
                 time.sleep(settings.CHECK_INTERVAL_MINUTES * 60)
                 
         except KeyboardInterrupt:
-            print("\n\n⏹️  Bot stopped by user")
+            print("\n\nℹ️  Bot stopped by user")
         except Exception as e:
             print(f"\n✗ Fatal error: {e}")
+            import traceback
+            traceback.print_exc()
             self.notifier.alert_error(f"Fatal error: {str(e)}")
 
 

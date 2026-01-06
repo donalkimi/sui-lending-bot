@@ -10,6 +10,7 @@ import os
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import settings
+from config.stablecoins import STABLECOIN_SYMBOLS
 from analysis.position_calculator import PositionCalculator
 
 
@@ -40,28 +41,31 @@ class RateAnalyzer:
         self.liquidation_distance = liquidation_distance or settings.DEFAULT_LIQUIDATION_DISTANCE
         self.force_token3_equals_token1 = force_token3_equals_token1
         
-        # Get list of protocols from column headers (excluding first column which is token names)
-        self.protocols = list(lend_rates.columns[1:])
+        # Get list of protocols from column headers (excluding 'Token' and 'Contract' columns)
+        non_protocol_cols = {'Token', 'Contract'}
+        self.protocols = [col for col in lend_rates.columns if col not in non_protocol_cols]
         
-        # Dynamically build token lists from Google Sheets
-        token_column_name = lend_rates.columns[0]  # First column name (usually "Token")
-        all_tokens_in_sheets = lend_rates[token_column_name].dropna().tolist()
+        # Get all tokens from merged DataFrame
+        all_tokens_in_df = lend_rates['Token'].dropna().unique().tolist()
         
-        # OTHER_TOKENS = all tokens from sheets EXCEPT stablecoins
-        self.OTHER_TOKENS = [token for token in all_tokens_in_sheets 
-                             if token not in settings.STABLECOINS]
+        # Stablecoins from config
+        self.STABLECOINS = STABLECOIN_SYMBOLS
         
-        # ALL_TOKENS = stablecoins + dynamically detected other tokens
-        self.ALL_TOKENS = settings.STABLECOINS + self.OTHER_TOKENS
+        # OTHER_TOKENS = all tokens EXCEPT stablecoins
+        self.OTHER_TOKENS = [token for token in all_tokens_in_df 
+                             if token not in self.STABLECOINS]
+        
+        # ALL_TOKENS = all tokens in the merged data
+        self.ALL_TOKENS = all_tokens_in_df
         
         # Initialize calculator
         self.calculator = PositionCalculator(self.liquidation_distance)
         
         print(f"\n🔧 Initialized Rate Analyzer:")
         print(f"   Protocols: {len(self.protocols)} ({', '.join(self.protocols)})")
-        print(f"   Tokens: {len(self.ALL_TOKENS)} (Stablecoins: {len(settings.STABLECOINS)}, High-Yield: {len(self.OTHER_TOKENS)})")
-        print(f"   Stablecoins: {', '.join(settings.STABLECOINS)}")
-        print(f"   High-Yield Tokens: {', '.join(self.OTHER_TOKENS)}")
+        print(f"   Tokens: {len(self.ALL_TOKENS)} (Stablecoins: {len(self.STABLECOINS)}, High-Yield: {len(self.OTHER_TOKENS)})")
+        print(f"   Stablecoins: {', '.join(sorted(self.STABLECOINS))}")
+        print(f"   High-Yield Tokens: {', '.join(sorted(self.OTHER_TOKENS))}")
         print(f"   Liquidation Distance: {self.liquidation_distance*100:.0f}%")
     
     def get_rate(self, df: pd.DataFrame, token: str, protocol: str) -> float:
@@ -77,8 +81,8 @@ class RateAnalyzer:
             Rate as decimal, or np.nan if not found
         """
         # Set the first column as index if it isn't already
-        if df.index.name != df.columns[0]:
-            df_indexed = df.set_index(df.columns[0])
+        if df.index.name != 'Token':
+            df_indexed = df.set_index('Token')
         else:
             df_indexed = df
         
@@ -100,13 +104,13 @@ class RateAnalyzer:
         The strategy starts by lending a stablecoin to remain market neutral.
         
         Args:
-            tokens: List of tokens to analyze (default: all tokens from settings)
+            tokens: List of tokens to analyze (default: all tokens from merged data)
             
         Returns:
             DataFrame with all results sorted by net APR
         """
         if tokens is None:
-            tokens = self.ALL_TOKENS  # Use dynamically built token list
+            tokens = self.ALL_TOKENS
         
         print(f"\n🔍 Analyzing all combinations...")
         print(f"   Tokens to analyze: {len(tokens)}")
@@ -121,7 +125,7 @@ class RateAnalyzer:
         # CRITICAL: token1 must be a stablecoin to avoid price exposure
         for token1 in tokens:
             # Enforce that token1 is a stablecoin
-            if token1 not in settings.STABLECOINS:
+            if token1 not in self.STABLECOINS:
                 continue
             
             for token2 in tokens:
@@ -130,7 +134,7 @@ class RateAnalyzer:
                     continue
                 
                 # For each closing stablecoin (CHANGE1: Stablecoin fungibility)
-                for token3 in settings.STABLECOINS:
+                for token3 in self.STABLECOINS:
                     # Skip if token3 same as token2
                     if token3 == token2:
                         continue
@@ -148,7 +152,7 @@ class RateAnalyzer:
                             lend_rate_1A = self.get_rate(self.lend_rates, token1, protocol_A)
                             borrow_rate_2A = self.get_rate(self.borrow_rates, token2, protocol_A)
                             lend_rate_2B = self.get_rate(self.lend_rates, token2, protocol_B)
-                            borrow_rate_3B = self.get_rate(self.borrow_rates, token3, protocol_B)  # Changed: use token3
+                            borrow_rate_3B = self.get_rate(self.borrow_rates, token3, protocol_B)
                             
                             # Get collateral ratios
                             collateral_1A = self.get_rate(self.collateral_ratios, token1, protocol_A)
@@ -163,13 +167,13 @@ class RateAnalyzer:
                             result = self.calculator.analyze_strategy(
                                 token1=token1,
                                 token2=token2,
-                                token3=token3,  # New: closing stablecoin
+                                token3=token3,
                                 protocol_A=protocol_A,
                                 protocol_B=protocol_B,
                                 lend_rate_token1_A=lend_rate_1A,
                                 borrow_rate_token2_A=borrow_rate_2A,
                                 lend_rate_token2_B=lend_rate_2B,
-                                borrow_rate_token3_B=borrow_rate_3B,  # Changed: use token3 rate
+                                borrow_rate_token3_B=borrow_rate_3B,
                                 collateral_ratio_token1_A=collateral_1A,
                                 collateral_ratio_token2_B=collateral_2B
                             )
@@ -194,7 +198,7 @@ class RateAnalyzer:
             
             # Add flag for stablecoin-only strategies (both tokens are stablecoins)
             df_results['is_stablecoin_only'] = df_results.apply(
-                lambda row: row['token1'] in settings.STABLECOINS and row['token2'] in settings.STABLECOINS,
+                lambda row: row['token1'] in self.STABLECOINS and row['token2'] in self.STABLECOINS,
                 axis=1
             )
             
@@ -229,7 +233,7 @@ class RateAnalyzer:
         best = all_results.iloc[0]
         
         # Determine strategy type
-        is_stablecoin_only = best['token1'] in settings.STABLECOINS and best['token2'] in settings.STABLECOINS
+        is_stablecoin_only = best['token1'] in self.STABLECOINS and best['token2'] in self.STABLECOINS
         has_conversion = best['token1'] != best['token3']
         
         if is_stablecoin_only:
@@ -273,7 +277,7 @@ class RateAnalyzer:
         print(f"\n💰 Finding best stablecoin pairs for {protocol_A} <-> {protocol_B}...")
         
         # Analyze only stablecoin combinations for these protocols
-        all_results = self.analyze_all_combinations(settings.STABLECOINS)
+        all_results = self.analyze_all_combinations(list(self.STABLECOINS))
         
         # Filter for the specified protocol pair
         filtered = all_results[
@@ -298,6 +302,5 @@ class RateAnalyzer:
 
 # Example usage
 if __name__ == "__main__":
-    # This would normally come from sheets_reader
-    print("This is an example - normally you'd load data from Google Sheets")
+    print("This module requires merged data from protocol_merger")
     print("Run main.py to see the full analysis with real data")
