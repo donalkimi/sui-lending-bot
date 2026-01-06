@@ -6,7 +6,7 @@ import time
 from datetime import datetime
 from config import settings
 from data.sheets_reader import SheetsReader
-from data.api_enricher import enrich_with_navi_data, enrich_with_alphafi_data
+from data.api_enricher import enrich_with_navi_data, enrich_with_alphafi_data, enrich_with_suilend_data
 from analysis.rate_analyzer import RateAnalyzer
 from alerts.slack_notifier import SlackNotifier
 
@@ -51,7 +51,11 @@ class SuiLendingBot:
                 lend_rates, borrow_rates, collateral_ratios,
                 node_script_path="data/alphalend/alphalend_reader-sdk.mjs"  # adjust if needed
             )
-
+             # Enrich with live SDK data (Suilend via Node)
+            lend_rates, borrow_rates, collateral_ratios, suilend_meta = enrich_with_suilend_data(
+                lend_rates, borrow_rates, collateral_ratios,
+                node_script_path="data/suilend/suilend_reader-sdk.mjs"
+            )
             # Initialize analyzer
             analyzer = RateAnalyzer(
                 lend_rates=lend_rates,

@@ -152,8 +152,8 @@ def enrich_with_alphafi_data(
     Writes into the 'Alpha Fi' column using Contract (Sheets) == Token_coin_type (API).
     """
     from datetime import datetime
-    from data.alphafi_reader import AlphaFiReader, AlphaFiReaderConfig
-
+    from data.alphalend.alphafi_reader import AlphaFiReader, AlphaFiReaderConfig
+    
     metadata = {
         'alphafi_source': 'SHEETS',
         'alphafi_updated_count': 0,
@@ -226,6 +226,100 @@ def enrich_with_alphafi_data(
         print(f"   ⚠️  Using Google Sheets data for AlphaFi (may be stale)")
         return lend_df, borrow_df, collateral_df, metadata
 
+def enrich_with_suilend_data(
+    lend_df: pd.DataFrame,
+    borrow_df: pd.DataFrame,
+    collateral_df: pd.DataFrame,
+    node_script_path: str,
+    timeout: int = 20
+) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, Dict]:
+    """
+    Enrich Google Sheets data with live Suilend SDK data (via Node wrapper).
+    Writes into the 'Suilend' column using Contract (Sheets) == Token_coin_type (API).
+    """
+    from datetime import datetime
+    import sys
+    import os
+    
+    # Add suilend directory to path
+    suilend_path = os.path.join(os.path.dirname(__file__), 'suilend')
+    if suilend_path not in sys.path:
+        sys.path.insert(0, suilend_path)
+    
+    from suilend_reader import SuilendReader, SuilendReaderConfig
+
+    metadata = {
+        'suilend_source': 'SHEETS',
+        'suilend_updated_count': 0,
+        'suilend_total_count': 0,
+        'suilend_updated_at': None
+    }
+
+    protocol_col = "SuiLend"
+
+    has_suilend_lend = protocol_col in lend_df.columns
+    has_suilend_borrow = protocol_col in borrow_df.columns
+    has_suilend_collateral = protocol_col in collateral_df.columns
+
+    if not (has_suilend_lend or has_suilend_borrow or has_suilend_collateral):
+        print("⚠️  No 'Suilend' columns found in Google Sheets - skipping Suilend update")
+        return lend_df, borrow_df, collateral_df, metadata
+
+    print("\n🔄 Enriching data with live Suilend (JS SDK via Node)...")
+
+    try:
+        cfg = SuilendReaderConfig(node_script_path=node_script_path)
+        reader = SuilendReader(cfg)
+
+        suilend_lend, suilend_borrow, suilend_collateral = reader.get_all_data()
+        
+        metadata['suilend_source'] = 'API'
+        metadata['suilend_updated_at'] = datetime.now().isoformat()
+
+        updated_lend = _update_dataframe(
+            sheets_df=lend_df,
+            api_df=suilend_lend,
+            value_column='Supply_apr',
+            has_navi=True,
+            df_name='lend_rates',
+            protocol_column=protocol_col
+        )
+
+        updated_borrow = _update_dataframe(
+            sheets_df=borrow_df,
+            api_df=suilend_borrow,
+            value_column='Borrow_apr',
+            has_navi=True,
+            df_name='borrow_rates',
+            protocol_column=protocol_col
+        )
+
+        updated_collateral = _update_dataframe(
+            sheets_df=collateral_df,
+            api_df=suilend_collateral,
+            value_column='Collateralization_factor',
+            has_navi=True,
+            df_name='collateral_ratios',
+            protocol_column=protocol_col
+        )
+
+        total_updated = updated_lend[1] + updated_borrow[1] + updated_collateral[1]
+        total_tokens = updated_lend[2] + updated_borrow[2] + updated_collateral[2]
+
+        metadata['suilend_updated_count'] = total_updated
+        metadata['suilend_total_count'] = total_tokens
+
+        print(f"   ✓ Suilend data source: API")
+        print(f"   ✓ Updated {total_updated}/{total_tokens} token entries from Suilend")
+
+        return updated_lend[0], updated_borrow[0], updated_collateral[0], metadata
+
+    except Exception as e:
+        print(f"   ⚠️  Suilend call failed: {e}")
+        print(f"   ⚠️  Using Google Sheets data for Suilend (may be stale)")
+        import traceback
+        traceback.print_exc()
+        return lend_df, borrow_df, collateral_df, metadata
 
 def _update_dataframe(
     sheets_df: pd.DataFrame,
