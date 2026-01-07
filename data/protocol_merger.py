@@ -6,12 +6,8 @@ Fetches and merges data from Navi, AlphaFi, and Suilend protocols into unified D
 
 import pandas as pd
 from typing import Tuple, Set
-import sys
-import os
 
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from data.navi_reader import NaviReader
+from data.navi.navi_reader import NaviReader
 from data.alphalend.alphafi_reader import AlphaFiReader, AlphaFiReaderConfig
 from data.suilend.suilend_reader import SuilendReader, SuilendReaderConfig
 
