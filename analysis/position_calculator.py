@@ -117,15 +117,19 @@ class PositionCalculator:
         self,
         token1: str,
         token2: str,
-        token3: str,  # NEW: Closing stablecoin (can differ from token1)
+        token3: str,
         protocol_A: str,
         protocol_B: str,
         lend_rate_token1_A: float,
         borrow_rate_token2_A: float,
         lend_rate_token2_B: float,
-        borrow_rate_token3_B: float,  # Changed: token3 borrow rate
+        borrow_rate_token3_B: float,
         collateral_ratio_token1_A: float,
-        collateral_ratio_token2_B: float
+        collateral_ratio_token2_B: float,
+        price_token1_A: float,      # NEW
+        price_token2_A: float,      # NEW
+        price_token2_B: float,      # NEW
+        price_token3_B: float       # NEW
     ) -> Dict:
         """
         Complete analysis of a strategy combination
@@ -142,6 +146,10 @@ class PositionCalculator:
             borrow_rate_token3_B: Closing stablecoin borrow rate from Protocol B
             collateral_ratio_token1_A: Stablecoin collateral ratio in Protocol A
             collateral_ratio_token2_B: High-yield token collateral ratio in Protocol B
+            price_token1_A: Token1 price in Protocol A
+            price_token2_A: Token2 price in Protocol A
+            price_token2_B: Token2 price in Protocol B
+            price_token3_B: Token3 price in Protocol B
         
         Returns:
             Dictionary with all strategy details
@@ -162,7 +170,11 @@ class PositionCalculator:
                 lend_rate_token2_B,
                 borrow_rate_token3_B  # Changed: use token3 borrow rate
             )
-            
+            # Calculate token amounts per $100 notional
+            T1_A = (positions['L_A'] / price_token1_A) * 100
+            T2_A = (positions['B_A'] / price_token2_A) * 100
+            T2_B = T2_A  # Same amount of token2
+            T3_B = (positions['B_B'] / price_token3_B) * 100
             return {
                 'token1': token1,
                 'token2': token2,
@@ -178,7 +190,15 @@ class PositionCalculator:
                 'lend_rate_1A': lend_rate_token1_A * 100,
                 'borrow_rate_2A': borrow_rate_token2_A * 100,
                 'lend_rate_2B': lend_rate_token2_B * 100,
-                'borrow_rate_3B': borrow_rate_token3_B * 100,  # Changed: token3 borrow rate
+                'borrow_rate_3B': borrow_rate_token3_B * 100,  # Changed: token3 borrow rate,
+                'P1_A': price_token1_A,
+                'P2_A': price_token2_A,
+                'P2_B': price_token2_B,
+                'P3_B': price_token3_B,
+                'T1_A': T1_A,
+                'T2_A': T2_A,
+                'T2_B': T2_B,
+                'T3_B': T3_B,
                 'valid': True,
                 'error': None
             }
@@ -198,31 +218,79 @@ class PositionCalculator:
 
 
 # Example usage
+# Example usage
 if __name__ == "__main__":
+    import pandas as pd
+    #from data.navi.navi_reader import NaviReader
+    #from data.suilend.suilend_reader import SuilendReader, SuilendReaderConfig
+    
+    # Hardcoded example tokens/protocols
+    token1 = 'USDY'
+    token2 = 'DEEP'
+    token3 = 'AUSD'
+    protocol_A = 'Navi'
+    protocol_B = 'Suilend'
+    
+    lend_rate_1A = 0.05027
+    borrow_rate_2A = 0.1486
+    collateral_1A = 0.7
+    price_1A = 1.116726
+    price_2A = 0.04458
+    
+    # Get rates from Protocol B (Suilend)
+    lend_rate_2B = 0.25906
+    borrow_rate_3B = 0.5
+    collateral_2B = 0.3
+    price_2B = 0.04454
+    price_3B = 1.11681
+    
+    print(f"Example: Lend {token1} in {protocol_A}, Borrow {token2}, Lend {token2} in {protocol_B}, Borrow {token3}")
+    print("="*80)
+    print("\nFetching data from protocols...")
+    
+    # Check if all data is available
+    if None in [lend_rate_1A, borrow_rate_2A, lend_rate_2B, borrow_rate_3B, 
+                collateral_1A, collateral_2B, price_1A, price_2A, price_2B, price_3B]:
+        print("❌ Error: Missing data for this token/protocol combination")
+        print(f"   {token1} in {protocol_A}: lend={lend_rate_1A}, collateral={collateral_1A}, price={price_1A}")
+        print(f"   {token2} in {protocol_A}: borrow={borrow_rate_2A}, price={price_2A}")
+        print(f"   {token2} in {protocol_B}: lend={lend_rate_2B}, collateral={collateral_2B}, price={price_2B}")
+        print(f"   {token3} in {protocol_B}: borrow={borrow_rate_3B}, price={price_3B}")
+        import sys
+        sys.exit(1)
+    
+    # Run analysis
     calc = PositionCalculator(liquidation_distance=0.30)
     
-    # Example from your screenshot: USDY in NAVI, DEEP in SuiLend
-    print("Example: Lend USDY in NAVI, Borrow DEEP, Lend DEEP in SuiLend, Borrow USDY")
-    print("="*80)
-    
-    positions = calc.calculate_positions(
-        collateral_ratio_A=0.75,  # NAVI allows 75% LTV
-        collateral_ratio_B=0.19   # SuiLend allows 19% LTV for DEEP
+    result = calc.analyze_strategy(
+        token1=token1,
+        token2=token2,
+        token3=token3,
+        protocol_A=protocol_A,
+        protocol_B=protocol_B,
+        lend_rate_token1_A=lend_rate_1A,
+        borrow_rate_token2_A=borrow_rate_2A,
+        lend_rate_token2_B=lend_rate_2B,
+        borrow_rate_token3_B=borrow_rate_3B,
+        collateral_ratio_token1_A=collateral_1A,
+        collateral_ratio_token2_B=collateral_2B,
+        price_token1_A=price_1A,
+        price_token2_A=price_2A,
+        price_token2_B=price_2B,
+        price_token3_B=price_3B
     )
     
+    if not result['valid']:
+        print(f"❌ Strategy not valid: {result['error']}")
+        import sys
+        sys.exit(1)
+    
+    print(f"\n✓ Strategy is valid!")
     print(f"\nPosition Sizes:")
-    print(f"  L_A (USDY lent in NAVI):     {positions['L_A']:.4f}")
-    print(f"  B_A (DEEP borrowed from NAVI): {positions['B_A']:.4f}")
-    print(f"  L_B (DEEP lent in SuiLend):  {positions['L_B']:.4f}")
-    print(f"  B_B (USDY borrowed from SuiLend): {positions['B_B']:.4f}")
-    print(f"  Liquidation Distance: {positions['liquidation_distance']*100:.0f}%")
+    print(f"  L_A ({token1} lent in {protocol_A}):     ${result['L_A']:.4f} = {result['T1_A']:.2f} {token1} @ ${result['P1_A']:.4f}")
+    print(f"  B_A ({token2} borrowed from {protocol_A}): ${result['B_A']:.4f} = {result['T2_A']:.2f} {token2} @ ${result['P2_A']:.4f}")
+    print(f"  L_B ({token2} lent in {protocol_B}):  ${result['L_B']:.4f} = {result['T2_B']:.2f} {token2} @ ${result['P2_B']:.4f}")
+    print(f"  B_B ({token3} borrowed from {protocol_B}): ${result['B_B']:.4f} = {result['T3_B']:.2f} {token3} @ ${result['P3_B']:.4f}")
+    print(f"  Liquidation Distance: {result['liquidation_distance']:.0f}%")
     
-    net_apr = calc.calculate_net_apr(
-        positions,
-        lend_rate_token1_A=0.097,    # 9.7% USDY lending in NAVI
-        borrow_rate_token2_A=0.1950,  # 19.5% DEEP borrowing from NAVI
-        lend_rate_token2_B=0.31,      # 31% DEEP lending in SuiLend
-        borrow_rate_token1_B=0.059    # 5.9% USDY borrowing from SuiLend
-    )
-    
-    print(f"\nNet APR: {net_apr:.2f}%")
+    print(f"\nNet APR: {result['net_apr']:.2f}%")

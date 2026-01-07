@@ -35,7 +35,7 @@ class SuiLendingBot:
             
             # Load and merge data from all protocols
             print("\n📊 Fetching and merging protocol data...")
-            lend_rates, borrow_rates, collateral_ratios = merge_protocol_data(
+            lend_rates, borrow_rates, collateral_ratios, prices, lend_rewards, borrow_rewards = merge_protocol_data(
                 stablecoin_contracts=STABLECOIN_CONTRACTS
             )
             
@@ -50,6 +50,9 @@ class SuiLendingBot:
                 lend_rates=lend_rates,
                 borrow_rates=borrow_rates,
                 collateral_ratios=collateral_ratios,
+                prices=prices,
+                lend_rewards=lend_rewards,
+                borrow_rewards=borrow_rewards,
                 liquidation_distance=settings.DEFAULT_LIQUIDATION_DISTANCE
             )
             

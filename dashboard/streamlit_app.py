@@ -67,10 +67,10 @@ st.markdown("""
 def load_data():
     """Load data from all protocols via protocol merger"""
     try:
-        lend_rates, borrow_rates, collateral_ratios = merge_protocol_data(
+        lend_rates, borrow_rates, collateral_ratios, prices, lend_rewards, borrow_rewards = merge_protocol_data(
             stablecoin_contracts=STABLECOIN_CONTRACTS
         )
-        return lend_rates, borrow_rates, collateral_ratios, None
+        return lend_rates, borrow_rates, collateral_ratios, prices, lend_rewards, borrow_rewards, None
     except Exception as e:
         return None, None, None, str(e)
 
@@ -136,7 +136,7 @@ def main():
 
     # Load data
     with st.spinner("Loading data from protocols..."):
-        lend_rates, borrow_rates, collateral_ratios, error = load_data()
+        lend_rates, borrow_rates, collateral_ratios, prices, lend_rewards, borrow_rewards, error = load_data()
 
     if error:
         st.error(f"❌ Error loading data: {error}")
@@ -152,6 +152,9 @@ def main():
         lend_rates=lend_rates,
         borrow_rates=borrow_rates,
         collateral_ratios=collateral_ratios,
+        prices=prices,
+        lend_rewards=lend_rewards,
+        borrow_rewards=borrow_rewards,
         liquidation_distance=liquidation_distance,
         force_token3_equals_token1=force_token3_equals_token1
     )

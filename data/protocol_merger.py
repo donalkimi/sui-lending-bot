@@ -102,21 +102,22 @@ def get_rate_for_contract(df: pd.DataFrame, contract: str, value_column: str) ->
     return float('nan')
 
 
-def merge_protocol_data(stablecoin_contracts: Set[str] = None) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def merge_protocol_data(stablecoin_contracts: Set[str] = None) -> Tuple[
+    pd.DataFrame,  # lend_rates
+    pd.DataFrame,  # borrow_rates  
+    pd.DataFrame,  # collateral_ratios
+    pd.DataFrame,  # prices
+    pd.DataFrame,  # lend_rewards
+    pd.DataFrame   # borrow_rewards
+]:
     """
     Merge data from all protocols into unified DataFrames.
-    
-    Filters out tokens that only exist in one protocol, unless they are stablecoins.
-    Stablecoins are kept regardless of protocol count since they're assumed fungible.
-    Matching is done by contract address (not symbol) for accuracy.
-    
-    Args:
-        stablecoin_contracts: Set of stablecoin contract addresses 
-                             (e.g., {'0xdba3...::usdc::USDC', '0x960b...::usdy::USDY'})
-                             If None, uses default set from config/stablecoins.py
-    
+
+    ...existing description...
+
     Returns:
-        Tuple of (lend_rates_df, borrow_rates_df, collateral_ratios_df)
+        Tuple of (lend_rates_df, borrow_rates_df, collateral_ratios_df, 
+                prices_df, lend_rewards_df, borrow_rewards_df)
         
         Each DataFrame has structure:
             Token | Contract | Navi | AlphaFi | Suilend
@@ -166,6 +167,9 @@ def merge_protocol_data(stablecoin_contracts: Set[str] = None) -> Tuple[pd.DataF
     lend_rows = []
     borrow_rows = []
     collateral_rows = []
+    price_rows = []          # NEW
+    lend_reward_rows = []    # NEW
+    borrow_reward_rows = []  # NEW
     
     for contract, info in token_universe.items():
         symbol = info['symbol']
@@ -193,10 +197,36 @@ def merge_protocol_data(stablecoin_contracts: Set[str] = None) -> Tuple[pd.DataF
             ratio = get_rate_for_contract(df, contract, 'Collateralization_factor')
             collateral_row[protocol] = ratio
         collateral_rows.append(collateral_row)
-    
+        # NEW: Build price row
+        price_row = {'Token': symbol, 'Contract': contract}
+        for protocol in protocols:
+            df = protocol_data[protocol]['lend']  # Get from lend df (has Price column)
+            price = get_rate_for_contract(df, contract, 'Price')
+            price_row[protocol] = price
+        price_rows.append(price_row)
+
+        # NEW: Build lend reward row
+        lend_reward_row = {'Token': symbol, 'Contract': contract}
+        for protocol in protocols:
+            df = protocol_data[protocol]['lend']
+            reward = get_rate_for_contract(df, contract, 'Supply_reward_apr')
+            lend_reward_row[protocol] = reward
+        lend_reward_rows.append(lend_reward_row)
+
+        # NEW: Build borrow reward row
+        borrow_reward_row = {'Token': symbol, 'Contract': contract}
+        for protocol in protocols:
+            df = protocol_data[protocol]['borrow']
+            reward = get_rate_for_contract(df, contract, 'Borrow_reward_apr')
+            borrow_reward_row[protocol] = reward
+        borrow_reward_rows.append(borrow_reward_row)
+
     lend_df = pd.DataFrame(lend_rows)
     borrow_df = pd.DataFrame(borrow_rows)
     collateral_df = pd.DataFrame(collateral_rows)
+    prices_df = pd.DataFrame(price_rows)              # NEW
+    lend_rewards_df = pd.DataFrame(lend_reward_rows)  # NEW
+    borrow_rewards_df = pd.DataFrame(borrow_reward_rows)  # NEW
     
     # Filter: Remove tokens that are only in one protocol (unless they're stablecoins)
     # Matching by CONTRACT ADDRESS (not symbol) for accuracy
@@ -214,5 +244,8 @@ def merge_protocol_data(stablecoin_contracts: Set[str] = None) -> Tuple[pd.DataF
     lend_df = lend_df.loc[tokens_to_keep].reset_index(drop=True)
     borrow_df = borrow_df.loc[tokens_to_keep].reset_index(drop=True)
     collateral_df = collateral_df.loc[tokens_to_keep].reset_index(drop=True)
+    prices_df = prices_df.loc[tokens_to_keep].reset_index(drop=True)              # NEW
+    lend_rewards_df = lend_rewards_df.loc[tokens_to_keep].reset_index(drop=True)  # NEW
+    borrow_rewards_df = borrow_rewards_df.loc[tokens_to_keep].reset_index(drop=True)  # NEW
     
-    return lend_df, borrow_df, collateral_df
+    return lend_df, borrow_df, collateral_df, prices_df, lend_rewards_df, borrow_rewards_df

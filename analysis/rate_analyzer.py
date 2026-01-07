@@ -22,6 +22,9 @@ class RateAnalyzer:
         lend_rates: pd.DataFrame,
         borrow_rates: pd.DataFrame,
         collateral_ratios: pd.DataFrame,
+        prices: pd.DataFrame,                    # NEW
+        lend_rewards: pd.DataFrame,              # NEW
+        borrow_rewards: pd.DataFrame,            # NEW
         liquidation_distance: float = None,
         force_token3_equals_token1: bool = False
     ):
@@ -32,14 +35,20 @@ class RateAnalyzer:
             lend_rates: DataFrame with lending rates (tokens x protocols)
             borrow_rates: DataFrame with borrow rates (tokens x protocols)
             collateral_ratios: DataFrame with collateral ratios (tokens x protocols)
+            prices: DataFrame with prices (tokens x protocols)                    # NEW
+            lend_rewards: DataFrame with lend reward APRs (tokens x protocols)    # NEW
+            borrow_rewards: DataFrame with borrow reward APRs (tokens x protocols) # NEW
             liquidation_distance: Safety buffer (default from settings)
             force_token3_equals_token1: If True, filter results to only show strategies where token3 == token1
         """
         self.lend_rates = lend_rates
-        self.borrow_rates = borrow_rates
+        self.borrow_rates = borrow_rates                                                                
         self.collateral_ratios = collateral_ratios
+        self.prices = prices                      # NEW
+        self.lend_rewards = lend_rewards          # NEW
+        self.borrow_rewards = borrow_rewards      # NEW
         self.liquidation_distance = liquidation_distance or settings.DEFAULT_LIQUIDATION_DISTANCE
-        self.force_token3_equals_token1 = force_token3_equals_token1
+        self.force_token3_equals_token1 = force_token3_equals_token1    
         
         # Get list of protocols from column headers (excluding 'Token' and 'Contract' columns)
         non_protocol_cols = {'Token', 'Contract'}
@@ -91,6 +100,33 @@ class RateAnalyzer:
             if token in df_indexed.index and protocol in df_indexed.columns:
                 rate = df_indexed.loc[token, protocol]
                 return float(rate) if pd.notna(rate) else np.nan
+            else:
+                return np.nan
+        except:
+            return np.nan
+
+    def get_price(self, token: str, protocol: str) -> float:
+        """
+        Safely get a price from the prices dataframe
+        
+        Args:
+            token: Token name
+            protocol: Protocol name
+            
+        Returns:
+            Price as float, or np.nan if not found
+        """
+        # Set the first column as index if it isn't already
+        if self.prices.index.name != 'Token':
+            df_indexed = self.prices.set_index('Token')
+        else:
+            df_indexed = self.prices
+        
+        try:
+            # Get the price
+            if token in df_indexed.index and protocol in df_indexed.columns:
+                price = df_indexed.loc[token, protocol]
+                return float(price) if pd.notna(price) else np.nan
             else:
                 return np.nan
         except:
@@ -157,10 +193,16 @@ class RateAnalyzer:
                             # Get collateral ratios
                             collateral_1A = self.get_rate(self.collateral_ratios, token1, protocol_A)
                             collateral_2B = self.get_rate(self.collateral_ratios, token2, protocol_B)
-                            
-                            # Skip if any rates are missing
+                            # NEW: Get prices
+                            price_1A = self.get_price(token1, protocol_A)
+                            price_2A = self.get_price(token2, protocol_A)
+                            price_2B = self.get_price(token2, protocol_B)
+                            price_3B = self.get_price(token3, protocol_B)
+
+                            # Skip if any rates OR prices are missing
                             if any(np.isnan([lend_rate_1A, borrow_rate_2A, lend_rate_2B, 
-                                            borrow_rate_3B, collateral_1A, collateral_2B])):
+                                            borrow_rate_3B, collateral_1A, collateral_2B,
+                                            price_1A, price_2A, price_2B, price_3B])):  # Add prices to check
                                 continue
                             
                             # Analyze this strategy
@@ -175,7 +217,11 @@ class RateAnalyzer:
                                 lend_rate_token2_B=lend_rate_2B,
                                 borrow_rate_token3_B=borrow_rate_3B,
                                 collateral_ratio_token1_A=collateral_1A,
-                                collateral_ratio_token2_B=collateral_2B
+                                collateral_ratio_token2_B=collateral_2B,
+                                price_token1_A=price_1A,      # NEW
+                                price_token2_A=price_2A,      # NEW
+                                price_token2_B=price_2B,      # NEW
+                                price_token3_B=price_3B       # NEW
                             )
                             
                             if result['valid']:
