@@ -59,10 +59,12 @@ def fetch_protocol_data(protocol_name: str) -> Tuple[pd.DataFrame, pd.DataFrame,
         Tuple of (lend_df, borrow_df, collateral_df)
     """
     if protocol_name == "Navi":
+        print("\tgetting navi rates:")
         reader = NaviReader()
         return reader.get_all_data()
         
     elif protocol_name == "AlphaFi":
+        print("\t\tgetting AlphaFi rates:")
         config = AlphaFiReaderConfig(
             node_script_path="data/alphalend/alphalend_reader-sdk.mjs"
         )
@@ -70,6 +72,7 @@ def fetch_protocol_data(protocol_name: str) -> Tuple[pd.DataFrame, pd.DataFrame,
         return reader.get_all_data()
         
     elif protocol_name == "Suilend":
+        print("\t\tgetting SuiLend rates:")
         config = SuilendReaderConfig(
             node_script_path="data/suilend/suilend_reader-sdk.mjs"
         )

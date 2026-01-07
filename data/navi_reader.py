@@ -97,7 +97,6 @@ class NaviReader:
             - Liquidation_threshold
             - Token_coin_type       (contract address)
         """
-        print("\nðŸ“Š Fetching data from Navi Protocol...")
 
         # Fetch raw data
         data = self._fetch_pools_data()
@@ -106,7 +105,6 @@ class NaviReader:
             raise ValueError("Unexpected API response structure")
 
         pools = data["data"]
-        print(f"   Found {len(pools)} pools")
 
         lend_rates_data = []
         borrow_rates_data = []
@@ -267,9 +265,9 @@ class NaviReader:
 
             active_pools += 1
 
-        print(f"   âœ“ Parsed {active_pools} active pools")
+        print(f"\tfound {active_pools} active pools")
         if deprecated_pools > 0:
-            print(f"   âš ï¸  Skipped {deprecated_pools} deprecated pools")
+            print(f"\tSkipped {deprecated_pools} deprecated pools")
 
         lend_rates = pd.DataFrame(lend_rates_data)
         borrow_rates = pd.DataFrame(borrow_rates_data)
