@@ -68,7 +68,7 @@ class AlphaFiReader:
                 "Supply_base_apr": supply_base_apr,
                 "Supply_reward_apr": supply_reward_apr,
                 "Supply_apr": supply_apr,
-                "Oracle_price": price,
+                "Price": price,
                 "Total_supply": total_supply,
                 "Total_supply_usd": total_supply_usd,
                 "Available_borrow": available_borrow,
@@ -91,7 +91,7 @@ class AlphaFiReader:
                 "Borrow_base_apr": borrow_base_apr,
                 "Borrow_reward_apr": borrow_reward_apr,
                 "Borrow_apr": borrow_apr,
-                "Oracle_price": price,
+                "Price": price,
                 "Total_borrow": total_borrow,
                 "Total_borrow_usd": total_borrow_usd,
                 "Available_borrow": available_borrow,
@@ -187,3 +187,33 @@ class AlphaFiReader:
                     except Exception:
                         pass
         return total
+
+
+# Example usage
+if __name__ == "__main__":
+    from dataclasses import dataclass
+    
+    config = AlphaFiReaderConfig(
+        node_script_path="data/alphalend/alphalend_reader-sdk.mjs"
+    )
+    reader = AlphaFiReader(config)
+    
+    lend_df, borrow_df, collateral_df = reader.get_all_data()
+    
+    print("\n" + "="*80)
+    print("LENDING RATES (including rewards):")
+    print("="*80)
+    with pd.option_context("display.max_rows", None, "display.max_columns", None):
+        print(lend_df)
+    
+    print("\n" + "="*80)
+    print("BORROW RATES:")
+    print("="*80)
+    with pd.option_context("display.max_rows", None, "display.max_columns", None):
+        print(borrow_df)
+
+    print("\n" + "="*80)
+    print("COLLATERAL RATIOS (LTV):")
+    print("="*80)
+    with pd.option_context("display.max_rows", None, "display.max_columns", None):
+        print(collateral_df)

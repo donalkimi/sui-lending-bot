@@ -42,6 +42,7 @@ class SuilendReader:
                 continue
 
             # Parse APRs from the SDK output (they're in percent strings)
+            price = self._to_float(r.get("price"))
             lend_base = self._parse_percent(r.get("lend_apr_base"))
             lend_reward = self._parse_percent(r.get("lend_apr_reward"))
             lend_total = self._parse_percent(r.get("lend_apr_total"))
@@ -69,6 +70,7 @@ class SuilendReader:
                 "Supply_base_apr": lend_base,
                 "Supply_reward_apr": lend_reward,
                 "Supply_apr": lend_total,
+                "Price": price,
                 "Total_supply": total_supplied,
                 "Utilization": utilization,
                 "Available_amount_usd": available_amount_usd,
@@ -81,6 +83,7 @@ class SuilendReader:
                 "Borrow_base_apr": borrow_base,
                 "Borrow_reward_apr": borrow_reward,
                 "Borrow_apr": borrow_total,
+                "Price": price,
                 "Total_borrow": total_borrowed,
                 "Utilization": utilization,
                 "Borrow_fee_bps": borrow_fee_bps,
@@ -149,3 +152,32 @@ class SuilendReader:
             return float(x) / 100.0
         except Exception:
             return None
+
+# Example usage
+if __name__ == "__main__":
+    from dataclasses import dataclass
+    
+    config = SuilendReaderConfig(
+        node_script_path="data/suilend/suilend_reader-sdk.mjs"
+    )
+    reader = SuilendReader(config)
+    
+    lend_df, borrow_df, collateral_df = reader.get_all_data()
+    
+    print("\n" + "="*80)
+    print("LENDING RATES (including rewards):")
+    print("="*80)
+    with pd.option_context("display.max_rows", None, "display.max_columns", None):
+        print(lend_df)
+    
+    print("\n" + "="*80)
+    print("BORROW RATES:")
+    print("="*80)
+    with pd.option_context("display.max_rows", None, "display.max_columns", None):
+        print(borrow_df)
+
+    print("\n" + "="*80)
+    print("COLLATERAL RATIOS (LTV):")
+    print("="*80)
+    with pd.option_context("display.max_rows", None, "display.max_columns", None):
+        print(collateral_df)

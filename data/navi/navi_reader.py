@@ -67,7 +67,7 @@ class NaviReader:
             - Borrow_reward_apr     (boostedApr on borrow side, decimal)
             - Borrow_apr            (calculated: base - reward)
             - Borrow_apy            (apy from API on borrow side, decimal)
-            - Oracle_price          (USD price)
+            - price                 (USD price)
             - Total_supply
             - Total_supply_usd
             - Total_borrow
@@ -85,6 +85,7 @@ class NaviReader:
             - Base_rate             (base APR)
             - Reward_rate           (reward APR)
             - Borrow_apy            (API-provided APY)
+            - price                 (USD price)
             - Token_coin_type       (contract address)
         
         Collateral DataFrame columns:
@@ -225,7 +226,7 @@ class NaviReader:
                     "Borrow_reward_apr": borrow_reward_apr,
                     "Borrow_apr": borrow_base_apr - borrow_reward_apr,
                     "Borrow_apy": borrow_total_apy,
-                    "Oracle_price": price,
+                    "Price": price,
                     "Total_supply": total_supply,
                     "Total_supply_usd": total_supply_usd,
                     "Total_borrow": total_borrow,
@@ -246,6 +247,7 @@ class NaviReader:
                     "Base_rate": borrow_base_apr,
                     "Reward_rate": borrow_reward_apr,
                     "Borrow_apy": borrow_total_apy,
+                    "Price": price,
                     "Token_coin_type": token_coin_type,
                 }
             )

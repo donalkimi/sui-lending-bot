@@ -129,6 +129,7 @@ async function main() {
       reserve_id: reserve.id,
       token_symbol: reserve.token.symbol,
       token_contract: reserve.coinType,
+      price: reserve.price.toFixed(6),
       lend_apr_base: lendBase.toFixed(3),
       lend_apr_total: lendTotal.toFixed(3),
       lend_apr_reward: lendReward.toFixed(3),
