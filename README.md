@@ -12,7 +12,7 @@ Cross-protocol yield optimization bot for Sui DeFi lending markets.
 
 1. **Clone the repository:**
    ```bash
-   git clone <repository-url>
+   git clone https://github.com/donalkimi/sui-lending-bot
    cd sui-lending-bot
    ```
 
