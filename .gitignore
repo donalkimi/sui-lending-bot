@@ -4,9 +4,9 @@ __pycache__/
 *$py.class
 *.so
 .Python
-env/
-venv/
-ENV/
+*.egg-info/
+*.egg
+.installed.cfg
 build/
 develop-eggs/
 dist/
@@ -19,14 +19,22 @@ parts/
 sdist/
 var/
 wheels/
-*.egg-info/
-.installed.cfg
-*.egg
+
+# Virtual Environments
+env/
+venv/
+ENV/
+
+# Node.js
+node_modules/
+package-lock.json
+yarn.lock
 
 # Credentials - NEVER commit these!
 config/credentials.json
 *.json.key
 *.pem
+.env
 
 # IDE
 .vscode/
@@ -45,5 +53,13 @@ Thumbs.db
 # Logs
 *.log
 
-# Environment variables
-.env
+# Test/Scratch/Development
+scratch/
+sandbox/
+test_scripts/
+temp/
+tmp/
+playground/
+experiments/
+*.test.py
+*.scratch.py
