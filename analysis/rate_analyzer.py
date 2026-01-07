@@ -25,8 +25,7 @@ class RateAnalyzer:
         prices: pd.DataFrame,                    # NEW
         lend_rewards: pd.DataFrame,              # NEW
         borrow_rewards: pd.DataFrame,            # NEW
-        liquidation_distance: float = None,
-        force_token3_equals_token1: bool = False
+        liquidation_distance: float = None
     ):
         """
         Initialize the rate analyzer
@@ -39,7 +38,6 @@ class RateAnalyzer:
             lend_rewards: DataFrame with lend reward APRs (tokens x protocols)    # NEW
             borrow_rewards: DataFrame with borrow reward APRs (tokens x protocols) # NEW
             liquidation_distance: Safety buffer (default from settings)
-            force_token3_equals_token1: If True, filter results to only show strategies where token3 == token1
         """
         self.lend_rates = lend_rates
         self.borrow_rates = borrow_rates                                                                
@@ -48,7 +46,6 @@ class RateAnalyzer:
         self.lend_rewards = lend_rewards          # NEW
         self.borrow_rewards = borrow_rewards      # NEW
         self.liquidation_distance = liquidation_distance or settings.DEFAULT_LIQUIDATION_DISTANCE
-        self.force_token3_equals_token1 = force_token3_equals_token1    
         
         # Get list of protocols from column headers (excluding 'Token' and 'Contract' columns)
         non_protocol_cols = {'Token', 'Contract'}
@@ -234,13 +231,6 @@ class RateAnalyzer:
         # Convert to DataFrame and sort by net APR
         if results:
             df_results = pd.DataFrame(results)
-            
-            # Filter to force token3 == token1 if toggle is enabled
-            if self.force_token3_equals_token1:
-                df_results = df_results[df_results['token3'] == df_results['token1']]
-                if df_results.empty:
-                    print(f"   ⚠️  No strategies found with token3 == token1")
-                    return pd.DataFrame()
             
             # Add flag for stablecoin-only strategies (both tokens are stablecoins)
             df_results['is_stablecoin_only'] = df_results.apply(
