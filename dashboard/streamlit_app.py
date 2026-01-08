@@ -144,7 +144,7 @@ def display_strategy_details(strategy_row):
     
     # Create DataFrame and display
     details_df = pd.DataFrame(table_data)
-    st.dataframe(details_df, use_container_width=True, hide_index=True)
+    st.dataframe(details_df, width="stretch", hide_index=True)
 
 
 def main():
@@ -159,7 +159,7 @@ def main():
         st.header("⚙️ Settings")
 
         # Liquidation Distance - inline with label
-        col1, col2 = st.columns([3, 1])
+        col1, col2 = st.columns([4, 1])
         with col1:
             st.markdown("**Liquidation Dist (%)**")
         with col2:
@@ -206,7 +206,7 @@ def main():
         if "refresh_nonce" not in st.session_state:
             st.session_state.refresh_nonce = 0
 
-        if st.button("🔄 Refresh Data", use_container_width=True):
+        if st.button("🔄 Refresh Data", width="stretch"):
             # Bust only the cached data load by changing the cache key (refresh_nonce)
             st.session_state.refresh_nonce += 1
             st.rerun()
@@ -390,19 +390,19 @@ def main():
         
         col1.subheader("💵 Lending Rates")
         lend_display = lend_rates.drop(columns=['Contract']) if 'Contract' in lend_rates.columns else lend_rates
-        col1.dataframe(lend_display, use_container_width=True, hide_index=True)
+        col1.dataframe(lend_display, width="stretch", hide_index=True)
 
         col2.subheader("💸 Borrow Rates")
         borrow_display = borrow_rates.drop(columns=['Contract']) if 'Contract' in borrow_rates.columns else borrow_rates
-        col2.dataframe(borrow_display, use_container_width=True, hide_index=True)
+        col2.dataframe(borrow_display, width="stretch", hide_index=True)
 
         st.subheader("🔒 Collateral Ratios")
         collateral_display = collateral_ratios.drop(columns=['Contract']) if 'Contract' in collateral_ratios.columns else collateral_ratios
-        st.dataframe(collateral_display, use_container_width=True, hide_index=True)
+        st.dataframe(collateral_display, width="stretch", hide_index=True)
         
         st.subheader("💰 Prices")
         prices_display = prices.drop(columns=['Contract']) if 'Contract' in prices.columns else prices
-        st.dataframe(prices_display, use_container_width=True, hide_index=True)
+        st.dataframe(prices_display, width="stretch", hide_index=True)
 
 
 if __name__ == "__main__":

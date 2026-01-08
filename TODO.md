@@ -52,12 +52,13 @@ These require some design decisions and moderate implementation:
 - **Effort:** 3-4 hours
 - **Research needed:** Navi and AlphaFi fee structures
 
-#### 6. Track rates in SQL/DB each time
-- Design simple schema (timestamp, protocol, token, lend_rate, borrow_rate, collateral_ratio)
-- Add SQLite integration (lightweight, no external dependencies)
-- Log rates after each `merge_protocol_data()` call
-- **Effort:** 4-6 hours
-- **Decision:** SQLite vs PostgreSQL vs time-series DB?
+#### ~~6. Track rates in SQL/DB each time~~
+- ~~Design simple schema (timestamp, protocol, token, lend_rate, borrow_rate, collateral_ratio)~~
+- ~~Add SQLite integration (lightweight, no external dependencies)~~
+- ~~Log rates after each `merge_protocol_data()` call~~
+- ~~**Effort:** 4-6 hours~~
+- ~~**Decision:** SQLite vs PostgreSQL vs time-series DB?~~
+- ✅ **COMPLETED**
 
 #### 11. Add time-adjusted APR metrics (accounting for upfront fees)
 - Add 10-day APR, 30-day APR, 90-day APR calculations
@@ -70,12 +71,12 @@ These require some design decisions and moderate implementation:
 
 ---
 
-### ðŸ”´ LARGE PROJECTS (Large, 8+ hours each)
+### 🔴  LARGE PROJECTS (Large, 8+ hours each)
 These are complex features requiring significant architecture:
 
 #### 7. Track positions in DB - come up with framework
 - Design position schema (strategy_id, tokens, protocols, amounts, entry_time, APR, status)
-- Build position lifecycle: Created â†’ Active â†’ Monitoring â†’ Closed
+- Build position lifecycle: Created Ã¢â€ â€™ Active Ã¢â€ â€™ Monitoring Ã¢â€ â€™ Closed
 - Add position management functions (create, update, close)
 - Dashboard integration to display active positions
 - **Effort:** 8-12 hours
@@ -103,17 +104,17 @@ These are complex features requiring significant architecture:
 
 ## ONE-PAGER: Progress Tracker
 
-Last Updated: 2025-01-07
+Last Updated: 2025-01-08
 
 ### Phase 1: Polish & Foundation 🟢
 - [x] 1 - Dashboard: Remove contract addresses (15 min) ✅ *07Jan*
 - [x] 2 - Dashboard: Add USDC first deposit toggle (30 min) ✅ *07Jan*
 - [ ] 3 - Slack: Clean up messaging (1-2 hrs)
 - [x] 4 - Dashboard: Add prices (2-3 hrs) ✅ *07Jan*
-- [ ] 6 - Database: Track rates history (4-6 hrs)
+- [x] 6 - Database: Track rates history (4-6 hrs) ✅ *08Jan*
 - [ ] 10 - Dashboard: Add liquidity metrics (1-2 hrs)
 
-**Phase 1 Progress: 3/6 complete**
+**Phase 1 Progress: 4/6 complete**
 
 ---
 
@@ -125,14 +126,14 @@ Last Updated: 2025-01-07
 
 ---
 
-### Phase 3: Position Management ðŸ”´
+### Phase 3: Position Management 🔴
 - [ ] 7 - Database: Position tracking framework (8-12 hrs)
 
 **Phase 3 Progress: 0/1 complete**
 
 ---
 
-### Phase 4: Automation ðŸ”´ðŸ”´
+### Phase 4: Automation 🔴🔴
 - [ ] 8 - Slack: Listening & command handling (10-15 hrs)
 - [ ] 9 - Execution: One-click deploy (20-30 hrs)
 
@@ -141,8 +142,8 @@ Last Updated: 2025-01-07
 ---
 
 ## Overall Progress
-**Total: 3/11 tasks complete**
-- Phase 1: 3/6 🟢🟢🟢⚪⚪⚪
+**Total: 4/11 tasks complete**
+- Phase 1: 4/6 🟢🟢🟢🟢⚪⚪
 - Phase 2: 0/2 ⚪⚪
 - Phase 3: 0/1 ⚪
 - Phase 4: 0/2 ⚪⚪
@@ -158,7 +159,7 @@ When starting a task, reference this section:
 
 **Blocked By:** _No blockers_
 
-**Next Up:** Task 3 (Slack cleanup) or Task 10 (Liquidity metrics)
+**Next Up:** Task 3 (Slack cleanup) or Task 10 (Liquidity metrics) - both are quick wins!
 
 ---
 
@@ -170,5 +171,5 @@ EDITING RULES FOR THIS TODO FILE:
 ✅ Maintain mapping between detailed tasks and the one-pager progress tracker
 ✅ Update "Last Updated" date when making changes
 ✅ Update phase progress counts when tasks are completed
-✅ EMOJI ENCODING: Always use proper Unicode emojis (🟢🟡🔴✅⚪). If emojis appear garbled (ðŸŸ¢âœ…âšª), fix with: sed 's/ðŸŸ¢/🟢/g; s/ðŸŸ¡/🟡/g; s/ðŸ"´/🔴/g; s/âœ…/✅/g; s/âšª/⚪/g' TODO.md
+✅ EMOJI ENCODING: Always use proper Unicode emojis (🟢🟡ðŸ”´✅⚪). If emojis appear garbled (🟢Ã¢Å“â€¦⚪), fix with: sed 's/🟢/🟢/g; s/🟡/🟡/g; s/🔴/ðŸ”´/g; s/Ã¢Å“â€¦/✅/g; s/⚪/⚪/g' TODO.md
 -->

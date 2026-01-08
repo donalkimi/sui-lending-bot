@@ -4,7 +4,7 @@ Configuration settings for the Sui Lending Bot
 
 
 # Strategy Parameters
-DEFAULT_LIQUIDATION_DISTANCE = 0.15  # 315 default safety buffer
+DEFAULT_LIQUIDATION_DISTANCE = 0.20  # 315 default safety buffer
 MIN_NET_APR_THRESHOLD = -10.5  # Minimum 0.5% net APR to consider
 
 # Alert Configuration
