@@ -2,12 +2,6 @@
 pandas>=2.0.0
 numpy>=1.24.0
 
-# Google Sheets integration
-gspread>=5.11.0
-google-auth>=2.23.0
-google-auth-oauthlib>=1.1.0
-google-auth-httplib2>=0.1.1
-
 # Slack notifications
 requests>=2.31.0
 
@@ -17,3 +11,7 @@ plotly>=5.17.0
 
 # Scheduling (optional - for advanced scheduling)
 APScheduler>=3.10.4
+
+# Database support (for rate tracking & migration)
+sqlalchemy>=2.0.0
+psycopg2-binary>=2.9.0

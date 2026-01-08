@@ -63,3 +63,9 @@ playground/
 experiments/
 *.test.py
 *.scratch.py
+
+# Database files (SQLite - local only)
+data/*.db
+data/*.db-journal
+data/*.db-wal
+data/*.db-shm

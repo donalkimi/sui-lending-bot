@@ -70,12 +70,12 @@ These require some design decisions and moderate implementation:
 
 ---
 
-### 🔴 LARGE PROJECTS (Large, 8+ hours each)
+### ðŸ”´ LARGE PROJECTS (Large, 8+ hours each)
 These are complex features requiring significant architecture:
 
 #### 7. Track positions in DB - come up with framework
 - Design position schema (strategy_id, tokens, protocols, amounts, entry_time, APR, status)
-- Build position lifecycle: Created → Active → Monitoring → Closed
+- Build position lifecycle: Created â†’ Active â†’ Monitoring â†’ Closed
 - Add position management functions (create, update, close)
 - Dashboard integration to display active positions
 - **Effort:** 8-12 hours
@@ -125,14 +125,14 @@ Last Updated: 2025-01-07
 
 ---
 
-### Phase 3: Position Management 🔴
+### Phase 3: Position Management ðŸ”´
 - [ ] 7 - Database: Position tracking framework (8-12 hrs)
 
 **Phase 3 Progress: 0/1 complete**
 
 ---
 
-### Phase 4: Automation 🔴🔴
+### Phase 4: Automation ðŸ”´ðŸ”´
 - [ ] 8 - Slack: Listening & command handling (10-15 hrs)
 - [ ] 9 - Execution: One-click deploy (20-30 hrs)
 
@@ -159,3 +159,16 @@ When starting a task, reference this section:
 **Blocked By:** _No blockers_
 
 **Next Up:** Task 3 (Slack cleanup) or Task 10 (Liquidity metrics)
+
+---
+
+<!-- 
+EDITING RULES FOR THIS TODO FILE:
+✅ Never delete anything unless explicitly requested
+✅ Mark completed tasks with strikethrough ~~like this~~
+✅ Keep sequential numbering (1, 2, 3, 4...) - don't renumber when tasks complete
+✅ Maintain mapping between detailed tasks and the one-pager progress tracker
+✅ Update "Last Updated" date when making changes
+✅ Update phase progress counts when tasks are completed
+✅ EMOJI ENCODING: Always use proper Unicode emojis (🟢🟡🔴✅⚪). If emojis appear garbled (ðŸŸ¢âœ…âšª), fix with: sed 's/ðŸŸ¢/🟢/g; s/ðŸŸ¡/🟡/g; s/ðŸ"´/🔴/g; s/âœ…/✅/g; s/âšª/⚪/g' TODO.md
+-->
