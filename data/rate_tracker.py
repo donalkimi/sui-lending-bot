@@ -164,8 +164,7 @@ class RateTracker:
             else:
                 self._insert_rates_sqlite(conn, rows)
         
-        return len(rows)
-    
+        return len(rows) 
     def _insert_rates_sqlite(self, conn, rows):
         """Insert rates into SQLite"""
         cursor = conn.cursor()
@@ -174,10 +173,10 @@ class RateTracker:
             cursor.execute('''
                 INSERT OR REPLACE INTO rates_snapshot 
                 (timestamp, protocol, token, token_contract,
-                 lend_base_apr, lend_reward_apr, lend_total_apr,
-                 borrow_base_apr, borrow_reward_apr, borrow_total_apr,
-                 collateral_ratio, liquidation_threshold, price_usd,
-                 utilization, total_supply_usd, total_borrow_usd, available_borrow_usd)
+                    lend_base_apr, lend_reward_apr, lend_total_apr,
+                    borrow_base_apr, borrow_reward_apr, borrow_total_apr,
+                    collateral_ratio, liquidation_threshold, price_usd,
+                    utilization, total_supply_usd, total_borrow_usd, available_borrow_usd)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 row['timestamp'], row['protocol'], row['token'], row['token_contract'],
@@ -187,7 +186,7 @@ class RateTracker:
                 row['utilization'], row['total_supply_usd'], row['total_borrow_usd'], 
                 row['available_borrow_usd']
             ))
-    
+
     def _insert_rates_postgres(self, conn, rows):
         """Insert rates into PostgreSQL"""
         cursor = conn.cursor()
@@ -196,10 +195,10 @@ class RateTracker:
             cursor.execute('''
                 INSERT INTO rates_snapshot 
                 (timestamp, protocol, token, token_contract,
-                 lend_base_apr, lend_reward_apr, lend_total_apr,
-                 borrow_base_apr, borrow_reward_apr, borrow_total_apr,
-                 collateral_ratio, liquidation_threshold, price_usd,
-                 utilization, total_supply_usd, total_borrow_usd, available_borrow_usd)
+                    lend_base_apr, lend_reward_apr, lend_total_apr,
+                    borrow_base_apr, borrow_reward_apr, borrow_total_apr,
+                    collateral_ratio, liquidation_threshold, price_usd,
+                    utilization, total_supply_usd, total_borrow_usd, available_borrow_usd)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (timestamp, protocol, token_contract) DO NOTHING
             ''', (
@@ -210,7 +209,7 @@ class RateTracker:
                 row['utilization'], row['total_supply_usd'], row['total_borrow_usd'], 
                 row['available_borrow_usd']
             ))
-    
+
     def _save_reward_prices(
         self,
         conn,
@@ -226,3 +225,232 @@ class RateTracker:
         """
         # Placeholder - will implement reward extraction in Step 4
         return 0
+    
+
+    # ---------------------------------------------------------------------
+    # Token registry
+    # ---------------------------------------------------------------------
+    def upsert_token_registry(
+        self,
+        tokens_df: pd.DataFrame,
+        timestamp: Optional[datetime] = None
+    ) -> dict:
+        """
+        Upsert token contracts into token_registry.
+
+        Expects a DataFrame with at least:
+          - token_contract (preferred) OR Token_coin_type
+        Optional columns (0/1 or bool):
+          - symbol
+          - seen_on_navi, seen_on_alphafi, seen_on_suilend
+          - seen_as_reserve, seen_as_reward_lend, seen_as_reward_borrow
+
+        Notes:
+          - pyth_id and coingecko_id are NOT overwritten here.
+          - seen_* flags are "sticky" (once 1, stays 1).
+        """
+        if tokens_df is None or len(tokens_df) == 0:
+            return {"seen": 0, "inserted": 0, "updated": 0, "total": self._count_table("token_registry")}
+
+        ts = timestamp or datetime.utcnow()
+
+        df = tokens_df.copy()
+
+        # Normalize required column name
+        if "token_contract" not in df.columns:
+            if "Token_coin_type" in df.columns:
+                df = df.rename(columns={"Token_coin_type": "token_contract"})
+            else:
+                raise ValueError("tokens_df must contain 'token_contract' (or 'Token_coin_type')")
+
+        # Keep only needed columns, fill missing with defaults
+        def _col(name, default=0):
+            if name not in df.columns:
+                df[name] = default
+            return name
+
+        _col("symbol", None)
+        for c in [
+            "seen_on_navi", "seen_on_alphafi", "seen_on_suilend",
+            "seen_as_reserve", "seen_as_reward_lend", "seen_as_reward_borrow"
+        ]:
+            _col(c, 0)
+
+        # Coerce flags to int 0/1 where possible
+        for c in [
+            "seen_on_navi", "seen_on_alphafi", "seen_on_suilend",
+            "seen_as_reserve", "seen_as_reward_lend", "seen_as_reward_borrow"
+        ]:
+            df[c] = df[c].fillna(0).astype(int)
+
+        # De-dupe by token_contract (take max for flags, first non-null for symbol)
+        agg = {
+            "symbol": "first",
+            "seen_on_navi": "max",
+            "seen_on_alphafi": "max",
+            "seen_on_suilend": "max",
+            "seen_as_reserve": "max",
+            "seen_as_reward_lend": "max",
+            "seen_as_reward_borrow": "max",
+        }
+        df = df.groupby("token_contract", as_index=False).agg(agg)
+
+        token_list = df["token_contract"].tolist()
+
+        conn = self._get_connection()
+        try:
+            existing = self._get_existing_token_contracts(conn, token_list)
+            inserted = len([t for t in token_list if t not in existing])
+            updated_count = len(token_list) - inserted
+
+            if self.db_type == "sqlite":
+                self._upsert_token_registry_sqlite(conn, ts, df)
+            else:
+                self._upsert_token_registry_postgres(conn, ts, df)
+
+            total = self._count_table("token_registry", conn=conn)
+
+            if self.db_type == "sqlite":
+                conn.commit()
+            else:
+                conn.commit()
+
+            return {"seen": len(token_list), "inserted": inserted, "updated": updated_count, "total": total}
+        finally:
+            conn.close()
+
+    def _get_existing_token_contracts(self, conn, token_contracts: list) -> set:
+        """Return set of token_contracts already present in token_registry."""
+        if not token_contracts:
+            return set()
+
+        cur = conn.cursor()
+        if self.db_type == "sqlite":
+            placeholders = ",".join(["?"] * len(token_contracts))
+            cur.execute(f"SELECT token_contract FROM token_registry WHERE token_contract IN ({placeholders})", token_contracts)
+        else:
+            placeholders = ",".join(["%s"] * len(token_contracts))
+            cur.execute(f"SELECT token_contract FROM token_registry WHERE token_contract IN ({placeholders})", token_contracts)
+        rows = cur.fetchall()
+        return {r[0] for r in rows}
+
+    def _upsert_token_registry_sqlite(self, conn, ts: datetime, df: pd.DataFrame) -> None:
+        cur = conn.cursor()
+        cur.executemany(
+            """
+            INSERT INTO token_registry (
+                token_contract, symbol, pyth_id, coingecko_id,
+                seen_on_navi, seen_on_alphafi, seen_on_suilend,
+                seen_as_reserve, seen_as_reward_lend, seen_as_reward_borrow,
+                first_seen, last_seen
+            )
+            VALUES (
+                ?, ?, NULL, NULL,
+                ?, ?, ?,
+                ?, ?, ?,
+                ?, ?
+            )
+            ON CONFLICT(token_contract) DO UPDATE SET
+                last_seen = excluded.last_seen,
+                -- Keep pyth_id / coingecko_id as-is unless they are NULL and excluded is non-NULL (excluded is NULL here)
+                symbol = COALESCE(token_registry.symbol, excluded.symbol),
+                seen_on_navi = MAX(token_registry.seen_on_navi, excluded.seen_on_navi),
+                seen_on_alphafi = MAX(token_registry.seen_on_alphafi, excluded.seen_on_alphafi),
+                seen_on_suilend = MAX(token_registry.seen_on_suilend, excluded.seen_on_suilend),
+                seen_as_reserve = MAX(token_registry.seen_as_reserve, excluded.seen_as_reserve),
+                seen_as_reward_lend = MAX(token_registry.seen_as_reward_lend, excluded.seen_as_reward_lend),
+                seen_as_reward_borrow = MAX(token_registry.seen_as_reward_borrow, excluded.seen_as_reward_borrow)
+            """,
+            [
+                (
+                    r["token_contract"],
+                    r["symbol"],
+                    int(r["seen_on_navi"]),
+                    int(r["seen_on_alphafi"]),
+                    int(r["seen_on_suilend"]),
+                    int(r["seen_as_reserve"]),
+                    int(r["seen_as_reward_lend"]),
+                    int(r["seen_as_reward_borrow"]),
+                    ts,
+                    ts,
+                )
+                for _, r in df.iterrows()
+            ],
+        )
+
+    def _upsert_token_registry_postgres(self, conn, ts: datetime, df: pd.DataFrame) -> None:
+        cur = conn.cursor()
+        cur.executemany(
+            """
+            INSERT INTO token_registry (
+                token_contract, symbol, pyth_id, coingecko_id,
+                seen_on_navi, seen_on_alphafi, seen_on_suilend,
+                seen_as_reserve, seen_as_reward_lend, seen_as_reward_borrow,
+                first_seen, last_seen
+            )
+            VALUES (
+                %s, %s, NULL, NULL,
+                %s, %s, %s,
+                %s, %s, %s,
+                %s, %s
+            )
+            ON CONFLICT(token_contract) DO UPDATE SET
+                last_seen = EXCLUDED.last_seen,
+                symbol = COALESCE(token_registry.symbol, EXCLUDED.symbol),
+                seen_on_navi = GREATEST(token_registry.seen_on_navi, EXCLUDED.seen_on_navi),
+                seen_on_alphafi = GREATEST(token_registry.seen_on_alphafi, EXCLUDED.seen_on_alphafi),
+                seen_on_suilend = GREATEST(token_registry.seen_on_suilend, EXCLUDED.seen_on_suilend),
+                seen_as_reserve = GREATEST(token_registry.seen_as_reserve, EXCLUDED.seen_as_reserve),
+                seen_as_reward_lend = GREATEST(token_registry.seen_as_reward_lend, EXCLUDED.seen_as_reward_lend),
+                seen_as_reward_borrow = GREATEST(token_registry.seen_as_reward_borrow, EXCLUDED.seen_as_reward_borrow)
+            """,
+            [
+                (
+                    r["token_contract"],
+                    r["symbol"],
+                    int(r["seen_on_navi"]),
+                    int(r["seen_on_alphafi"]),
+                    int(r["seen_on_suilend"]),
+                    int(r["seen_as_reserve"]),
+                    int(r["seen_as_reward_lend"]),
+                    int(r["seen_as_reward_borrow"]),
+                    ts,
+                    ts,
+                )
+                for _, r in df.iterrows()
+            ],
+        )
+
+    # ---------------------------------------------------------------------
+    # Inspection helpers
+    # ---------------------------------------------------------------------
+    def get_table_counts(self) -> dict:
+        """Return row counts for key tables (if they exist)."""
+        conn = self._get_connection()
+        try:
+            counts = {}
+            for table in ["rates_snapshot", "token_registry", "reward_token_prices"]:
+                counts[table] = self._count_table(table, conn=conn)
+            return counts
+        finally:
+            conn.close()
+
+    def _count_table(self, table: str, conn=None) -> int:
+        """Count rows in a table; returns 0 if table doesn't exist."""
+        close_conn = False
+        if conn is None:
+            conn = self._get_connection()
+            close_conn = True
+        try:
+            cur = conn.cursor()
+            try:
+                cur.execute(f"SELECT COUNT(*) FROM {table}")
+                return int(cur.fetchone()[0])
+            except Exception:
+                return 0
+        finally:
+            if close_conn:
+                conn.close()
+
+
+    

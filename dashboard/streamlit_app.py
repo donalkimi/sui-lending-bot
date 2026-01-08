@@ -15,8 +15,7 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import settings
 from config.stablecoins import STABLECOIN_CONTRACTS
-from data.protocol_merger import merge_protocol_data
-from analysis.rate_analyzer import RateAnalyzer
+from data.refresh_pipeline import refresh_pipeline
 from analysis.position_calculator import PositionCalculator
 
 
@@ -48,15 +47,17 @@ st.markdown("""
 
 
 @st.cache_data(ttl=300)  # Cache for 5 minutes
-def load_data():
-    """Load data from all protocols via protocol merger"""
+def load_data(refresh_nonce: int):
+    """Run the full refresh pipeline and return a RefreshResult."""
     try:
-        lend_rates, borrow_rates, collateral_ratios, prices, lend_rewards, borrow_rewards = merge_protocol_data(
-            stablecoin_contracts=STABLECOIN_CONTRACTS
+        result = refresh_pipeline(
+            stablecoin_contracts=STABLECOIN_CONTRACTS,
+            liquidation_distance=settings.DEFAULT_LIQUIDATION_DISTANCE,
+            save_snapshots=getattr(settings, "SAVE_SNAPSHOTS", True),
         )
-        return lend_rates, borrow_rates, collateral_ratios, prices, lend_rewards, borrow_rewards, None
+        return result, None
     except Exception as e:
-        return None, None, None, None, None, None, str(e)
+        return None, str(e)
 
 
 def display_strategy_details(strategy_row):
@@ -202,8 +203,12 @@ def main():
         st.subheader("📊 Data Source")
         st.info(f"Live data from {len(['Navi', 'AlphaFi', 'Suilend'])} protocols")
 
+        if "refresh_nonce" not in st.session_state:
+            st.session_state.refresh_nonce = 0
+
         if st.button("🔄 Refresh Data", use_container_width=True):
-            st.cache_data.clear()
+            # Bust only the cached data load by changing the cache key (refresh_nonce)
+            st.session_state.refresh_nonce += 1
             st.rerun()
 
         st.markdown("---")
@@ -211,27 +216,34 @@ def main():
 
     # Load data
     with st.spinner("Loading data from protocols..."):
-        lend_rates, borrow_rates, collateral_ratios, prices, lend_rewards, borrow_rewards, error = load_data()
+        result, error = load_data(st.session_state.refresh_nonce)
 
     if error:
         st.error(f"❌ Error loading data: {error}")
         st.info("💡 Check that all protocol APIs are accessible")
         st.stop()
 
-    if lend_rates is None or lend_rates.empty:
+    if result is None:
         st.warning("⚠️ No data available. Please check protocol connections.")
         st.stop()
 
-    # Initialize analyzer
-    analyzer = RateAnalyzer(
-        lend_rates=lend_rates,
-        borrow_rates=borrow_rates,
-        collateral_ratios=collateral_ratios,
-        prices=prices,
-        lend_rewards=lend_rewards,
-        borrow_rewards=borrow_rewards,
-        liquidation_distance=liquidation_distance,
-    )
+    lend_rates = result.lend_rates
+    borrow_rates = result.borrow_rates
+    collateral_ratios = result.collateral_ratios
+    prices = result.prices
+    lend_rewards = result.lend_rewards
+    borrow_rewards = result.borrow_rewards
+
+    if lend_rates.empty or borrow_rates.empty or collateral_ratios.empty:
+        st.warning("⚠️ No data available. Please check protocol connections.")
+        st.stop()
+
+    # Analysis results (already computed in refresh_pipeline)
+    protocol_A = result.protocol_A
+    protocol_B = result.protocol_B
+    all_results = result.all_results
+    stablecoin_results = result.stablecoin_results
+    
 
     # Tabs
     tab1, tab2, tab3, tab4 = st.tabs([
@@ -246,7 +258,8 @@ def main():
         st.header("🏆 Best Opportunities")
 
         with st.spinner("Analyzing all combinations..."):
-            protocol_A, protocol_B, all_results = analyzer.find_best_protocol_pair()
+            # Results already computed in refresh_pipeline
+            pass
 
         if protocol_A and not all_results.empty:
             # Apply USDC filter if enabled
@@ -308,14 +321,14 @@ def main():
                 with col2:
                     token_filter = st.multiselect(
                         "Filter by Token",
-                        options=analyzer.ALL_TOKENS,
+                        options=sorted(set(all_results['token1']).union(set(all_results['token2'])).union(set(all_results['token3']))) if not all_results.empty else [],
                         default=[]
                     )
 
                 with col3:
                     protocol_filter = st.multiselect(
                         "Filter by Protocol",
-                        options=analyzer.protocols,
+                        options=['Navi','AlphaFi','Suilend'],
                         default=[]
                     )
 
@@ -347,7 +360,7 @@ def main():
         st.header("💰 Stablecoin Strategies")
 
         if protocol_A and protocol_B:
-            stablecoin_results = analyzer.find_best_stablecoin_pairs(protocol_A, protocol_B)
+            stablecoin_results = stablecoin_results
 
             if not stablecoin_results.empty:
                 # Apply USDC filter if enabled
