@@ -42,7 +42,9 @@ class RefreshResult:
     protocol_A: Optional[str]
     protocol_B: Optional[str]
     all_results: pd.DataFrame
-    stablecoin_results: pd.DataFrame
+    
+    # Token registry update summary
+    token_summary: dict
 
 
 def refresh_pipeline(
@@ -65,6 +67,8 @@ def refresh_pipeline(
     )
 
     # Persist snapshot early, so even if analysis fails you still capture the raw state.
+    token_summary = {"seen": 0, "inserted": 0, "updated": 0, "total": 0}  # Default if not saving
+    
     if save_snapshots:
         tracker = RateTracker(
             use_cloud=getattr(settings, "USE_CLOUD_DB", False),
@@ -80,39 +84,46 @@ def refresh_pipeline(
             lend_rewards=lend_rewards,
             borrow_rewards=borrow_rewards,
         )
+        
+        # Update token registry - just use lend_rates with simple rename
+        tokens_df = lend_rates[['Token', 'Contract']].copy()
+        tokens_df.rename(columns={'Token': 'symbol', 'Contract': 'token_contract'}, inplace=True)
+        
+        token_summary = tracker.upsert_token_registry(
+            tokens_df=tokens_df,
+            timestamp=ts,
+        )
 
-        protocol_A: Optional[str] = None
-        protocol_B: Optional[str] = None
-        all_results: pd.DataFrame = pd.DataFrame()
-        stablecoin_results: pd.DataFrame = pd.DataFrame()
+    # Initialize strategy results (always, regardless of save_snapshots)
+    protocol_A: Optional[str] = None
+    protocol_B: Optional[str] = None
+    all_results: pd.DataFrame = pd.DataFrame()
 
-        try:
-            analyzer = RateAnalyzer(
-                lend_rates=lend_rates,
-                borrow_rates=borrow_rates,
-                collateral_ratios=collateral_ratios,
-                prices=prices,
-                lend_rewards=lend_rewards,
-                borrow_rewards=borrow_rewards,
-                liquidation_distance=liquidation_distance,
-            )
+    # Run analysis (always, regardless of save_snapshots)
+    try:
+        analyzer = RateAnalyzer(
+            lend_rates=lend_rates,
+            borrow_rates=borrow_rates,
+            collateral_ratios=collateral_ratios,
+            prices=prices,
+            lend_rewards=lend_rewards,
+            borrow_rewards=borrow_rewards,
+            liquidation_distance=liquidation_distance,
+        )
 
-            protocol_A, protocol_B, all_results = analyzer.find_best_protocol_pair()
+        protocol_A, protocol_B, all_results = analyzer.find_best_protocol_pair()
 
-            # Slack: always notify once per run
-            if all_results is None or all_results.empty:
-                notifier.alert_error("No valid strategies found in this refresh run.")
-            else:
-                best = all_results.iloc[0].to_dict()
-                notifier.alert_high_apr(best)
+        # Slack: always notify once per run
+        if all_results is None or all_results.empty:
+            notifier.alert_error("No valid strategies found in this refresh run.")
+        else:
+            best = all_results.iloc[0].to_dict()
+            notifier.alert_high_apr(best)
 
-            if protocol_A and protocol_B:
-                stablecoin_results = analyzer.find_best_stablecoin_pairs(protocol_A, protocol_B)
-
-        except Exception as e:
-            error_msg = f"Error during analysis: {str(e)}"
-            print(f"✗ {error_msg}")
-            notifier.alert_error(error_msg)
+    except Exception as e:
+        error_msg = f"Error during analysis: {str(e)}"
+        print(f"✗ {error_msg}")
+        notifier.alert_error(error_msg)
     return RefreshResult(
         timestamp=ts,
         lend_rates=lend_rates,
@@ -124,5 +135,5 @@ def refresh_pipeline(
         protocol_A=protocol_A,
         protocol_B=protocol_B,
         all_results=all_results,
-        stablecoin_results=stablecoin_results,
+        token_summary=token_summary,
     )

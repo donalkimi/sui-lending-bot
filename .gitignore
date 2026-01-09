@@ -68,4 +68,4 @@ experiments/
 data/*.db
 data/*.db-journal
 data/*.db-wal
-data/*.db-shm
+data/*.db-shmlending_rates.db

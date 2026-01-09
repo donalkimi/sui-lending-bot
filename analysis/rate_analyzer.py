@@ -4,7 +4,7 @@ Rate analyzer to find the best protocol pair and token combination
 
 import pandas as pd
 import numpy as np
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Optional
 import sys
 import os
 
@@ -25,7 +25,7 @@ class RateAnalyzer:
         prices: pd.DataFrame,                    # NEW
         lend_rewards: pd.DataFrame,              # NEW
         borrow_rewards: pd.DataFrame,            # NEW
-        liquidation_distance: float = None
+        liquidation_distance: Optional[float] = None
     ):
         """
         Initialize the rate analyzer
@@ -129,7 +129,7 @@ class RateAnalyzer:
         except:
             return np.nan
     
-    def analyze_all_combinations(self, tokens: List[str] = None) -> pd.DataFrame:
+    def analyze_all_combinations(self, tokens: Optional[List[str]] = None) -> pd.DataFrame:
         """
         Analyze all possible protocol pairs and token combinations
         
@@ -248,7 +248,7 @@ class RateAnalyzer:
         else:
             return pd.DataFrame()
     
-    def find_best_protocol_pair(self, tokens: List[str] = None) -> Tuple[str, str, pd.DataFrame]:
+    def find_best_protocol_pair(self, tokens: Optional[List[str]] = None) -> Tuple[Optional[str], Optional[str], pd.DataFrame]:
         """
         Find the best protocol pair based on maximum spread across any token
         
@@ -294,46 +294,6 @@ class RateAnalyzer:
         print(f"   Liquidation Distance: {best['liquidation_distance']:.0f}%")
         
         return best['protocol_A'], best['protocol_B'], all_results
-    
-    def find_best_stablecoin_pairs(
-        self, 
-        protocol_A: str, 
-        protocol_B: str
-    ) -> pd.DataFrame:
-        """
-        Find the best stablecoin pairs for the given protocol pair
-        
-        Args:
-            protocol_A: First protocol
-            protocol_B: Second protocol
-            
-        Returns:
-            DataFrame with stablecoin strategies sorted by net APR
-        """
-        print(f"\n💰 Finding best stablecoin pairs for {protocol_A} <-> {protocol_B}...")
-        
-        # Analyze only stablecoin combinations for these protocols
-        all_results = self.analyze_all_combinations(list(self.STABLECOINS))
-        
-        # Filter for the specified protocol pair
-        filtered = all_results[
-            ((all_results['protocol_A'] == protocol_A) & 
-             (all_results['protocol_B'] == protocol_B)) |
-            ((all_results['protocol_A'] == protocol_B) & 
-             (all_results['protocol_B'] == protocol_A))
-        ]
-        
-        if filtered.empty:
-            print("   ✗ No valid stablecoin strategies found for this protocol pair")
-            return pd.DataFrame()
-        
-        print(f"   ✓ Found {len(filtered)} valid stablecoin strategies")
-        print(f"\n   Top 5 Strategies:")
-        for idx, row in filtered.head(5).iterrows():
-            print(f"   {row['token1']:>8} <-> {row['token2']:<8}: {row['net_apr']:>6.2f}% APR "
-                  f"(Liq Dist: {row['liquidation_distance']:.0f}%)")
-        
-        return filtered
 
 
 # Example usage

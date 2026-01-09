@@ -14,7 +14,7 @@ import os
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import settings
-from config.stablecoins import STABLECOIN_CONTRACTS
+from config.stablecoins import STABLECOIN_CONTRACTS, STABLECOIN_SYMBOLS
 from data.refresh_pipeline import refresh_pipeline
 from analysis.position_calculator import PositionCalculator
 
@@ -47,17 +47,37 @@ st.markdown("""
 
 
 @st.cache_data(ttl=300)  # Cache for 5 minutes
-def load_data(refresh_nonce: int):
-    """Run the full refresh pipeline and return a RefreshResult."""
+def fetch_protocol_data(refresh_nonce: int):
+    """Fetch protocol data (expensive operation)."""
     try:
-        result = refresh_pipeline(
-            stablecoin_contracts=STABLECOIN_CONTRACTS,
-            liquidation_distance=settings.DEFAULT_LIQUIDATION_DISTANCE,
-            save_snapshots=getattr(settings, "SAVE_SNAPSHOTS", True),
+        from data.protocol_merger import merge_protocol_data
+        lend_rates, borrow_rates, collateral_ratios, prices, lend_rewards, borrow_rewards = merge_protocol_data(
+            stablecoin_contracts=STABLECOIN_CONTRACTS
         )
-        return result, None
+        return (lend_rates, borrow_rates, collateral_ratios, prices, lend_rewards, borrow_rewards), None
     except Exception as e:
         return None, str(e)
+
+
+def run_analysis(lend_rates, borrow_rates, collateral_ratios, prices, lend_rewards, borrow_rewards, liquidation_distance: float):
+    """Run strategy analysis (fast operation)."""
+    try:
+        from analysis.rate_analyzer import RateAnalyzer
+        
+        analyzer = RateAnalyzer(
+            lend_rates=lend_rates,
+            borrow_rates=borrow_rates,
+            collateral_ratios=collateral_ratios,
+            prices=prices,
+            lend_rewards=lend_rewards,
+            borrow_rewards=borrow_rewards,
+            liquidation_distance=liquidation_distance,
+        )
+        
+        protocol_A, protocol_B, all_results = analyzer.find_best_protocol_pair()
+        return protocol_A, protocol_B, all_results, None
+    except Exception as e:
+        return None, None, pd.DataFrame(), str(e)
 
 
 def display_strategy_details(strategy_row):
@@ -197,6 +217,13 @@ def main():
             value=True,
             help="When enabled, only shows strategies where the closing stablecoin matches the starting stablecoin"
         )
+        
+        # Toggle to show only stablecoin strategies
+        stablecoin_only = st.toggle(
+            "Stablecoin Only",
+            value=False,
+            help="When enabled, only shows strategies where all three tokens are stablecoins"
+        )
 
         st.markdown("---")
 
@@ -210,46 +237,80 @@ def main():
             # Bust only the cached data load by changing the cache key (refresh_nonce)
             st.session_state.refresh_nonce += 1
             st.rerun()
+        
+        st.caption("💡 Changing liquidation distance re-runs analysis instantly without re-fetching protocol data")
 
         st.markdown("---")
         st.caption(f"Last updated: {datetime.now().strftime('%H:%M:%S')}")
 
-    # Load data
+    # Load data (cached - only refreshes on button click)
     with st.spinner("Loading data from protocols..."):
-        result, error = load_data(st.session_state.refresh_nonce)
+        data_result, data_error = fetch_protocol_data(st.session_state.refresh_nonce)
 
-    if error:
-        st.error(f"❌ Error loading data: {error}")
+    if data_error:
+        st.error(f"❌ Error loading data: {data_error}")
         st.info("💡 Check that all protocol APIs are accessible")
         st.stop()
 
-    if result is None:
+    if data_result is None:
         st.warning("⚠️ No data available. Please check protocol connections.")
         st.stop()
 
-    lend_rates = result.lend_rates
-    borrow_rates = result.borrow_rates
-    collateral_ratios = result.collateral_ratios
-    prices = result.prices
-    lend_rewards = result.lend_rewards
-    borrow_rewards = result.borrow_rewards
+    lend_rates, borrow_rates, collateral_ratios, prices, lend_rewards, borrow_rewards = data_result
 
     if lend_rates.empty or borrow_rates.empty or collateral_ratios.empty:
         st.warning("⚠️ No data available. Please check protocol connections.")
         st.stop()
 
-    # Analysis results (already computed in refresh_pipeline)
-    protocol_A = result.protocol_A
-    protocol_B = result.protocol_B
-    all_results = result.all_results
-    stablecoin_results = result.stablecoin_results
+    # Run analysis (fast - re-runs when liquidation_distance changes)
+    protocol_A, protocol_B, all_results, analysis_error = run_analysis(
+        lend_rates, borrow_rates, collateral_ratios, prices, lend_rewards, borrow_rewards,
+        liquidation_distance
+    )
+    
+    if analysis_error:
+        st.error(f"❌ Error during analysis: {analysis_error}")
+        st.stop()
+    
+    # Send Slack notifications on data refresh (not on liquidation distance changes)
+    if "last_refresh_nonce" not in st.session_state:
+        st.session_state.last_refresh_nonce = -1
+    
+    if st.session_state.refresh_nonce != st.session_state.last_refresh_nonce:
+        # Data was refreshed, send notification
+        from alerts.slack_notifier import SlackNotifier
+        notifier = SlackNotifier()
+        
+        if all_results is None or all_results.empty:
+            notifier.alert_error("No valid strategies found in dashboard refresh.")
+        else:
+            best = all_results.iloc[0].to_dict()
+            notifier.alert_high_apr(best)
+        
+        # Update last refresh nonce
+        st.session_state.last_refresh_nonce = st.session_state.refresh_nonce
+    
+    # Apply filters ONCE before displaying in tabs
+    filtered_results = all_results.copy()
+    
+    if force_usdc_start:
+        filtered_results = filtered_results[filtered_results['token1'] == 'USDC']
+    
+    if force_token3_equals_token1:
+        filtered_results = filtered_results[filtered_results['token3'] == filtered_results['token1']]
+    
+    if stablecoin_only:
+        filtered_results = filtered_results[
+            (filtered_results['token1'].isin(STABLECOIN_SYMBOLS)) &
+            (filtered_results['token2'].isin(STABLECOIN_SYMBOLS)) &
+            (filtered_results['token3'].isin(STABLECOIN_SYMBOLS))
+        ]
     
 
     # Tabs
-    tab1, tab2, tab3, tab4 = st.tabs([
+    tab1, tab2, tab3 = st.tabs([
         "🏆 Best Opportunities",
         "📊 All Strategies",
-        "💰 Stablecoin Focus",
         "📈 Rate Tables"
     ])
 
@@ -257,133 +318,88 @@ def main():
     with tab1:
         st.header("🏆 Best Opportunities")
 
-        with st.spinner("Analyzing all combinations..."):
-            # Results already computed in refresh_pipeline
-            pass
+        if protocol_A and not filtered_results.empty:
+            best = filtered_results.iloc[0]
 
-        if protocol_A and not all_results.empty:
-            # Apply USDC filter if enabled
-            if force_usdc_start:
-                all_results = all_results[all_results['token1'] == 'USDC']
-            # Apply token3=token1 filter if enabled
-            if force_token3_equals_token1:
-                all_results = all_results[all_results['token3'] == all_results['token1']]
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("Net APR", f"{best['net_apr']:.2f}%")
+            col2.metric("Liquidation Distance", f"{best['liquidation_distance']:.0f}%")
+            col3.metric("Protocol A", protocol_A)
+            col4.metric("Protocol B", protocol_B)
 
-            if all_results.empty:
-                st.warning("⚠️ No strategies found with current filters")
-            else:
-                best = all_results.iloc[0]
+            st.subheader("Strategy Details")
+            st.write(f"**Token 1 (Start):** {best['token1']}")
+            st.write(f"**Token 2 (Middle):** {best['token2']}")
+            st.write(f"**Token 3 (Close):** {best['token3']}")
+            
+            if best['token1'] != best['token3']:
+                st.info(f"💱 This strategy includes stablecoin conversion: {best['token3']} → {best['token1']}")
 
-                col1, col2, col3, col4 = st.columns(4)
-                col1.metric("Net APR", f"{best['net_apr']:.2f}%")
-                col2.metric("Liquidation Distance", f"{best['liquidation_distance']:.0f}%")
-                col3.metric("Protocol A", protocol_A)
-                col4.metric("Protocol B", protocol_B)
-
-                st.subheader("Strategy Details")
-                st.write(f"**Token 1 (Start):** {best['token1']}")
-                st.write(f"**Token 2 (Middle):** {best['token2']}")
-                st.write(f"**Token 3 (Close):** {best['token3']}")
-                
-                if best['token1'] != best['token3']:
-                    st.info(f"💱 This strategy includes stablecoin conversion: {best['token3']} → {best['token1']}")
-
-                st.subheader("Top 10 Strategies")
-                
-                for idx, row in all_results.head(10).iterrows():
-                    with st.expander(
-                        f"▶ {row['token1']} → {row['token2']} → {row['token3']} | "
-                        f"{row['protocol_A']} ↔ {row['protocol_B']} | "
-                        f"{row['net_apr']:.2f}% APR"
-                    ):
-                        display_strategy_details(row)
+            st.subheader("Top 10 Strategies")
+            
+            for idx, row in filtered_results.head(10).iterrows():
+                with st.expander(
+                    f"▶ {row['token1']} → {row['token2']} → {row['token3']} | "
+                    f"{row['protocol_A']} ↔ {row['protocol_B']} | "
+                    f"{row['net_apr']:.2f}% APR"
+                ):
+                    display_strategy_details(row)
+        else:
+            st.warning("⚠️ No strategies found with current filters")
 
     # ---------------- Tab 2 ----------------
     with tab2:
         st.header("📊 All Valid Strategies")
 
-        if not all_results.empty:
-            # Apply USDC filter if enabled
-            if force_usdc_start:
-                all_results = all_results[all_results['token1'] == 'USDC']
-            # Apply token3=token1 filter if enabled
-            if force_token3_equals_token1:
-                all_results = all_results[all_results['token3'] == all_results['token1']]
+        if not filtered_results.empty:
+            col1, col2, col3 = st.columns(3)
 
-            if all_results.empty:
-                st.warning("⚠️ No strategies found with current filters")
-            else:
-                col1, col2, col3 = st.columns(3)
+            with col1:
+                min_apr = st.number_input("Min APR (%)", value=0.0, step=0.5)
 
-                with col1:
-                    min_apr = st.number_input("Min APR (%)", value=0.0, step=0.5)
+            with col2:
+                token_filter = st.multiselect(
+                    "Filter by Token",
+                    options=sorted(set(filtered_results['token1']).union(set(filtered_results['token2'])).union(set(filtered_results['token3']))) if not filtered_results.empty else [],
+                    default=[]
+                )
 
-                with col2:
-                    token_filter = st.multiselect(
-                        "Filter by Token",
-                        options=sorted(set(all_results['token1']).union(set(all_results['token2'])).union(set(all_results['token3']))) if not all_results.empty else [],
-                        default=[]
-                    )
+            with col3:
+                protocol_filter = st.multiselect(
+                    "Filter by Protocol",
+                    options=['Navi','AlphaFi','Suilend'],
+                    default=[]
+                )
 
-                with col3:
-                    protocol_filter = st.multiselect(
-                        "Filter by Protocol",
-                        options=['Navi','AlphaFi','Suilend'],
-                        default=[]
-                    )
+            display_results = filtered_results[filtered_results['net_apr'] >= min_apr]
 
-                filtered_results = all_results[all_results['net_apr'] >= min_apr]
+            if token_filter:
+                display_results = display_results[
+                    display_results['token1'].isin(token_filter) |
+                    display_results['token2'].isin(token_filter)
+                ]
 
-                if token_filter:
-                    filtered_results = filtered_results[
-                        filtered_results['token1'].isin(token_filter) |
-                        filtered_results['token2'].isin(token_filter)
-                    ]
+            if protocol_filter:
+                display_results = display_results[
+                    display_results['protocol_A'].isin(protocol_filter) |
+                    display_results['protocol_B'].isin(protocol_filter)
+                ]
 
-                if protocol_filter:
-                    filtered_results = filtered_results[
-                        filtered_results['protocol_A'].isin(protocol_filter) |
-                        filtered_results['protocol_B'].isin(protocol_filter)
-                    ]
+            st.metric("Strategies Found", f"{len(display_results)} / {len(all_results)}")
 
-                # Display with expanders
-                for idx, row in filtered_results.iterrows():
-                    with st.expander(
-                        f"▶ {row['token1']} → {row['token2']} → {row['token3']} | "
-                        f"{row['protocol_A']} ↔ {row['protocol_B']} | "
-                        f"{row['net_apr']:.2f}% APR"
-                    ):
-                        display_strategy_details(row)
+            # Display with expanders
+            for idx, row in display_results.iterrows():
+                with st.expander(
+                    f"▶ {row['token1']} → {row['token2']} → {row['token3']} | "
+                    f"{row['protocol_A']} ↔ {row['protocol_B']} | "
+                    f"{row['net_apr']:.2f}% APR"
+                ):
+                    display_strategy_details(row)
+        else:
+            st.warning("⚠️ No strategies found with current filters")
 
     # ---------------- Tab 3 ----------------
     with tab3:
-        st.header("💰 Stablecoin Strategies")
-
-        if protocol_A and protocol_B:
-            stablecoin_results = stablecoin_results
-
-            if not stablecoin_results.empty:
-                # Apply USDC filter if enabled
-                if force_usdc_start:
-                    all_results = all_results[all_results['token1'] == 'USDC']
-                # Apply token3=token1 filter if enabled
-                if force_token3_equals_token1:
-                    all_results = all_results[all_results['token3'] == all_results['token1']]
-
-                if stablecoin_results.empty:
-                    st.warning("⚠️ No strategies found with current filters")
-                else:
-                    # Display with expanders
-                    for idx, row in stablecoin_results.iterrows():
-                        with st.expander(
-                            f"▶ {row['token1']} → {row['token2']} → {row['token3']} | "
-                            f"{row['protocol_A']} ↔ {row['protocol_B']} | "
-                            f"{row['net_apr']:.2f}% APR"
-                        ):
-                            display_strategy_details(row)
-
-    # ---------------- Tab 4 ----------------
-    with tab4:
         st.header("📈 Current Rates")
 
         col1, col2 = st.columns(2)

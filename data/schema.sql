@@ -25,6 +25,12 @@ CREATE TABLE IF NOT EXISTS rates_snapshot (
     -- Supply/borrow token price
     price_usd DECIMAL(20,10),
     
+    -- Liquidity metrics
+    utilization DECIMAL(10,6),
+    total_supply_usd DECIMAL(20,10),
+    total_borrow_usd DECIMAL(20,10),
+    available_borrow_usd DECIMAL(20,10),
+    
     -- Reward token details (optional, per protocol)
     reward_token VARCHAR(50),
     reward_token_contract TEXT,
@@ -32,7 +38,10 @@ CREATE TABLE IF NOT EXISTS rates_snapshot (
     
     -- Metadata
     market TEXT,
-    side TEXT
+    side TEXT,
+    
+    -- Composite primary key for PostgreSQL ON CONFLICT support
+    PRIMARY KEY (timestamp, protocol, token_contract)
 );
 
 -- Indexes for rates_snapshot
