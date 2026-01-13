@@ -104,11 +104,13 @@ def get_rate_for_contract(df: pd.DataFrame, contract: str, value_column: str) ->
 
 def merge_protocol_data(stablecoin_contracts: Set[str] = None) -> Tuple[
     pd.DataFrame,  # lend_rates
-    pd.DataFrame,  # borrow_rates  
+    pd.DataFrame,  # borrow_rates
     pd.DataFrame,  # collateral_ratios
     pd.DataFrame,  # prices
     pd.DataFrame,  # lend_rewards
-    pd.DataFrame   # borrow_rewards
+    pd.DataFrame,  # borrow_rewards
+    pd.DataFrame,  # available_borrow
+    pd.DataFrame   # borrow_fees
 ]:
     """
     Merge data from all protocols into unified DataFrames.
@@ -170,6 +172,8 @@ def merge_protocol_data(stablecoin_contracts: Set[str] = None) -> Tuple[
     price_rows = []          # NEW
     lend_reward_rows = []    # NEW
     borrow_reward_rows = []  # NEW
+    available_borrow_rows = []  # NEW
+    borrow_fee_rows = []  # NEW
     
     for contract, info in token_universe.items():
         symbol = info['symbol']
@@ -221,12 +225,41 @@ def merge_protocol_data(stablecoin_contracts: Set[str] = None) -> Tuple[
             borrow_reward_row[protocol] = reward
         borrow_reward_rows.append(borrow_reward_row)
 
+        # NEW: Build available borrow row
+        available_borrow_row = {'Token': symbol, 'Contract': contract}
+        for protocol in protocols:
+            df = protocol_data[protocol]['lend']  # liquidity data in lend df
+            available_borrow = get_rate_for_contract(df, contract, 'Available_borrow_usd')
+            available_borrow_row[protocol] = available_borrow
+        available_borrow_rows.append(available_borrow_row)
+
+        # NEW: Build borrow fee row
+        borrow_fee_row = {'Token': symbol, 'Contract': contract}
+        for protocol in protocols:
+            df = protocol_data[protocol]['borrow']
+
+            # Get fee (handle different formats)
+            if protocol == 'Suilend':
+                # Suilend uses basis points, convert to decimal
+                fee_bps = get_rate_for_contract(df, contract, 'Borrow_fee_bps')
+                fee = fee_bps / 10000.0 if pd.notna(fee_bps) else None
+            elif protocol == 'AlphaFi':
+                # AlphaFi uses decimal
+                fee = get_rate_for_contract(df, contract, 'Borrow_fee')
+            else:  # Navi
+                fee = 0.0  # Navi doesn't provide fees, assume zero
+
+            borrow_fee_row[protocol] = fee
+        borrow_fee_rows.append(borrow_fee_row)
+
     lend_df = pd.DataFrame(lend_rows)
     borrow_df = pd.DataFrame(borrow_rows)
     collateral_df = pd.DataFrame(collateral_rows)
     prices_df = pd.DataFrame(price_rows)              # NEW
     lend_rewards_df = pd.DataFrame(lend_reward_rows)  # NEW
     borrow_rewards_df = pd.DataFrame(borrow_reward_rows)  # NEW
+    available_borrow_df = pd.DataFrame(available_borrow_rows)  # NEW
+    borrow_fees_df = pd.DataFrame(borrow_fee_rows)  # NEW
     
     # Filter: Remove tokens that are only in one protocol (unless they're stablecoins)
     # Matching by CONTRACT ADDRESS (not symbol) for accuracy
@@ -247,5 +280,7 @@ def merge_protocol_data(stablecoin_contracts: Set[str] = None) -> Tuple[
     prices_df = prices_df.loc[tokens_to_keep].reset_index(drop=True)              # NEW
     lend_rewards_df = lend_rewards_df.loc[tokens_to_keep].reset_index(drop=True)  # NEW
     borrow_rewards_df = borrow_rewards_df.loc[tokens_to_keep].reset_index(drop=True)  # NEW
-    
-    return lend_df, borrow_df, collateral_df, prices_df, lend_rewards_df, borrow_rewards_df
+    available_borrow_df = available_borrow_df.loc[tokens_to_keep].reset_index(drop=True)  # NEW
+    borrow_fees_df = borrow_fees_df.loc[tokens_to_keep].reset_index(drop=True)  # NEW
+
+    return lend_df, borrow_df, collateral_df, prices_df, lend_rewards_df, borrow_rewards_df, available_borrow_df, borrow_fees_df

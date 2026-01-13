@@ -129,7 +129,8 @@ class PositionCalculator:
         price_token1_A: float,      # NEW
         price_token2_A: float,      # NEW
         price_token2_B: float,      # NEW
-        price_token3_B: float       # NEW
+        price_token3_B: float,      # NEW
+        available_borrow_2A: float = None  # NEW
     ) -> Dict:
         """
         Complete analysis of a strategy combination
@@ -199,6 +200,7 @@ class PositionCalculator:
                 'T2_A': T2_A,
                 'T2_B': T2_B,
                 'T3_B': T3_B,
+                'available_borrow_2A': available_borrow_2A,  # NEW
                 'valid': True,
                 'error': None
             }

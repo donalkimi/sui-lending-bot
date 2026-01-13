@@ -19,6 +19,18 @@ from data.refresh_pipeline import refresh_pipeline
 from analysis.position_calculator import PositionCalculator
 
 
+def format_usd_abbreviated(value: float) -> str:
+    """Format USD amount abbreviated (e.g., $1.23M, $456K)"""
+    if value is None or pd.isna(value):
+        return "N/A"
+    if value >= 1_000_000:
+        return f"${value/1_000_000:.2f}M"
+    elif value >= 1_000:
+        return f"${value/1_000:.1f}K"
+    else:
+        return f"${value:.0f}"
+
+
 # ============================================================================
 # HISTORICAL CHART FUNCTIONS
 # ============================================================================
@@ -443,7 +455,7 @@ def fetch_and_save_protocol_data(refresh_nonce: int):
         from datetime import datetime
         
         # Fetch fresh data from APIs
-        lend_rates, borrow_rates, collateral_ratios, prices, lend_rewards, borrow_rewards = merge_protocol_data(
+        lend_rates, borrow_rates, collateral_ratios, prices, lend_rewards, borrow_rewards, available_borrow, borrow_fees = merge_protocol_data(
             stablecoin_contracts=STABLECOIN_CONTRACTS
         )
         
@@ -471,17 +483,17 @@ def fetch_and_save_protocol_data(refresh_nonce: int):
         tracker.upsert_token_registry(tokens_df=tokens_df, timestamp=timestamp)
         
         print(f"✅ Dashboard: Saved snapshot to database at {timestamp.strftime('%Y-%m-%d %H:%M:%S')}")
-        
-        return (lend_rates, borrow_rates, collateral_ratios, prices, lend_rewards, borrow_rewards), None
+
+        return (lend_rates, borrow_rates, collateral_ratios, prices, lend_rewards, borrow_rewards, available_borrow, borrow_fees), None
     except Exception as e:
         return None, str(e)
 
 
-def run_analysis(lend_rates, borrow_rates, collateral_ratios, prices, lend_rewards, borrow_rewards, liquidation_distance: float):
+def run_analysis(lend_rates, borrow_rates, collateral_ratios, prices, lend_rewards, borrow_rewards, available_borrow, liquidation_distance: float):
     """Run strategy analysis (fast operation)."""
     try:
         from analysis.rate_analyzer import RateAnalyzer
-        
+
         analyzer = RateAnalyzer(
             lend_rates=lend_rates,
             borrow_rates=borrow_rates,
@@ -489,6 +501,7 @@ def run_analysis(lend_rates, borrow_rates, collateral_ratios, prices, lend_rewar
             prices=prices,
             lend_rewards=lend_rewards,
             borrow_rewards=borrow_rewards,
+            available_borrow=available_borrow,
             liquidation_distance=liquidation_distance,
         )
         
@@ -534,7 +547,14 @@ def display_strategy_details(strategy_row):
     T1_A = strategy_row['T1_A']
     T2_A = strategy_row['T2_A']
     T3_B = strategy_row['T3_B']
-    
+
+    # Available borrow liquidity
+    available_borrow_2A = strategy_row.get('available_borrow_2A')
+
+    # Show available borrow metric if available
+    if available_borrow_2A is not None and not pd.isna(available_borrow_2A):
+        st.info(f"💵 **Available Borrow Liquidity ({token2} on {protocol_A}):** ${available_borrow_2A:,.2f}")
+
     # Build the table data
     table_data = [
         # Row 1: Protocol A, token1, Lend
@@ -688,7 +708,7 @@ def main():
         st.warning("⚠️ No data available. Please check protocol connections.")
         st.stop()
 
-    lend_rates, borrow_rates, collateral_ratios, prices, lend_rewards, borrow_rewards = data_result
+    lend_rates, borrow_rates, collateral_ratios, prices, lend_rewards, borrow_rewards, available_borrow, borrow_fees = data_result
 
     if lend_rates.empty or borrow_rates.empty or collateral_ratios.empty:
         st.warning("⚠️ No data available. Please check protocol connections.")
@@ -696,7 +716,7 @@ def main():
 
     # Run analysis (fast - re-runs when liquidation_distance changes)
     protocol_A, protocol_B, all_results, analysis_error = run_analysis(
-        lend_rates, borrow_rates, collateral_ratios, prices, lend_rewards, borrow_rewards,
+        lend_rates, borrow_rates, collateral_ratios, prices, lend_rewards, borrow_rewards, available_borrow,
         liquidation_distance
     )
     
@@ -752,11 +772,16 @@ def main():
         if protocol_A and not filtered_results.empty:
             best = filtered_results.iloc[0]
 
-            col1, col2, col3, col4 = st.columns(4)
+            col1, col2, col3, col4, col5 = st.columns(5)
             col1.metric("Net APR", f"{best['net_apr']:.2f}%")
             col2.metric("Liquidation Distance", f"{best['liquidation_distance']:.0f}%")
             col3.metric("Protocol A", protocol_A)
             col4.metric("Protocol B", protocol_B)
+
+            # Show available borrow if available
+            available_borrow_2A = best.get('available_borrow_2A')
+            if available_borrow_2A is not None and not pd.isna(available_borrow_2A):
+                col5.metric(f"{best['token2']} Liquidity", f"${available_borrow_2A:,.2f}")
 
             st.subheader("Strategy Details")
             st.write(f"**Token 1 (Start):** {best['token1']}")
@@ -771,14 +796,18 @@ def main():
             for idx, row in filtered_results.head(10).iterrows():
                 # Chart data key
                 chart_key = f"chart_tab1_{idx}"
-                
+
                 # Expander should be open if chart data exists for this strategy
                 is_expanded = chart_key in st.session_state
-                
+
+                # Build expander title with available borrow
+                available_borrow_2A = row.get('available_borrow_2A')
+                avail_borrow_text = f" | {row['protocol_A']}/{row['token2']} Available ${available_borrow_2A:,.2f}"
+
                 with st.expander(
                     f"▶ {row['token1']} → {row['token2']} → {row['token3']} | "
                     f"{row['protocol_A']} ↔ {row['protocol_B']} | "
-                    f"{row['net_apr']:.2f}% APR",
+                    f"{row['net_apr']:.2f}% APR{avail_borrow_text}",
                     expanded=is_expanded
                 ):
                     # Button to load historical chart
@@ -886,14 +915,18 @@ def main():
             for idx, row in display_results.iterrows():
                 # Chart data key
                 chart_key = f"chart_tab2_{idx}"
-                
+
                 # Expander should be open if chart data exists for this strategy
                 is_expanded = chart_key in st.session_state
-                
+
+                # Build expander title with available borrow
+                available_borrow_2A = row.get('available_borrow_2A')
+                avail_borrow_text = f" | {row['protocol_A']}/{row['token2']} Available ${available_borrow_2A:,.2f}"
+
                 with st.expander(
                     f"▶ {row['token1']} → {row['token2']} → {row['token3']} | "
                     f"{row['protocol_A']} ↔ {row['protocol_B']} | "
-                    f"{row['net_apr']:.2f}% APR",
+                    f"{row['net_apr']:.2f}% APR{avail_borrow_text}",
                     expanded=is_expanded
                 ):
                     # Button to load historical chart
@@ -978,6 +1011,34 @@ def main():
         st.subheader("💰 Prices")
         prices_display = prices.drop(columns=['Contract']) if 'Contract' in prices.columns else prices
         st.dataframe(prices_display, use_container_width=True, hide_index=True)
+
+        st.subheader("💵 Available Borrow Liquidity")
+        # Format available_borrow values as abbreviated USD
+        available_borrow_display = available_borrow.copy()
+        if 'Contract' in available_borrow_display.columns:
+            available_borrow_display = available_borrow_display.drop(columns=['Contract'])
+
+        # Format numeric columns (protocol columns)
+        for col in available_borrow_display.columns:
+            if col != 'Token':
+                available_borrow_display[col] = available_borrow_display[col].apply(format_usd_abbreviated)
+
+        st.dataframe(available_borrow_display, use_container_width=True, hide_index=True)
+
+        st.subheader("💳 Borrow Fees")
+        # Format fees as percentages
+        borrow_fees_display = borrow_fees.copy()
+        if 'Contract' in borrow_fees_display.columns:
+            borrow_fees_display = borrow_fees_display.drop(columns=['Contract'])
+
+        # Format numeric columns as percentages
+        for col in borrow_fees_display.columns:
+            if col != 'Token':
+                borrow_fees_display[col] = borrow_fees_display[col].apply(
+                    lambda x: f"{x*100:.2f}%" if pd.notna(x) and x > 0 else ("0.00%" if x == 0 else "N/A")
+                )
+
+        st.dataframe(borrow_fees_display, use_container_width=True, hide_index=True)
 
 
 if __name__ == "__main__":

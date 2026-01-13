@@ -37,12 +37,14 @@ class RefreshResult:
     prices: pd.DataFrame
     lend_rewards: pd.DataFrame
     borrow_rewards: pd.DataFrame
+    available_borrow: pd.DataFrame
+    borrow_fees: pd.DataFrame
 
     # Strategy outputs
     protocol_A: Optional[str]
     protocol_B: Optional[str]
     all_results: pd.DataFrame
-    
+
     # Token registry update summary
     token_summary: dict
 
@@ -62,7 +64,7 @@ def refresh_pipeline(
 
 
     notifier = SlackNotifier()
-    lend_rates, borrow_rates, collateral_ratios, prices, lend_rewards, borrow_rewards = merge_protocol_data(
+    lend_rates, borrow_rates, collateral_ratios, prices, lend_rewards, borrow_rewards, available_borrow, borrow_fees = merge_protocol_data(
         stablecoin_contracts=stablecoin_contracts
     )
 
@@ -108,6 +110,7 @@ def refresh_pipeline(
             prices=prices,
             lend_rewards=lend_rewards,
             borrow_rewards=borrow_rewards,
+            available_borrow=available_borrow,
             liquidation_distance=liquidation_distance,
         )
 
@@ -132,6 +135,8 @@ def refresh_pipeline(
         prices=prices,
         lend_rewards=lend_rewards,
         borrow_rewards=borrow_rewards,
+        available_borrow=available_borrow,
+        borrow_fees=borrow_fees,
         protocol_A=protocol_A,
         protocol_B=protocol_B,
         all_results=all_results,

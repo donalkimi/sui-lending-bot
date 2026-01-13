@@ -6,7 +6,7 @@ Supports both SQLite (local) and PostgreSQL (Supabase) for easy cloud migration.
 
 import sqlite3
 import psycopg2
-from datetime import datetime
+from datetime import datetime, timezone
 import pandas as pd
 from pathlib import Path
 from typing import Optional
@@ -212,14 +212,14 @@ class RateTracker:
 
     def _save_reward_prices(
         self,
-        conn,
-        timestamp: datetime,
-        lend_rewards: Optional[pd.DataFrame],
-        borrow_rewards: Optional[pd.DataFrame]
+        _conn,
+        _timestamp: datetime,
+        _lend_rewards: Optional[pd.DataFrame],
+        _borrow_rewards: Optional[pd.DataFrame]
     ) -> int:
         """
         Save reward token prices (no protocol - last write wins)
-        
+
         TODO: Extract reward token data from lend_rewards/borrow_rewards DataFrames
         For now, returns 0 (will implement in Step 4)
         """
@@ -252,7 +252,7 @@ class RateTracker:
         if tokens_df is None or len(tokens_df) == 0:
             return {"seen": 0, "inserted": 0, "updated": 0, "total": self._count_table("token_registry")}
 
-        ts = timestamp or datetime.utcnow()
+        ts = timestamp or datetime.now(timezone.utc)
 
         df = tokens_df.copy()
 
@@ -269,7 +269,7 @@ class RateTracker:
                 df[name] = default
             return name
 
-        _col("symbol", None)
+        _col("symbol", 0)
         for c in [
             "seen_on_navi", "seen_on_alphafi", "seen_on_suilend",
             "seen_as_reserve", "seen_as_reward_lend", "seen_as_reward_borrow"
@@ -445,7 +445,8 @@ class RateTracker:
             cur = conn.cursor()
             try:
                 cur.execute(f"SELECT COUNT(*) FROM {table}")
-                return int(cur.fetchone()[0])
+                result = cur.fetchone()
+                return int(result[0]) if result else 0
             except Exception:
                 return 0
         finally:

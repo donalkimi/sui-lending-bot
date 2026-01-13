@@ -18,13 +18,14 @@ class RateAnalyzer:
     """Analyze all protocol and token combinations to find the best strategy"""
     
     def __init__(
-        self, 
+        self,
         lend_rates: pd.DataFrame,
         borrow_rates: pd.DataFrame,
         collateral_ratios: pd.DataFrame,
         prices: pd.DataFrame,                    # NEW
         lend_rewards: pd.DataFrame,              # NEW
         borrow_rewards: pd.DataFrame,            # NEW
+        available_borrow: pd.DataFrame,          # NEW
         liquidation_distance: Optional[float] = None
     ):
         """
@@ -40,11 +41,12 @@ class RateAnalyzer:
             liquidation_distance: Safety buffer (default from settings)
         """
         self.lend_rates = lend_rates
-        self.borrow_rates = borrow_rates                                                                
+        self.borrow_rates = borrow_rates
         self.collateral_ratios = collateral_ratios
         self.prices = prices                      # NEW
         self.lend_rewards = lend_rewards          # NEW
         self.borrow_rewards = borrow_rewards      # NEW
+        self.available_borrow = available_borrow  # NEW
         self.liquidation_distance = liquidation_distance or settings.DEFAULT_LIQUIDATION_DISTANCE
         
         # Get list of protocols from column headers (excluding 'Token' and 'Contract' columns)
@@ -105,11 +107,11 @@ class RateAnalyzer:
     def get_price(self, token: str, protocol: str) -> float:
         """
         Safely get a price from the prices dataframe
-        
+
         Args:
             token: Token name
             protocol: Protocol name
-            
+
         Returns:
             Price as float, or np.nan if not found
         """
@@ -118,12 +120,39 @@ class RateAnalyzer:
             df_indexed = self.prices.set_index('Token')
         else:
             df_indexed = self.prices
-        
+
         try:
             # Get the price
             if token in df_indexed.index and protocol in df_indexed.columns:
                 price = df_indexed.loc[token, protocol]
                 return float(price) if pd.notna(price) else np.nan
+            else:
+                return np.nan
+        except:
+            return np.nan
+
+    def get_available_borrow(self, token: str, protocol: str) -> float:
+        """
+        Safely get available borrow USD from the available_borrow dataframe
+
+        Args:
+            token: Token name
+            protocol: Protocol name
+
+        Returns:
+            Available borrow in USD, or np.nan if not found
+        """
+        # Set the first column as index if it isn't already
+        if self.available_borrow.index.name != 'Token':
+            df_indexed = self.available_borrow.set_index('Token')
+        else:
+            df_indexed = self.available_borrow
+
+        try:
+            # Get the available borrow
+            if token in df_indexed.index and protocol in df_indexed.columns:
+                value = df_indexed.loc[token, protocol]
+                return float(value) if pd.notna(value) else np.nan
             else:
                 return np.nan
         except:
@@ -196,8 +225,11 @@ class RateAnalyzer:
                             price_2B = self.get_price(token2, protocol_B)
                             price_3B = self.get_price(token3, protocol_B)
 
+                            # NEW: Get available borrow
+                            available_borrow_2A = self.get_available_borrow(token2, protocol_A)
+
                             # Skip if any rates OR prices are missing
-                            if any(np.isnan([lend_rate_1A, borrow_rate_2A, lend_rate_2B, 
+                            if any(np.isnan([lend_rate_1A, borrow_rate_2A, lend_rate_2B,
                                             borrow_rate_3B, collateral_1A, collateral_2B,
                                             price_1A, price_2A, price_2B, price_3B])):  # Add prices to check
                                 continue
@@ -218,7 +250,8 @@ class RateAnalyzer:
                                 price_token1_A=price_1A,      # NEW
                                 price_token2_A=price_2A,      # NEW
                                 price_token2_B=price_2B,      # NEW
-                                price_token3_B=price_3B       # NEW
+                                price_token3_B=price_3B,      # NEW
+                                available_borrow_2A=available_borrow_2A  # NEW
                             )
                             
                             if result['valid']:

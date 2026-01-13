@@ -73,7 +73,7 @@ class SuilendReader:
                 "Price": price,
                 "Total_supply": total_supplied,
                 "Utilization": utilization,
-                "Available_amount_usd": available_amount_usd,
+                "Available_borrow_usd": available_amount_usd,
                 "Token_coin_type": coin_type,
             })
 

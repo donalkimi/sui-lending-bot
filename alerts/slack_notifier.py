@@ -8,9 +8,22 @@ from datetime import datetime
 from typing import Dict, List
 import sys
 import os
+import numpy as np
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import settings
+
+
+def format_usd_abbreviated(value: float) -> str:
+    """Format USD amount abbreviated (e.g., $1.23M, $456K)"""
+    if value is None or (isinstance(value, float) and np.isnan(value)):
+        return "N/A"
+    if value >= 1_000_000:
+        return f"${value/1_000_000:.2f}M"
+    elif value >= 1_000:
+        return f"${value/1_000:.1f}K"
+    else:
+        return f"${value:.0f}"
 
 
 class SlackNotifier:
@@ -104,6 +117,7 @@ class SlackNotifier:
             "borrow_rate_2A": f"{strategy['borrow_rate_2A']:.2f}",
             "lend_rate_2B": f"{strategy['lend_rate_2B']:.2f}",
             "borrow_rate_3B": f"{strategy['borrow_rate_3B']:.2f}",
+            "available_borrow_2A": format_usd_abbreviated(strategy.get('available_borrow_2A')),
             "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')
         }
         

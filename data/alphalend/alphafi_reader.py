@@ -45,13 +45,17 @@ class AlphaFiReader:
             price = self._to_float(m.get("price"))
             total_supply = self._to_float(m.get("totalSupply"))
             total_borrow = self._to_float(m.get("totalBorrow"))
-            available_borrow = self._to_float(m.get("availableLiquidity"))
+            # Use allowedBorrowAmount (not availableLiquidity) for available borrow
+            allowed_borrow_amount = self._to_float(m.get("allowedBorrowAmount"))
             utilization = self._to_float(m.get("utilizationRate"))  # already 0..1 in output
+            # Extract borrow fee (as decimal, e.g., 0.003 = 0.3%)
+            borrow_fee = self._to_float(m.get("borrowFee"))
 
             # Derived USD (only if we have both pieces)
             total_supply_usd = (total_supply * price) if (total_supply is not None and price is not None) else None
             total_borrow_usd = (total_borrow * price) if (total_borrow is not None and price is not None) else None
-            available_borrow_usd = (available_borrow * price) if (available_borrow is not None and price is not None) else None
+            # Calculate available_borrow_usd from allowedBorrowAmount * price
+            available_borrow_usd = (allowed_borrow_amount * price) if (allowed_borrow_amount is not None and price is not None) else None
 
             # ----- Supply APR components -----
             supply_apr_obj = m.get("supplyApr") or {}
@@ -71,9 +75,10 @@ class AlphaFiReader:
                 "Price": price,
                 "Total_supply": total_supply,
                 "Total_supply_usd": total_supply_usd,
-                "Available_borrow": available_borrow,
+                "Available_borrow": allowed_borrow_amount,
                 "Available_borrow_usd": available_borrow_usd,
                 "Utilization": utilization,
+                "Borrow_fee": borrow_fee,  # Same fee applies to both lend and borrow
                 "Token_coin_type": coin_type,
             })
 
@@ -94,9 +99,10 @@ class AlphaFiReader:
                 "Price": price,
                 "Total_borrow": total_borrow,
                 "Total_borrow_usd": total_borrow_usd,
-                "Available_borrow": available_borrow,
+                "Available_borrow": allowed_borrow_amount,
                 "Available_borrow_usd": available_borrow_usd,
                 "Utilization": utilization,
+                "Borrow_fee": borrow_fee,  # Decimal format (0.003 = 0.3%)
                 "Token_coin_type": coin_type,
             })
 
