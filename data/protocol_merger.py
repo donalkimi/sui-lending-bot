@@ -236,19 +236,9 @@ def merge_protocol_data(stablecoin_contracts: Set[str] = None) -> Tuple[
         # NEW: Build borrow fee row
         borrow_fee_row = {'Token': symbol, 'Contract': contract}
         for protocol in protocols:
-            df = protocol_data[protocol]['borrow']
-
-            # Get fee (handle different formats)
-            if protocol == 'Suilend':
-                # Suilend uses basis points, convert to decimal
-                fee_bps = get_rate_for_contract(df, contract, 'Borrow_fee_bps')
-                fee = fee_bps / 10000.0 if pd.notna(fee_bps) else None
-            elif protocol == 'AlphaFi':
-                # AlphaFi uses decimal
-                fee = get_rate_for_contract(df, contract, 'Borrow_fee')
-            else:  # Navi
-                fee = 0.0  # Navi doesn't provide fees, assume zero
-
+            df = protocol_data[protocol]['lend']  # Fees are in lend df
+            # All protocols now return 'Borrow_fee' in decimal format
+            fee = get_rate_for_contract(df, contract, 'Borrow_fee')
             borrow_fee_row[protocol] = fee
         borrow_fee_rows.append(borrow_fee_row)
 

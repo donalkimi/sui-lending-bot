@@ -8,6 +8,7 @@ with clearly separated base/reward APRs and USD liquidity metrics.
 import pandas as pd
 import requests
 from typing import Tuple
+from data.navi.navi_fees import get_navi_borrow_fee
 
 
 class NaviReader:
@@ -142,7 +143,7 @@ class NaviReader:
                 decimals = 0
             scale = 10 ** decimals if decimals > 0 else 1
 
-            # Supply / borrow amounts (raw units â†’ token amounts)
+            # Supply / borrow amounts (raw units Ã¢â€ â€™ token amounts)
             try:
                 total_supply_raw = float(pool.get("totalSupply", 0))
             except (TypeError, ValueError):
@@ -158,7 +159,7 @@ class NaviReader:
 
             total_supply = total_supply_raw / scale
             total_borrow = total_borrow_raw / scale
-            available_borrow = available_borrow_raw / scale
+            available_borrow = available_borrow_raw / 1e9  # API returns fixed 10^9 precision
 
             total_supply_usd = total_supply * price
             total_borrow_usd = total_borrow * price
@@ -166,7 +167,7 @@ class NaviReader:
 
             utilization = (total_borrow / total_supply) if total_supply > 0 else 0.0
 
-            # Supply APRs (percent in API â†’ decimals)
+            # Supply APRs (percent in API Ã¢â€ â€™ decimals)
             supply_info = pool.get("supplyIncentiveApyInfo", {}) or {}
             try:
                 supply_vault_apr_pct = float(supply_info.get("vaultApr", 0))
@@ -234,6 +235,7 @@ class NaviReader:
                     "Available_borrow": available_borrow,
                     "Available_borrow_usd": available_borrow_usd,
                     "Utilization": utilization,
+                    "Borrow_fee": get_navi_borrow_fee(token_symbol=token_symbol, token_contract=token_coin_type),
                     "Token_coin_type": token_coin_type,
                     "Reserve_id": reserve_id,
                     "Pool_id": pool_id,
@@ -248,6 +250,7 @@ class NaviReader:
                     "Reward_rate": borrow_reward_apr,
                     "Borrow_apy": borrow_total_apy,
                     "Price": price,
+                    "Borrow_fee": get_navi_borrow_fee(token_symbol=token_symbol, token_contract=token_coin_type),
                     "Token_coin_type": token_coin_type,
                 }
             )

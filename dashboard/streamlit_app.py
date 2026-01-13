@@ -489,7 +489,7 @@ def fetch_and_save_protocol_data(refresh_nonce: int):
         return None, str(e)
 
 
-def run_analysis(lend_rates, borrow_rates, collateral_ratios, prices, lend_rewards, borrow_rewards, available_borrow, liquidation_distance: float):
+def run_analysis(lend_rates, borrow_rates, collateral_ratios, prices, lend_rewards, borrow_rewards, available_borrow, borrow_fees, liquidation_distance: float):
     """Run strategy analysis (fast operation)."""
     try:
         from analysis.rate_analyzer import RateAnalyzer
@@ -502,6 +502,7 @@ def run_analysis(lend_rates, borrow_rates, collateral_ratios, prices, lend_rewar
             lend_rewards=lend_rewards,
             borrow_rewards=borrow_rewards,
             available_borrow=available_borrow,
+            borrow_fees=borrow_fees,
             liquidation_distance=liquidation_distance,
         )
         
@@ -542,18 +543,38 @@ def display_strategy_details(strategy_row):
     P2_A = strategy_row['P2_A']
     P2_B = strategy_row['P2_B']
     P3_B = strategy_row['P3_B']
-    
+
     # Token amounts
     T1_A = strategy_row['T1_A']
     T2_A = strategy_row['T2_A']
     T3_B = strategy_row['T3_B']
 
-    # Available borrow liquidity
-    available_borrow_2A = strategy_row.get('available_borrow_2A')
+    # Borrow fees and available liquidity
+    borrow_fee_2A = strategy_row.get('borrow_fee_2A')
+    borrow_fee_3B = strategy_row.get('borrow_fee_3B')
 
-    # Show available borrow metric if available
-    if available_borrow_2A is not None and not pd.isna(available_borrow_2A):
-        st.info(f"💵 **Available Borrow Liquidity ({token2} on {protocol_A}):** ${available_borrow_2A:,.2f}")
+    # Max deployable size
+    max_size = strategy_row.get('max_size')
+    if max_size is not None and not pd.isna(max_size):
+        st.success(f"📊 **Max Deployable Size:** ${max_size:,.2f}")
+
+    # Show individual liquidity constraints (detailed view)
+    available_borrow_2A = strategy_row.get('available_borrow_2A')
+    available_borrow_3B = strategy_row.get('available_borrow_3B')
+    B_A = strategy_row.get('B_A')
+    B_B = strategy_row.get('B_B')
+
+    liquidity_details = []
+    if available_borrow_2A is not None and not pd.isna(available_borrow_2A) and B_A is not None:
+        constraint_2A = available_borrow_2A / B_A if B_A > 0 else float('inf')
+        liquidity_details.append(f"• {token2} on {protocol_A}: ${available_borrow_2A:,.2f} available → max ${constraint_2A:,.2f}")
+
+    if available_borrow_3B is not None and not pd.isna(available_borrow_3B) and B_B is not None:
+        constraint_3B = available_borrow_3B / B_B if B_B > 0 else float('inf')
+        liquidity_details.append(f"• {token3} on {protocol_B}: ${available_borrow_3B:,.2f} available → max ${constraint_3B:,.2f}")
+
+    if liquidity_details:
+        st.info("💵 **Liquidity Constraints:**\n" + "\n".join(liquidity_details))
 
     # Build the table data
     table_data = [
@@ -563,9 +584,11 @@ def display_strategy_details(strategy_row):
             'Token': token1,
             'Action': 'Lend',
             'Rate': f"{lend_rate_1A:.2f}%",
-            'USD Value': f"${L_A * 100:.2f}",
-            'Token Amount': f"{(L_A * 100) / P1_A:.2f}",
-            'Price': f"${P1_A:.4f}"
+            'Weight': f"{L_A:.2f}",
+            'Token Amount': f"{L_A / P1_A:.2f}",
+            'Price': f"${P1_A:.4f}",
+            'Fee': '',
+            'Available': ''
         },
         # Row 2: Protocol A, token2, Borrow
         {
@@ -573,9 +596,11 @@ def display_strategy_details(strategy_row):
             'Token': token2,
             'Action': 'Borrow',
             'Rate': f"{borrow_rate_2A:.2f}%",
-            'USD Value': f"${B_A * 100:.2f}",
-            'Token Amount': f"{(B_A * 100) / P2_A:.2f}",
-            'Price': f"${P2_A:.4f}"
+            'Weight': f"{B_A:.2f}",
+            'Token Amount': f"{B_A / P2_A:.2f}",
+            'Price': f"${P2_A:.4f}",
+            'Fee': f"{borrow_fee_2A*100:.2f}%" if pd.notna(borrow_fee_2A) else 'N/A',
+            'Available': format_usd_abbreviated(available_borrow_2A) if pd.notna(available_borrow_2A) else 'N/A'
         },
         # Row 3: Protocol B, token2, Lend
         {
@@ -583,9 +608,11 @@ def display_strategy_details(strategy_row):
             'Token': token2,
             'Action': 'Lend',
             'Rate': f"{lend_rate_2B:.2f}%",
-            'USD Value': f"${((B_A * 100) / P2_A) * P2_B:.2f}",
-            'Token Amount': f"{(B_A * 100) / P2_A:.2f}",
-            'Price': f"${P2_B:.4f}"
+            'Weight': f"{L_B:.2f}",
+            'Token Amount': f"{L_B / P2_B:.2f}",
+            'Price': f"${P2_B:.4f}",
+            'Fee': '',
+            'Available': ''
         },
         # Row 4: Protocol B, token3, Borrow
         {
@@ -593,15 +620,17 @@ def display_strategy_details(strategy_row):
             'Token': token3,
             'Action': 'Borrow',
             'Rate': f"{borrow_rate_3B:.2f}%",
-            'USD Value': f"${B_B * 100:.2f}",
-            'Token Amount': f"{(B_B * 100) / P3_B:.2f}",
-            'Price': f"${P3_B:.4f}"
+            'Weight': f"{B_B:.2f}",
+            'Token Amount': f"{B_B / P3_B:.2f}",
+            'Price': f"${P3_B:.4f}",
+            'Fee': f"{borrow_fee_3B*100:.2f}%" if pd.notna(borrow_fee_3B) else 'N/A',
+            'Available': format_usd_abbreviated(available_borrow_3B) if pd.notna(available_borrow_3B) else 'N/A'
         }
     ]
     
     # Create DataFrame and display
     details_df = pd.DataFrame(table_data)
-    st.dataframe(details_df, use_container_width=True, hide_index=True)
+    st.dataframe(details_df, width='stretch', hide_index=True)
 
 
 def main():
@@ -611,17 +640,26 @@ def main():
     st.title("🚀 Sui Lending Bot")
     st.markdown("**Cross-Protocol Yield Optimizer**")
 
-    # Sidebar
+    # Sidebar - set wider width
+    st.markdown("""
+        <style>
+        [data-testid="stSidebar"] {
+            min-width: 300px;
+            max-width: 350px;
+        }
+        </style>
+    """, unsafe_allow_html=True)
+
     with st.sidebar:
         st.header("⚙️ Settings")
 
-        # Liquidation Distance - inline with label
-        col1, col2 = st.columns([4, 1])
+        # Liquidation Distance
+        col1, col2 = st.columns([30, 7])
         with col1:
-            st.markdown("**Liquidation Dist (%)**")
+            st.markdown("**Liquidation Distance (%)**")
         with col2:
             liq_dist_text = st.text_input(
-                label="Liq Dist",
+                label="Liquidation Distance (%)",
                 value=str(int(settings.DEFAULT_LIQUIDATION_DISTANCE * 100)),
                 label_visibility="collapsed",
                 key="liq_input"
@@ -638,21 +676,43 @@ def main():
             st.stop()
 
         liquidation_distance = liq_value / 100
-        
+
         # Clear all cached charts when liquidation distance changes
         if "last_liq_distance" not in st.session_state:
             st.session_state.last_liq_distance = liquidation_distance
-        
+
         if st.session_state.last_liq_distance != liquidation_distance:
             # Clear all chart cache
             keys_to_delete = [key for key in st.session_state.keys() if key.startswith('chart_tab')]
             for key in keys_to_delete:
                 del st.session_state[key]
-            
+
             # Update last known liquidation distance
             st.session_state.last_liq_distance = liquidation_distance
-            
+
             print(f"🗑️ Cleared {len(keys_to_delete)} cached charts due to liquidation distance change")
+
+        # Deployment USD
+        col1, col2 = st.columns([30, 15])
+        with col1:
+            st.markdown("**Deployment USD**")
+        with col2:
+            deployment_text = st.text_input(
+                label="Deployment USD",
+                value="10000",
+                label_visibility="collapsed",
+                key="deployment_input"
+            )
+
+        # Validate input
+        try:
+            deployment_usd = float(deployment_text)
+            if deployment_usd < 0:
+                st.error("Deployment USD must be non-negative")
+                st.stop()
+        except ValueError:
+            st.error("Deployment USD must be a number")
+            st.stop()
 
         st.markdown("---")
         
@@ -685,7 +745,7 @@ def main():
         if "refresh_nonce" not in st.session_state:
             st.session_state.refresh_nonce = 0
 
-        if st.button("🔄 Refresh Data", use_container_width=True):
+        if st.button("🔄 Refresh Data", width='stretch'):
             # Bust only the cached data load by changing the cache key (refresh_nonce)
             st.session_state.refresh_nonce += 1
             st.rerun()
@@ -716,7 +776,7 @@ def main():
 
     # Run analysis (fast - re-runs when liquidation_distance changes)
     protocol_A, protocol_B, all_results, analysis_error = run_analysis(
-        lend_rates, borrow_rates, collateral_ratios, prices, lend_rewards, borrow_rewards, available_borrow,
+        lend_rates, borrow_rates, collateral_ratios, prices, lend_rewards, borrow_rewards, available_borrow, borrow_fees,
         liquidation_distance
     )
     
@@ -732,13 +792,17 @@ def main():
     if st.session_state.refresh_nonce != st.session_state.last_notified_nonce:
         from alerts.slack_notifier import SlackNotifier
         notifier = SlackNotifier()
-        
+
         if all_results is None or all_results.empty:
             notifier.alert_error("No valid strategies found in dashboard refresh.")
         else:
-            best = all_results.iloc[0].to_dict()
-            notifier.alert_high_apr(best)
-        
+            notifier.alert_top_strategies(
+                all_results=all_results,
+                liquidation_distance=liquidation_distance,
+                deployment_usd=100.0,
+                timestamp=datetime.now()
+            )
+
         st.session_state.last_notified_nonce = st.session_state.refresh_nonce
     
     # Apply filters ONCE before displaying in tabs
@@ -756,13 +820,42 @@ def main():
             (filtered_results['token2'].isin(STABLECOIN_SYMBOLS)) &
             (filtered_results['token3'].isin(STABLECOIN_SYMBOLS))
         ]
-    
+
+    # Filter by deployment size (remove strategies with insufficient liquidity)
+    if deployment_usd > 0:
+        filtered_results = filtered_results[
+            (filtered_results['max_size'].notna()) &
+            (filtered_results['max_size'] >= deployment_usd)
+        ]
+
+    # Create zero_liquidity_results for Tab 4
+    zero_liquidity_results = all_results.copy()
+
+    # Apply the same toggle filters
+    if force_usdc_start:
+        zero_liquidity_results = zero_liquidity_results[zero_liquidity_results['token1'] == 'USDC']
+    if force_token3_equals_token1:
+        zero_liquidity_results = zero_liquidity_results[zero_liquidity_results['token3'] == zero_liquidity_results['token1']]
+    if stablecoin_only:
+        zero_liquidity_results = zero_liquidity_results[
+            (zero_liquidity_results['token1'].isin(STABLECOIN_SYMBOLS)) &
+            (zero_liquidity_results['token2'].isin(STABLECOIN_SYMBOLS)) &
+            (zero_liquidity_results['token3'].isin(STABLECOIN_SYMBOLS))
+        ]
+
+    # Keep only strategies with NaN, 0, or below deployment threshold
+    zero_liquidity_results = zero_liquidity_results[
+        (zero_liquidity_results['max_size'].isna()) |
+        (zero_liquidity_results['max_size'] == 0) |
+        (zero_liquidity_results['max_size'] < deployment_usd)
+    ]
 
     # Tabs
-    tab1, tab2, tab3 = st.tabs([
+    tab1, tab2, tab3, tab4 = st.tabs([
         "🏆 Best Opportunities",
         "📊 All Strategies",
-        "📈 Rate Tables"
+        "📈 Rate Tables",
+        "⚠️ 0 Liquidity"
     ])
 
     # ---------------- Tab 1 ----------------
@@ -778,10 +871,10 @@ def main():
             col3.metric("Protocol A", protocol_A)
             col4.metric("Protocol B", protocol_B)
 
-            # Show available borrow if available
-            available_borrow_2A = best.get('available_borrow_2A')
-            if available_borrow_2A is not None and not pd.isna(available_borrow_2A):
-                col5.metric(f"{best['token2']} Liquidity", f"${available_borrow_2A:,.2f}")
+            # Show max deployable size if available
+            max_size = best.get('max_size')
+            if max_size is not None and not pd.isna(max_size):
+                col5.metric("Max Size", f"${max_size:,.2f}")
 
             st.subheader("Strategy Details")
             st.write(f"**Token 1 (Start):** {best['token1']}")
@@ -800,14 +893,19 @@ def main():
                 # Expander should be open if chart data exists for this strategy
                 is_expanded = chart_key in st.session_state
 
-                # Build expander title with available borrow
-                available_borrow_2A = row.get('available_borrow_2A')
-                avail_borrow_text = f" | {row['protocol_A']}/{row['token2']} Available ${available_borrow_2A:,.2f}"
+                # Build expander title with max size and APRs
+                max_size = row.get('max_size')
+                if max_size is not None and not pd.isna(max_size):
+                    max_size_text = f" | Max Size ${max_size:,.2f}"
+                else:
+                    max_size_text = ""
+
+                unlevered_apr = row.get('unlevered_apr', row['net_apr'])
 
                 with st.expander(
                     f"▶ {row['token1']} → {row['token2']} → {row['token3']} | "
-                    f"{row['protocol_A']} ↔ {row['protocol_B']} | "
-                    f"{row['net_apr']:.2f}% APR{avail_borrow_text}",
+                    f"{row['protocol_A']} ↔ {row['protocol_B']}{max_size_text} | "
+                    f"{unlevered_apr:.2f}%->{row['net_apr']:.2f}% (unlev->lev)",
                     expanded=is_expanded
                 ):
                     # Button to load historical chart
@@ -853,7 +951,7 @@ def main():
                                 L_B=chart_data['L_B'],
                                 B_B=chart_data['B_B']
                             )
-                            st.plotly_chart(fig, use_container_width=True)
+                            st.plotly_chart(fig, width='stretch')
                             
                             # Summary metrics
                             col1, col2, col3, col4 = st.columns(4)
@@ -919,14 +1017,19 @@ def main():
                 # Expander should be open if chart data exists for this strategy
                 is_expanded = chart_key in st.session_state
 
-                # Build expander title with available borrow
-                available_borrow_2A = row.get('available_borrow_2A')
-                avail_borrow_text = f" | {row['protocol_A']}/{row['token2']} Available ${available_borrow_2A:,.2f}"
+                # Build expander title with max size and APRs
+                max_size = row.get('max_size')
+                if max_size is not None and not pd.isna(max_size):
+                    max_size_text = f" | Max Size ${max_size:,.2f}"
+                else:
+                    max_size_text = ""
+
+                unlevered_apr = row.get('unlevered_apr', row['net_apr'])
 
                 with st.expander(
                     f"▶ {row['token1']} → {row['token2']} → {row['token3']} | "
-                    f"{row['protocol_A']} ↔ {row['protocol_B']} | "
-                    f"{row['net_apr']:.2f}% APR{avail_borrow_text}",
+                    f"{row['protocol_A']} ↔ {row['protocol_B']}{max_size_text} | "
+                    f"{unlevered_apr:.2f}%->{row['net_apr']:.2f}% (unlev->lev)",
                     expanded=is_expanded
                 ):
                     # Button to load historical chart
@@ -972,7 +1075,7 @@ def main():
                                 L_B=chart_data['L_B'],
                                 B_B=chart_data['B_B']
                             )
-                            st.plotly_chart(fig, use_container_width=True)
+                            st.plotly_chart(fig, width='stretch')
                             
                             # Summary metrics
                             col1, col2, col3, col4 = st.columns(4)
@@ -998,19 +1101,19 @@ def main():
         
         col1.subheader("💵 Lending Rates")
         lend_display = lend_rates.drop(columns=['Contract']) if 'Contract' in lend_rates.columns else lend_rates
-        col1.dataframe(lend_display, use_container_width=True, hide_index=True)
+        col1.dataframe(lend_display, width='stretch', hide_index=True)
 
         col2.subheader("💸 Borrow Rates")
         borrow_display = borrow_rates.drop(columns=['Contract']) if 'Contract' in borrow_rates.columns else borrow_rates
-        col2.dataframe(borrow_display, use_container_width=True, hide_index=True)
+        col2.dataframe(borrow_display, width='stretch', hide_index=True)
 
         st.subheader("🔒 Collateral Ratios")
         collateral_display = collateral_ratios.drop(columns=['Contract']) if 'Contract' in collateral_ratios.columns else collateral_ratios
-        st.dataframe(collateral_display, use_container_width=True, hide_index=True)
+        st.dataframe(collateral_display, width='stretch', hide_index=True)
         
         st.subheader("💰 Prices")
         prices_display = prices.drop(columns=['Contract']) if 'Contract' in prices.columns else prices
-        st.dataframe(prices_display, use_container_width=True, hide_index=True)
+        st.dataframe(prices_display, width='stretch', hide_index=True)
 
         st.subheader("💵 Available Borrow Liquidity")
         # Format available_borrow values as abbreviated USD
@@ -1023,7 +1126,7 @@ def main():
             if col != 'Token':
                 available_borrow_display[col] = available_borrow_display[col].apply(format_usd_abbreviated)
 
-        st.dataframe(available_borrow_display, use_container_width=True, hide_index=True)
+        st.dataframe(available_borrow_display, width='stretch', hide_index=True)
 
         st.subheader("💳 Borrow Fees")
         # Format fees as percentages
@@ -1038,7 +1141,36 @@ def main():
                     lambda x: f"{x*100:.2f}%" if pd.notna(x) and x > 0 else ("0.00%" if x == 0 else "N/A")
                 )
 
-        st.dataframe(borrow_fees_display, use_container_width=True, hide_index=True)
+        st.dataframe(borrow_fees_display, width='stretch', hide_index=True)
+
+    # ---------------- Tab 4 ----------------
+    with tab4:
+        st.header("⚠️ Zero Liquidity Strategies")
+
+        if not zero_liquidity_results.empty:
+            st.info(f"⚠️ These strategies have insufficient liquidity (max size < ${deployment_usd:,.0f}) or missing liquidity data")
+
+            st.metric("Strategies Found", f"{len(zero_liquidity_results)}")
+
+            # Display with expanders (no historical charts)
+            for idx, row in zero_liquidity_results.iterrows():
+                # Build expander title with max size
+                max_size = row.get('max_size')
+                if max_size is not None and not pd.isna(max_size):
+                    max_size_text = f" | Max Size ${max_size:,.2f}"
+                else:
+                    max_size_text = " | No Liquidity Data"
+
+                with st.expander(
+                    f"▶ {row['token1']} → {row['token2']} → {row['token3']} | "
+                    f"{row['protocol_A']} ↔ {row['protocol_B']} | "
+                    f"{row['net_apr']:.2f}% APR{max_size_text}",
+                    expanded=False
+                ):
+                    # Show strategy details table
+                    display_strategy_details(row)
+        else:
+            st.success("✅ All strategies have sufficient liquidity for the current deployment size!")
 
 
 if __name__ == "__main__":

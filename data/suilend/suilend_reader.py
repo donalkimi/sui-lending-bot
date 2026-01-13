@@ -60,9 +60,10 @@ class SuilendReader:
             collateralization_factor = self._parse_percent(r.get("collateralization_factor"))
             liquidation_threshold = self._parse_percent(r.get("liquidation_threshold"))
             
-            # Parse fee data (in basis points)
+            # Parse fee data (in basis points) and convert to decimal
             borrow_fee_bps = self._to_float(r.get("borrow_fee_bps"))
             spread_fee_bps = self._to_float(r.get("spread_fee_bps"))
+            borrow_fee = borrow_fee_bps / 10000.0 if borrow_fee_bps is not None else None
 
             # Lend data
             lend_rows.append({
@@ -74,6 +75,7 @@ class SuilendReader:
                 "Total_supply": total_supplied,
                 "Utilization": utilization,
                 "Available_borrow_usd": available_amount_usd,
+                "Borrow_fee": borrow_fee,
                 "Token_coin_type": coin_type,
             })
 
@@ -86,7 +88,7 @@ class SuilendReader:
                 "Price": price,
                 "Total_borrow": total_borrowed,
                 "Utilization": utilization,
-                "Borrow_fee_bps": borrow_fee_bps,
+                "Borrow_fee": borrow_fee,
                 "Spread_fee_bps": spread_fee_bps,
                 "Token_coin_type": coin_type,
             })

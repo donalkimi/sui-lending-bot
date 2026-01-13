@@ -110,9 +110,54 @@ class PositionCalculator:
         
         # Net APR
         net_apr = (earn_A + earn_B - cost_A - cost_B) * 100  # Convert to percentage
-        
+
         return net_apr
-    
+
+    def calculate_unlevered_apr(
+        self,
+        collateral_ratio_A: float,
+        collateral_ratio_B: float,
+        lend_rate_token1_A: float,
+        borrow_rate_token2_A: float,
+        lend_rate_token2_B: float
+    ) -> float:
+        """
+        Calculate the unlevered APR without the recursive loop
+
+        Strategy (unlevered):
+        1. Lend 1.0 of token1 in Protocol A
+        2. Borrow r_A of token2 from Protocol A (with liq distance)
+        3. Lend r_A of token2 in Protocol B
+        4. STOP (no loop back)
+
+        Args:
+            collateral_ratio_A: Max LTV for Protocol A
+            collateral_ratio_B: Max LTV for Protocol B
+            lend_rate_token1_A: Lending rate for token1 in Protocol A (decimal)
+            borrow_rate_token2_A: Borrow rate for token2 from Protocol A (decimal)
+            lend_rate_token2_B: Lending rate for token2 in Protocol B (decimal)
+
+        Returns:
+            Unlevered APR as percentage
+        """
+        # Adjusted collateral ratios with safety buffer
+        r_A = collateral_ratio_A / (1 + self.liq_dist)
+
+        # Position sizes (no loop)
+        L_A = 1.0  # Lend 1.0 token1 in Protocol A
+        B_A = L_A * r_A  # Borrow r_A * token2 from Protocol A
+        L_B = B_A  # Lend all borrowed token2 in Protocol B
+
+        # Earnings and costs
+        earn_A = L_A * lend_rate_token1_A
+        earn_B = L_B * lend_rate_token2_B
+        cost_A = B_A * borrow_rate_token2_A
+
+        # Unlevered APR (no borrowing cost from Protocol B)
+        unlevered_apr = (earn_A + earn_B - cost_A) * 100  # Convert to percentage
+
+        return unlevered_apr
+
     def analyze_strategy(
         self,
         token1: str,
@@ -126,11 +171,14 @@ class PositionCalculator:
         borrow_rate_token3_B: float,
         collateral_ratio_token1_A: float,
         collateral_ratio_token2_B: float,
-        price_token1_A: float,      # NEW
-        price_token2_A: float,      # NEW
-        price_token2_B: float,      # NEW
-        price_token3_B: float,      # NEW
-        available_borrow_2A: float = None  # NEW
+        price_token1_A: float,
+        price_token2_A: float,
+        price_token2_B: float,
+        price_token3_B: float,
+        available_borrow_2A: float = None,
+        available_borrow_3B: float = None,
+        borrow_fee_2A: float = None,  # NEW
+        borrow_fee_3B: float = None   # NEW
     ) -> Dict:
         """
         Complete analysis of a strategy combination
@@ -161,8 +209,28 @@ class PositionCalculator:
                 collateral_ratio_token1_A,
                 collateral_ratio_token2_B
             )
-            
-            # Calculate net APR
+
+            # Calculate max deployable size based on liquidity constraints
+            max_size = None
+            if available_borrow_2A is not None and available_borrow_3B is not None:
+                B_A = positions['B_A']  # Borrow multiplier for token2 on protocol A
+                B_B = positions['B_B']  # Borrow multiplier for token3 on protocol B
+
+                # Calculate max size for each constraint
+                if B_A > 0:
+                    max_size_constraint_2A = available_borrow_2A / B_A
+                else:
+                    max_size_constraint_2A = float('inf')
+
+                if B_B > 0:
+                    max_size_constraint_3B = available_borrow_3B / B_B
+                else:
+                    max_size_constraint_3B = float('inf')
+
+                # Take the minimum (most restrictive constraint)
+                max_size = min(max_size_constraint_2A, max_size_constraint_3B)
+
+            # Calculate net APR (levered)
             # Note: token3 is converted 1:1 to token1, so we use token3's borrow rate
             net_apr = self.calculate_net_apr(
                 positions,
@@ -171,6 +239,16 @@ class PositionCalculator:
                 lend_rate_token2_B,
                 borrow_rate_token3_B  # Changed: use token3 borrow rate
             )
+
+            # Calculate unlevered APR (without the loop)
+            unlevered_apr = self.calculate_unlevered_apr(
+                collateral_ratio_token1_A,
+                collateral_ratio_token2_B,
+                lend_rate_token1_A,
+                borrow_rate_token2_A,
+                lend_rate_token2_B
+            )
+
             # Calculate token amounts per $100 notional
             T1_A = (positions['L_A'] / price_token1_A) * 100
             T2_A = (positions['B_A'] / price_token2_A) * 100
@@ -183,6 +261,7 @@ class PositionCalculator:
                 'protocol_A': protocol_A,
                 'protocol_B': protocol_B,
                 'net_apr': net_apr,
+                'unlevered_apr': unlevered_apr,  # NEW: APR without the loop
                 'liquidation_distance': positions['liquidation_distance'] * 100,  # Convert to percentage
                 'L_A': positions['L_A'],
                 'B_A': positions['B_A'],
@@ -200,7 +279,11 @@ class PositionCalculator:
                 'T2_A': T2_A,
                 'T2_B': T2_B,
                 'T3_B': T3_B,
-                'available_borrow_2A': available_borrow_2A,  # NEW
+                'available_borrow_2A': available_borrow_2A,
+                'available_borrow_3B': available_borrow_3B,
+                'max_size': max_size,
+                'borrow_fee_2A': borrow_fee_2A,  # NEW
+                'borrow_fee_3B': borrow_fee_3B,  # NEW
                 'valid': True,
                 'error': None
             }

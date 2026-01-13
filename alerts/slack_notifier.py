@@ -26,6 +26,41 @@ def format_usd_abbreviated(value: float) -> str:
         return f"${value:.0f}"
 
 
+def format_max_size_millions(value: float) -> str:
+    """Format max size as millions with 2 decimal places (e.g., $1.80M)"""
+    if value is None or (isinstance(value, float) and np.isnan(value)):
+        return "N/A"
+    return f"${value/1_000_000:.2f}M"
+
+
+def format_strategy_summary_line(strategy: Dict, liq_dist: float) -> str:
+    """
+    Format a single strategy as a summary line
+
+    Format: TOKEN1 → TOKEN2 → TOKEN3 | PROTOCOL_A ↔ PROTOCOL_B | Max Size $X.XXM | XX.XX%->XX.XX% (unlev->lev)
+
+    Args:
+        strategy: Dictionary with strategy details (can be DataFrame row dict)
+        liq_dist: Liquidation distance as decimal (e.g., 0.20 for 20%)
+
+    Returns:
+        Formatted summary line string
+    """
+    token1 = strategy['token1']
+    token2 = strategy['token2']
+    token3 = strategy['token3']
+    protocol_A = strategy['protocol_A']
+    protocol_B = strategy['protocol_B']
+    net_apr = strategy['net_apr']
+    unlevered_apr = strategy.get('unlevered_apr', net_apr)  # Fallback to net_apr if not available
+    max_size = strategy.get('max_size')
+
+    # Format max size
+    max_size_str = format_max_size_millions(max_size)
+
+    return f"{token1} → {token2} → {token3} | {protocol_A} ↔ {protocol_B} | Max Size {max_size_str} | {unlevered_apr:.2f}%->{net_apr:.2f}% (unlev->lev)"
+
+
 class SlackNotifier:
     """Send alerts to Slack"""
     
@@ -178,7 +213,99 @@ class SlackNotifier:
         ]
         
         return self.send_message(message, blocks, variables)
-    
+
+    def alert_top_strategies(
+        self,
+        all_results,  # pd.DataFrame
+        liquidation_distance: float = 0.20,
+        deployment_usd: float = 100.0,
+        timestamp: datetime = None
+    ) -> bool:
+        """
+        Alert with top 3 strategies in two configurations
+
+        Args:
+            all_results: DataFrame of all analyzed strategies
+            liquidation_distance: Liq dist % for display (default 20%)
+            deployment_usd: Min deployment size filter (default 100)
+            timestamp: Timestamp for the data snapshot (default: now)
+
+        Returns:
+            True if successful
+        """
+        import pandas as pd
+
+        if timestamp is None:
+            timestamp = datetime.now()
+
+        # Filter Set 1: Unrestricted (only deployment size filter)
+        filtered_set1 = all_results[
+            (all_results['max_size'].notna()) &
+            (all_results['max_size'] >= deployment_usd)
+        ].head(3)
+
+        # Filter Set 2: USDC-Only (token1=USDC, token3=token1, deployment filter)
+        filtered_set2 = all_results[
+            (all_results['token1'] == 'USDC') &
+            (all_results['token3'] == all_results['token1']) &
+            (all_results['max_size'].notna()) &
+            (all_results['max_size'] >= deployment_usd)
+        ].head(3)
+
+        # Build formatted lines for Set 1
+        set1_lines = []
+        for _, row in filtered_set1.iterrows():
+            line = format_strategy_summary_line(row.to_dict(), liquidation_distance)
+            set1_lines.append(line)
+
+        # Build formatted lines for Set 2
+        set2_lines = []
+        for _, row in filtered_set2.iterrows():
+            line = format_strategy_summary_line(row.to_dict(), liquidation_distance)
+            set2_lines.append(line)
+
+        # Prepare variables for Slack Workflow
+        liq_dist_pct = int(liquidation_distance * 100)
+        timestamp_str = timestamp.strftime('%Y-%m-%d %H:%M:%S UTC')
+        variables = {
+            "liq_dist": str(liq_dist_pct),
+            "timestamp": timestamp_str,
+            "set1_count": str(len(set1_lines)),
+            "set1_line1": set1_lines[0] if len(set1_lines) > 0 else "",
+            "set1_line2": set1_lines[1] if len(set1_lines) > 1 else "",
+            "set1_line3": set1_lines[2] if len(set1_lines) > 2 else "",
+            "set2_count": str(len(set2_lines)),
+            "set2_line1": set2_lines[0] if len(set2_lines) > 0 else "",
+            "set2_line2": set2_lines[1] if len(set2_lines) > 1 else "",
+            "set2_line3": set2_lines[2] if len(set2_lines) > 2 else "",
+        }
+
+        # Build fallback message for classic webhooks
+        message_lines = [
+            f"🚀 Top Lending Strategies",
+            f"📅 {timestamp_str}",
+            ""
+        ]
+
+        message_lines.append("📊 All Strategies (Top 3):")
+        if set1_lines:
+            for i, line in enumerate(set1_lines, 1):
+                message_lines.append(f"{i}. {line}")
+        else:
+            message_lines.append("No strategies found")
+
+        message_lines.append("")
+        message_lines.append("💰 USDC-Only Strategies (Top 3):")
+        if set2_lines:
+            for i, line in enumerate(set2_lines, 1):
+                message_lines.append(f"{i}. {line}")
+        else:
+            message_lines.append("No strategies found")
+
+        message = "\n".join(message_lines)
+
+        return self.send_message(message, blocks=None, variables=variables)
+
     def alert_rebalance_opportunity(
         self, 
         current_strategy: Dict,

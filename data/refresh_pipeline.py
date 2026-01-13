@@ -111,6 +111,7 @@ def refresh_pipeline(
             lend_rewards=lend_rewards,
             borrow_rewards=borrow_rewards,
             available_borrow=available_borrow,
+            borrow_fees=borrow_fees,
             liquidation_distance=liquidation_distance,
         )
 
@@ -120,8 +121,12 @@ def refresh_pipeline(
         if all_results is None or all_results.empty:
             notifier.alert_error("No valid strategies found in this refresh run.")
         else:
-            best = all_results.iloc[0].to_dict()
-            notifier.alert_high_apr(best)
+            notifier.alert_top_strategies(
+                all_results=all_results,
+                liquidation_distance=liquidation_distance,
+                deployment_usd=100.0,
+                timestamp=ts
+            )
 
     except Exception as e:
         error_msg = f"Error during analysis: {str(e)}"
