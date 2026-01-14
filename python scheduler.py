@@ -18,16 +18,17 @@ def main():
     
     # Run immediately on start
     run_refresh()
-    
-    # Then run every CHECK_INTERVAL_MINUTES
+
+    # Then run at exact 15-minute intervals (:00, :15, :30, :45)
     scheduler.add_job(
         run_refresh,
-        'interval',
-        minutes=settings.CHECK_INTERVAL_MINUTES,
+        'cron',
+        minute='0,15,30,45',  # Run at these minutes every hour
+        misfire_grace_time=None,  # Don't run missed jobs (skip if overlapping)
         id='refresh_job'
     )
-    
-    print(f"\n🚀 Scheduler started - running every {settings.CHECK_INTERVAL_MINUTES} minutes")
+
+    print(f"\n🚀 Scheduler started - running at :00, :15, :30, :45 of every hour")
     print("   Press Ctrl+C to stop\n")
     
     try:

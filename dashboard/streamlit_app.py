@@ -9,6 +9,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
+from typing import Tuple, Optional, Union, Any, Dict
 import sys
 import os
 
@@ -31,19 +32,19 @@ def format_usd_abbreviated(value: float) -> str:
         return f"${value:.0f}"
 
 
-def get_apr_value(row, use_unlevered: bool) -> float:
+def get_apr_value(row: Union[pd.Series, Dict[str, Any]], use_unlevered: bool) -> float:
     """Get the appropriate Net APR value based on leverage toggle"""
     if use_unlevered:
-        return row.get('unlevered_apr', 0)
+        return float(row.get('unlevered_apr', 0))
     else:
-        return row.get('apr_net', row.get('net_apr', 0))  # Prefer apr_net, fallback to base
+        return float(row.get('apr_net', row.get('net_apr', 0)))  # Prefer apr_net, fallback to base
 
 
 # ============================================================================
 # HISTORICAL CHART FUNCTIONS
 # ============================================================================
 
-def get_db_connection():
+def get_db_connection() -> Optional[Any]:
     """
     Connect to SQLite or PostgreSQL based on settings
     
@@ -66,7 +67,7 @@ def get_db_connection():
         return sqlite3.connect(db_path)
 
 
-def get_token_contract(conn, token_symbol: str):
+def get_token_contract(conn: Any, token_symbol: str) -> Optional[str]:
     """
     Look up contract address for a token symbol
     
@@ -97,8 +98,8 @@ def get_token_contract(conn, token_symbol: str):
         return None
 
 
-def fetch_historical_rates(conn, token1_contract: str, token2_contract: str, token3_contract: str,
-                          protocol_A: str, protocol_B: str, days_back: int = 30):
+def fetch_historical_rates(conn: Any, token1_contract: str, token2_contract: str, token3_contract: str,
+                          protocol_A: str, protocol_B: str, days_back: int = 30) -> pd.DataFrame:
     """
     Fetch all 4 required rates + token2 price for each timestamp
     
@@ -189,7 +190,7 @@ def fetch_historical_rates(conn, token1_contract: str, token2_contract: str, tok
 def calculate_net_apr_history(raw_df: pd.DataFrame, token1_contract: str, token2_contract: str,
                               token3_contract: str, protocol_A: str, protocol_B: str,
                               L_A: float, B_A: float, L_B: float, B_B: float,
-                              borrow_fee_2A: float = 0.0, borrow_fee_3B: float = 0.0):
+                              borrow_fee_2A: float = 0.0, borrow_fee_3B: float = 0.0) -> pd.DataFrame:
     """
     Calculate net APR for each timestamp using static weightings and fees
 
@@ -210,16 +211,16 @@ def calculate_net_apr_history(raw_df: pd.DataFrame, token1_contract: str, token2
     results = []
 
     for timestamp, group in raw_df.groupby('timestamp'):
-        lend_1A: float | None = None
-        borrow_2A: float | None = None
-        lend_2B: float | None = None
-        borrow_3B: float | None = None
-        token2_price: float | None = None
+        lend_1A = None
+        borrow_2A = None
+        lend_2B = None
+        borrow_3B = None
+        token2_price = None
 
         for _, row in group.iterrows():
             contract = row['token_contract']
             protocol = row['protocol']
-            
+
             if contract == token1_contract and protocol == protocol_A:
                 lend_1A = row['lend_total_apr']
             elif contract == token2_contract and protocol == protocol_A:
@@ -229,16 +230,10 @@ def calculate_net_apr_history(raw_df: pd.DataFrame, token1_contract: str, token2
                 lend_2B = row['lend_total_apr']
             elif contract == token3_contract and protocol == protocol_B:
                 borrow_3B = row['borrow_total_apr']
-        
-        if None in [lend_1A, borrow_2A, lend_2B, borrow_3B, token2_price]:
-            continue
 
-        # Type narrowing: all values are guaranteed non-None here
-        assert lend_1A is not None
-        assert borrow_2A is not None
-        assert lend_2B is not None
-        assert borrow_3B is not None
-        assert token2_price is not None
+        # Skip if any required values are missing
+        if lend_1A is None or borrow_2A is None or lend_2B is None or borrow_3B is None or token2_price is None:
+            continue
 
         earn_A = L_A * lend_1A
         earn_B = L_B * lend_2B
@@ -263,7 +258,7 @@ def calculate_net_apr_history(raw_df: pd.DataFrame, token1_contract: str, token2
 
 def create_strategy_history_chart(df: pd.DataFrame, token1: str, token2: str, token3: str,
                                   protocol_A: str, protocol_B: str, liq_dist: float,
-                                  L_A: float, B_A: float, L_B: float, B_B: float):
+                                  L_A: float, B_A: float, L_B: float, B_B: float) -> go.Figure:
     """
     Create Plotly chart with dual axes (price + APR)
     
@@ -372,7 +367,7 @@ def create_strategy_history_chart(df: pd.DataFrame, token1: str, token2: str, to
     return fig
 
 
-def get_strategy_history(strategy_row: dict, liquidation_distance: float, days_back: int = 30):
+def get_strategy_history(strategy_row: Dict[str, Any], liquidation_distance: float = 0.15, days_back: int = 30) -> Tuple[Optional[pd.DataFrame], Optional[float], Optional[float], Optional[float], Optional[float]]:
     """
     Main orchestration function to get historical chart data for a strategy
     
@@ -401,8 +396,8 @@ def get_strategy_history(strategy_row: dict, liquidation_distance: float, days_b
         token1_contract = get_token_contract(conn, token1)
         token2_contract = get_token_contract(conn, token2)
         token3_contract = get_token_contract(conn, token3)
-        
-        if None in [token1_contract, token2_contract, token3_contract]:
+
+        if token1_contract is None or token2_contract is None or token3_contract is None:
             st.warning("Could not find token contracts in database")
             return None, None, None, None, None
         
@@ -482,19 +477,19 @@ def fetch_and_save_protocol_data(refresh_nonce: int):
         from data.protocol_merger import merge_protocol_data
         from data.rate_tracker import RateTracker
         from datetime import datetime
-        
+
         # Fetch fresh data from APIs
         lend_rates, borrow_rates, collateral_ratios, prices, lend_rewards, borrow_rewards, available_borrow, borrow_fees = merge_protocol_data(
             stablecoin_contracts=STABLECOIN_CONTRACTS
         )
-        
+
         # Save to database immediately
         tracker = RateTracker(
             use_cloud=settings.USE_CLOUD_DB,
             db_path=settings.SQLITE_PATH,
             connection_url=settings.SUPABASE_URL,
         )
-        
+
         timestamp = datetime.now()
         tracker.save_snapshot(
             timestamp=timestamp,
@@ -505,20 +500,23 @@ def fetch_and_save_protocol_data(refresh_nonce: int):
             lend_rewards=lend_rewards,
             borrow_rewards=borrow_rewards,
         )
-        
+
         # Update token registry
         tokens_df = lend_rates[['Token', 'Contract']].copy()
         tokens_df.rename(columns={'Token': 'symbol', 'Contract': 'token_contract'}, inplace=True)
         tracker.upsert_token_registry(tokens_df=tokens_df, timestamp=timestamp)
-        
+
         print(f"✅ Dashboard: Saved snapshot to database at {timestamp.strftime('%Y-%m-%d %H:%M:%S')}")
 
-        return (lend_rates, borrow_rates, collateral_ratios, prices, lend_rewards, borrow_rewards, available_borrow, borrow_fees), None
+        return (lend_rates, borrow_rates, collateral_ratios, prices, lend_rewards, borrow_rewards, available_borrow, borrow_fees, timestamp), None
     except Exception as e:
         return None, str(e)
 
 
-def run_analysis(lend_rates, borrow_rates, collateral_ratios, prices, lend_rewards, borrow_rewards, available_borrow, borrow_fees, liquidation_distance: float):
+def run_analysis(lend_rates: pd.DataFrame, borrow_rates: pd.DataFrame, collateral_ratios: pd.DataFrame,
+                 prices: pd.DataFrame, lend_rewards: pd.DataFrame, borrow_rewards: pd.DataFrame,
+                 available_borrow: pd.DataFrame, borrow_fees: pd.DataFrame,
+                 liquidation_distance: float) -> Tuple[Optional[str], Optional[str], pd.DataFrame, Optional[str]]:
     """Run strategy analysis (fast operation)."""
     try:
         from analysis.rate_analyzer import RateAnalyzer
@@ -541,7 +539,7 @@ def run_analysis(lend_rates, borrow_rates, collateral_ratios, prices, lend_rewar
         return None, None, pd.DataFrame(), str(e)
 
 
-def display_apr_table(strategy_row):
+def display_apr_table(strategy_row: Union[pd.Series, Dict[str, Any]]) -> Tuple[str, Optional[str]]:
     """
     Display compact APR comparison table with both levered and unlevered strategies
     Returns warnings/info to be displayed later
@@ -596,7 +594,7 @@ def display_apr_table(strategy_row):
                 numeric_val = float(val.replace('%', ''))
                 if numeric_val < 0:
                     return 'color: red; font-weight: bold'
-            except:
+            except (ValueError, TypeError):
                 pass
         return ''
 
@@ -618,7 +616,7 @@ def display_apr_table(strategy_row):
     return fee_caption, warning_message
 
 
-def display_strategy_details(strategy_row, use_unlevered: bool = False):
+def display_strategy_details(strategy_row: Union[pd.Series, Dict[str, Any]], use_unlevered: bool = False) -> Tuple[Optional[str], Optional[str]]:
     """
     Display expanded strategy details when row is clicked
     Returns liquidity info to be displayed at the end
@@ -661,8 +659,8 @@ def display_strategy_details(strategy_row, use_unlevered: bool = False):
     T3_B = strategy_row['T3_B']
 
     # Borrow fees and available liquidity (already extracted above but kept for compatibility)
-    borrow_fee_2A = strategy_row.get('borrow_fee_2A')
-    borrow_fee_3B = strategy_row.get('borrow_fee_3B')
+    borrow_fee_2A = strategy_row.get('borrow_fee_2A', 0.0)
+    borrow_fee_3B = strategy_row.get('borrow_fee_3B', 0.0)
 
     # Prepare max deployable size message
     max_size = strategy_row.get('max_size')
@@ -675,11 +673,11 @@ def display_strategy_details(strategy_row, use_unlevered: bool = False):
     available_borrow_3B = strategy_row.get('available_borrow_3B')
 
     liquidity_details = []
-    if available_borrow_2A is not None and not pd.isna(available_borrow_2A) and B_A is not None:
+    if available_borrow_2A is not None and not pd.isna(available_borrow_2A):
         constraint_2A = available_borrow_2A / B_A if B_A > 0 else float('inf')
         liquidity_details.append(f"• {token2} on {protocol_A}: ${available_borrow_2A:,.2f} available → max ${constraint_2A:,.2f}")
 
-    if available_borrow_3B is not None and not pd.isna(available_borrow_3B) and B_B is not None:
+    if available_borrow_3B is not None and not pd.isna(available_borrow_3B):
         constraint_3B = available_borrow_3B / B_B if B_B > 0 else float('inf')
         liquidity_details.append(f"• {token3} on {protocol_B}: ${available_borrow_3B:,.2f} available → max ${constraint_3B:,.2f}")
 
@@ -766,6 +764,10 @@ def main():
     """, unsafe_allow_html=True)
 
     with st.sidebar:
+        # Placeholder for database snapshot timestamp (will be populated after data load)
+        db_timestamp_placeholder = st.empty()
+        st.markdown("---")
+
         st.header("⚙️ Settings")
 
         # Liquidation Distance
@@ -898,7 +900,12 @@ def main():
         st.warning("⚠️ No data available. Please check protocol connections.")
         st.stop()
 
-    lend_rates, borrow_rates, collateral_ratios, prices, lend_rewards, borrow_rewards, available_borrow, borrow_fees = data_result
+    lend_rates, borrow_rates, collateral_ratios, prices, lend_rewards, borrow_rewards, available_borrow, borrow_fees, db_timestamp = data_result
+
+    # Update the database timestamp placeholder in the sidebar
+    with db_timestamp_placeholder.container():
+        st.caption(f"📸 **Database Snapshot**")
+        st.caption(f"{db_timestamp.strftime('%Y-%m-%d %H:%M:%S UTC')}")
 
     if lend_rates.empty or borrow_rates.empty or collateral_ratios.empty:
         st.warning("⚠️ No data available. Please check protocol connections.")
