@@ -18,19 +18,50 @@ These are straightforward improvements with minimal complexity:
 - ~~**Effort:** 30 minutes~~
 - ✅ **COMPLETED**
 
-#### 3. Clean up Slack messaging
-- Refine the message formats in `slack_notifier.py`
-- Improve formatting, add emojis, better structure
-- **Effort:** 1-2 hours
+#### ~~3. Clean up Slack messaging~~
+- ~~Refine the message formats in `slack_notifier.py`~~
+- ~~Improve formatting, add emojis, better structure~~
+- ~~**Effort:** 1-2 hours~~
+- ✅ **COMPLETED**
 
-#### 10. Add liquidity metrics to dashboard
-- Add AvailableBorrowUSD to dashboard and main.py (similar to how prices were added)
-- Add TotalSupply column
-- Add Utilization column
-- **Effort:** 1-2 hours
-- **Later enhancement:** Add projected APR change given deposit size
+#### ~~10. Add liquidity metrics to dashboard~~
+- ~~Add AvailableBorrowUSD to dashboard and main.py (similar to how prices were added)~~
+- ~~Add TotalSupply column~~
+- ~~Add Utilization column~~
+- ~~**Effort:** 1-2 hours~~
+- ✅ **COMPLETED**
+
+#### 13. Incorporate enhanced liquidity and fees into APR display strategy
+- **Decision Point:** How to display and use the various APR metrics we've built
+  - APR30 (30-day holding period accounting for upfront fees)
+  - Levered vs Unlevered APR (already toggleable in dashboard)
+  - Fee-adjusted APR calculations
+- **Enhanced Liquidity Metrics:**
+  - Projected APR change given deposit size
   - "How much supply needed to decrease lending rate by 1%"
   - "How much borrow before borrow rate increases by 1%"
+  - Display impact analysis for different position sizes
+  - Add liquidity depth visualization
+- **Fee Integration:**
+  - Incorporate borrow fees into position_calculator.py APR calculations
+  - Build APR30 metric (annualized return over 30-day period net of fees)
+  - Add fee impact analysis to strategy details
+- **Display Strategy:**
+  - Determine which metrics to show by default
+  - Design UI/UX for switching between different APR views
+  - Decide on Slack notification strategy (which APR to highlight)
+- **Effort:** 4-6 hours
+- **Dependencies:** Tasks 5 (fees) and 10 (basic liquidity) complete
+
+#### ~~12. Dashboard enhancements - leverage/looping toggle~~
+- ~~Add "No leverage/looping" toggle to switch between levered and unlevered APR display~~
+- ~~Create helper function `get_apr_value()` to return appropriate APR based on toggle~~
+- ~~Modify `display_strategy_details()` to conditionally show 3 rows (unlevered) or 4 rows (levered)~~
+- ~~Update all tabs (1, 2, 4) to show correct token flow: token1→token2 for unlevered, token1→token2→token3 for levered~~
+- ~~Update sorting and filtering to work with both APR columns~~
+- ~~Enhance Slack notifications with third table showing top unlevered strategies (9 total rows)~~
+- ~~**Effort:** 2-3 hours~~
+- ✅ **COMPLETED**
 
 ---
 
@@ -45,12 +76,14 @@ These require some design decisions and moderate implementation:
 - ~~**Dependencies:** Need to verify all 3 protocols return prices~~
 - ✅ **COMPLETED**
 
-#### 5. Add in fees - find out which protocols charge fees
-- Research each protocol's fee structure
-- Suilend already returns `borrow_fee_bps` and `spread_fee_bps`
-- Modify `position_calculator.py` to incorporate fees into APR calculations
-- **Effort:** 3-4 hours
-- **Research needed:** Navi and AlphaFi fee structures
+#### ~~5. Add in fees - find out which protocols charge fees~~
+- ~~Research each protocol's fee structure~~
+- ~~Suilend already returns `borrow_fee_bps` and `spread_fee_bps`~~
+- ~~Navi and AlphaFi fee structures documented~~
+- ~~Fees collected and available in data pipeline~~
+- ~~**Effort:** 3-4 hours~~
+- ✅ **COMPLETED**
+- **Note:** Fees are collected but not yet incorporated into APR calculations (see Task 13)
 
 #### ~~6. Track rates in SQL/DB each time~~
 - ~~Design simple schema (timestamp, protocol, token, lend_rate, borrow_rate, collateral_ratio)~~
@@ -66,8 +99,9 @@ These require some design decisions and moderate implementation:
 - Formula: `(quoted_apr/365*days - fee_bps/10000) / days * 365`
 - Example: 36.5% APR with 30bps fee over 10 days = `(0.365/365*10 - 0.003)/10*365`
 - Display alongside standard APR in strategy details
-- **Effort:** 3-4 hours
-- **Dependencies:** Requires fee data from protocols (Task 5)
+- **Effort:** 2-3 hours
+- **Dependencies:** Task 13 (display strategy decision must be made first)
+- **Note:** Core APR30 calculation will be built in Task 13; this task focuses on 10/30/90-day variants and additional display options
 
 ---
 
@@ -104,25 +138,27 @@ These are complex features requiring significant architecture:
 
 ## ONE-PAGER: Progress Tracker
 
-Last Updated: 2025-01-08
+Last Updated: 2026-01-13
 
 ### Phase 1: Polish & Foundation 🟢
 - [x] 1 - Dashboard: Remove contract addresses (15 min) ✅ *07Jan*
 - [x] 2 - Dashboard: Add USDC first deposit toggle (30 min) ✅ *07Jan*
-- [ ] 3 - Slack: Clean up messaging (1-2 hrs)
+- [x] 3 - Slack: Clean up messaging (1-2 hrs) ✅ *13Jan*
 - [x] 4 - Dashboard: Add prices (2-3 hrs) ✅ *07Jan*
 - [x] 6 - Database: Track rates history (4-6 hrs) ✅ *08Jan*
-- [ ] 10 - Dashboard: Add liquidity metrics (1-2 hrs)
+- [x] 10 - Dashboard: Add liquidity metrics (1-2 hrs) ✅ *13Jan*
+- [x] 12 - Dashboard: Leverage/looping toggle (2-3 hrs) ✅ *13Jan*
 
-**Phase 1 Progress: 4/6 complete**
+**Phase 1 Progress: 7/7 complete ✅**
 
 ---
 
 ### Phase 2: Enhanced Analytics 🟡
-- [ ] 5 - Fees: Research & add to APR calculations (3-4 hrs)
-- [ ] 11 - Time-adjusted APR with fees (3-4 hrs)
+- [x] 5 - Fees: Research & collect fee data (3-4 hrs) ✅ *13Jan*
+- [ ] 13 - Enhanced liquidity & fees APR display strategy (4-6 hrs)
+- [ ] 11 - Time-adjusted APR variants (2-3 hrs)
 
-**Phase 2 Progress: 0/2 complete**
+**Phase 2 Progress: 1/3 complete**
 
 ---
 
@@ -142,9 +178,9 @@ Last Updated: 2025-01-08
 ---
 
 ## Overall Progress
-**Total: 4/11 tasks complete**
-- Phase 1: 4/6 🟢🟢🟢🟢⚪⚪
-- Phase 2: 0/2 ⚪⚪
+**Total: 8/13 tasks complete**
+- Phase 1: 7/7 🟢🟢🟢🟢🟢🟢🟢 ✅ **COMPLETE**
+- Phase 2: 1/3 🟡⚪⚪
 - Phase 3: 0/1 ⚪
 - Phase 4: 0/2 ⚪⚪
 
@@ -159,7 +195,15 @@ When starting a task, reference this section:
 
 **Blocked By:** _No blockers_
 
-**Next Up:** Task 3 (Slack cleanup) or Task 10 (Liquidity metrics) - both are quick wins!
+**Next Up:** Moving to Phase 3 - Position Management! 🔴
+- **Task 7 (Position tracking framework)** - NEXT PRIORITY
+  - Design position schema and lifecycle management
+  - Build foundation for active position monitoring
+  - Prerequisite for one-click deploy (Task 9)
+
+**On Hold (Phase 2):**
+- Task 13 (Enhanced liquidity & fees display strategy)
+- Task 11 (Time-adjusted APR variants)
 
 ---
 

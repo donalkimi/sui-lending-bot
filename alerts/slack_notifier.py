@@ -33,15 +33,17 @@ def format_max_size_millions(value: float) -> str:
     return f"${value/1_000_000:.2f}M"
 
 
-def format_strategy_summary_line(strategy: Dict, liq_dist: float) -> str:
+def format_strategy_summary_line(strategy: Dict, liq_dist: float, use_unlevered: bool = False) -> str:
     """
     Format a single strategy as a summary line
 
-    Format: TOKEN1 → TOKEN2 → TOKEN3 | PROTOCOL_A ↔ PROTOCOL_B | Max Size $X.XXM | XX.XX%->XX.XX% (unlev->lev)
+    Format (levered): TOKEN1 → TOKEN2 → TOKEN3 | PROTOCOL_A ↔ PROTOCOL_B | Max Size $X.XXM | XX.XX% APR
+    Format (unlevered): TOKEN1 → TOKEN2 | PROTOCOL_A ↔ PROTOCOL_B | Max Size $X.XXM | XX.XX% APR
 
     Args:
         strategy: Dictionary with strategy details (can be DataFrame row dict)
         liq_dist: Liquidation distance as decimal (e.g., 0.20 for 20%)
+        use_unlevered: If True, show unlevered APR and token1→token2 flow
 
     Returns:
         Formatted summary line string
@@ -58,7 +60,16 @@ def format_strategy_summary_line(strategy: Dict, liq_dist: float) -> str:
     # Format max size
     max_size_str = format_max_size_millions(max_size)
 
-    return f"{token1} → {token2} → {token3} | {protocol_A} ↔ {protocol_B} | Max Size {max_size_str} | {unlevered_apr:.2f}%->{net_apr:.2f}% (unlev->lev)"
+    # Select APR value based on leverage toggle
+    apr_value = unlevered_apr if use_unlevered else net_apr
+
+    # Build token flow based on leverage type
+    if use_unlevered:
+        # Unlevered: token1 → token2 (no token3, no loop)
+        return f"{token1} → {token2} | {protocol_A} ↔ {protocol_B} | Max Size {max_size_str} | {apr_value:.2f}% APR"
+    else:
+        # Levered: token1 → token2 → token3 (with loop)
+        return f"{token1} → {token2} → {token3} | {protocol_A} ↔ {protocol_B} | Max Size {max_size_str} | {apr_value:.2f}% APR"
 
 
 class SlackNotifier:
@@ -252,6 +263,12 @@ class SlackNotifier:
             (all_results['max_size'] >= deployment_usd)
         ].head(3)
 
+        # Filter Set 3: Unlevered (no token restrictions, sort by unlevered_apr, deployment filter)
+        filtered_set3 = all_results[
+            (all_results['max_size'].notna()) &
+            (all_results['max_size'] >= deployment_usd)
+        ].sort_values(by='unlevered_apr', ascending=False).head(3)
+
         # Build formatted lines for Set 1
         set1_lines = []
         for _, row in filtered_set1.iterrows():
@@ -263,6 +280,12 @@ class SlackNotifier:
         for _, row in filtered_set2.iterrows():
             line = format_strategy_summary_line(row.to_dict(), liquidation_distance)
             set2_lines.append(line)
+
+        # Build formatted lines for Set 3
+        set3_lines = []
+        for _, row in filtered_set3.iterrows():
+            line = format_strategy_summary_line(row.to_dict(), liquidation_distance, use_unlevered=True)
+            set3_lines.append(line)
 
         # Prepare variables for Slack Workflow
         liq_dist_pct = int(liquidation_distance * 100)
@@ -278,6 +301,10 @@ class SlackNotifier:
             "set2_line1": set2_lines[0] if len(set2_lines) > 0 else "",
             "set2_line2": set2_lines[1] if len(set2_lines) > 1 else "",
             "set2_line3": set2_lines[2] if len(set2_lines) > 2 else "",
+            "set3_count": str(len(set3_lines)),
+            "set3_line1": set3_lines[0] if len(set3_lines) > 0 else "",
+            "set3_line2": set3_lines[1] if len(set3_lines) > 1 else "",
+            "set3_line3": set3_lines[2] if len(set3_lines) > 2 else "",
         }
 
         # Build fallback message for classic webhooks
@@ -298,6 +325,14 @@ class SlackNotifier:
         message_lines.append("💰 USDC-Only Strategies (Top 3):")
         if set2_lines:
             for i, line in enumerate(set2_lines, 1):
+                message_lines.append(f"{i}. {line}")
+        else:
+            message_lines.append("No strategies found")
+
+        message_lines.append("")
+        message_lines.append("🔧 Top Unlevered Strategies:")
+        if set3_lines:
+            for i, line in enumerate(set3_lines, 1):
                 message_lines.append(f"{i}. {line}")
         else:
             message_lines.append("No strategies found")

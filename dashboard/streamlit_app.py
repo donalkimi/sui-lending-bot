@@ -31,6 +31,11 @@ def format_usd_abbreviated(value: float) -> str:
         return f"${value:.0f}"
 
 
+def get_apr_value(row, use_unlevered: bool) -> float:
+    """Get the appropriate APR value based on leverage toggle"""
+    return row['unlevered_apr'] if use_unlevered else row['net_apr']
+
+
 # ============================================================================
 # HISTORICAL CHART FUNCTIONS
 # ============================================================================
@@ -197,14 +202,14 @@ def calculate_net_apr_history(raw_df: pd.DataFrame, token1_contract: str, token2
         DataFrame with columns: timestamp, net_apr, token2_price
     """
     results = []
-    
+
     for timestamp, group in raw_df.groupby('timestamp'):
-        lend_1A = None
-        borrow_2A = None
-        lend_2B = None
-        borrow_3B = None
-        token2_price = None
-        
+        lend_1A: float | None = None
+        borrow_2A: float | None = None
+        lend_2B: float | None = None
+        borrow_3B: float | None = None
+        token2_price: float | None = None
+
         for _, row in group.iterrows():
             contract = row['token_contract']
             protocol = row['protocol']
@@ -221,7 +226,14 @@ def calculate_net_apr_history(raw_df: pd.DataFrame, token1_contract: str, token2
         
         if None in [lend_1A, borrow_2A, lend_2B, borrow_3B, token2_price]:
             continue
-        
+
+        # Type narrowing: all values are guaranteed non-None here
+        assert lend_1A is not None
+        assert borrow_2A is not None
+        assert lend_2B is not None
+        assert borrow_3B is not None
+        assert token2_price is not None
+
         earn_A = L_A * lend_1A
         earn_B = L_B * lend_2B
         cost_A = B_A * borrow_2A
@@ -512,12 +524,13 @@ def run_analysis(lend_rates, borrow_rates, collateral_ratios, prices, lend_rewar
         return None, None, pd.DataFrame(), str(e)
 
 
-def display_strategy_details(strategy_row):
+def display_strategy_details(strategy_row, use_unlevered: bool = False):
     """
     Display expanded strategy details when row is clicked
-    
+
     Args:
         strategy_row: A row from the all_results DataFrame (as a dict or Series)
+        use_unlevered: If True, show only unlevered strategy (3 rows instead of 4)
     """
     # Extract all the values we need
     token1 = strategy_row['token1']
@@ -613,9 +626,12 @@ def display_strategy_details(strategy_row):
             'Price': f"${P2_B:.4f}",
             'Fee': '',
             'Available': ''
-        },
-        # Row 4: Protocol B, token3, Borrow
-        {
+        }
+    ]
+
+    # Only add 4th row (Borrow token3 from Protocol B) if levered
+    if not use_unlevered:
+        table_data.append({
             'Protocol': protocol_B,
             'Token': token3,
             'Action': 'Borrow',
@@ -625,8 +641,7 @@ def display_strategy_details(strategy_row):
             'Price': f"${P3_B:.4f}",
             'Fee': f"{borrow_fee_3B*100:.2f}%" if pd.notna(borrow_fee_3B) else 'N/A',
             'Available': format_usd_abbreviated(available_borrow_3B) if pd.notna(available_borrow_3B) else 'N/A'
-        }
-    ]
+        })
     
     # Create DataFrame and display
     details_df = pd.DataFrame(table_data)
@@ -735,6 +750,13 @@ def main():
             "Stablecoin Only",
             value=False,
             help="When enabled, only shows strategies where all three tokens are stablecoins"
+        )
+
+        # Toggle for leverage/looping
+        use_unlevered = st.toggle(
+            "No leverage/looping",
+            value=False,
+            help="When enabled, shows unlevered APR (single lend→borrow→lend cycle without recursive loop)"
         )
 
         st.markdown("---")
@@ -850,6 +872,11 @@ def main():
         (zero_liquidity_results['max_size'] < deployment_usd)
     ]
 
+    # Sort filtered results by the selected APR column
+    apr_col = 'unlevered_apr' if use_unlevered else 'net_apr'
+    filtered_results = filtered_results.sort_values(by=apr_col, ascending=False)
+    zero_liquidity_results = zero_liquidity_results.sort_values(by=apr_col, ascending=False)
+
     # Tabs
     tab1, tab2, tab3, tab4 = st.tabs([
         "🏆 Best Opportunities",
@@ -866,7 +893,8 @@ def main():
             best = filtered_results.iloc[0]
 
             col1, col2, col3, col4, col5 = st.columns(5)
-            col1.metric("Net APR", f"{best['net_apr']:.2f}%")
+            apr_label = "Unlevered APR" if use_unlevered else "Net APR"
+            col1.metric(apr_label, f"{get_apr_value(best, use_unlevered):.2f}%")
             col2.metric("Liquidation Distance", f"{best['liquidation_distance']:.0f}%")
             col3.metric("Protocol A", protocol_A)
             col4.metric("Protocol B", protocol_B)
@@ -879,13 +907,14 @@ def main():
             st.subheader("Strategy Details")
             st.write(f"**Token 1 (Start):** {best['token1']}")
             st.write(f"**Token 2 (Middle):** {best['token2']}")
-            st.write(f"**Token 3 (Close):** {best['token3']}")
-            
-            if best['token1'] != best['token3']:
+            if not use_unlevered:
+                st.write(f"**Token 3 (Close):** {best['token3']}")
+
+            if not use_unlevered and best['token1'] != best['token3']:
                 st.info(f"💱 This strategy includes stablecoin conversion: {best['token3']} → {best['token1']}")
 
             st.subheader("Top 10 Strategies")
-            
+
             for idx, row in filtered_results.head(10).iterrows():
                 # Chart data key
                 chart_key = f"chart_tab1_{idx}"
@@ -893,21 +922,22 @@ def main():
                 # Expander should be open if chart data exists for this strategy
                 is_expanded = chart_key in st.session_state
 
-                # Build expander title with max size and APRs
+                # Build expander title with max size and APR
                 max_size = row.get('max_size')
                 if max_size is not None and not pd.isna(max_size):
                     max_size_text = f" | Max Size ${max_size:,.2f}"
                 else:
                     max_size_text = ""
 
-                unlevered_apr = row.get('unlevered_apr', row['net_apr'])
+                # Build token flow based on leverage toggle
+                if use_unlevered:
+                    token_flow = f"{row['token1']} → {row['token2']}"
+                else:
+                    token_flow = f"{row['token1']} → {row['token2']} → {row['token3']}"
 
-                with st.expander(
-                    f"▶ {row['token1']} → {row['token2']} → {row['token3']} | "
-                    f"{row['protocol_A']} ↔ {row['protocol_B']}{max_size_text} | "
-                    f"{unlevered_apr:.2f}%->{row['net_apr']:.2f}% (unlev->lev)",
-                    expanded=is_expanded
-                ):
+                title = f"▶ {token_flow} | {row['protocol_A']} ↔ {row['protocol_B']}{max_size_text} | {get_apr_value(row, use_unlevered):.2f}% APR"
+
+                with st.expander(title, expanded=is_expanded):
                     # Button to load historical chart
                     if st.button("📈 Load Historical Chart", key=f"btn_tab1_{idx}"):
                         with st.spinner("Loading historical data..."):
@@ -955,7 +985,7 @@ def main():
                             
                             # Summary metrics
                             col1, col2, col3, col4 = st.columns(4)
-                            col1.metric("Current APR", f"{row['net_apr']:.2f}%")
+                            col1.metric("Current APR", f"{get_apr_value(row, use_unlevered):.2f}%")
                             col2.metric("Avg APR", f"{history_df['net_apr'].mean():.2f}%")
                             col3.metric("Max APR", f"{history_df['net_apr'].max():.2f}%")
                             col4.metric("Min APR", f"{history_df['net_apr'].min():.2f}%")
@@ -965,7 +995,7 @@ def main():
                             st.info("📊 No historical data available yet. Run main.py to build up history.")
                     
                     # Always show strategy details table
-                    display_strategy_details(row)
+                    display_strategy_details(row, use_unlevered)
         else:
             st.warning("⚠️ No strategies found with current filters")
 
@@ -993,7 +1023,7 @@ def main():
                     default=[]
                 )
 
-            display_results = filtered_results[filtered_results['net_apr'] >= min_apr]
+            display_results = filtered_results[filtered_results[apr_col] >= min_apr]
 
             if token_filter:
                 display_results = display_results[
@@ -1017,21 +1047,22 @@ def main():
                 # Expander should be open if chart data exists for this strategy
                 is_expanded = chart_key in st.session_state
 
-                # Build expander title with max size and APRs
+                # Build expander title with max size and APR
                 max_size = row.get('max_size')
                 if max_size is not None and not pd.isna(max_size):
                     max_size_text = f" | Max Size ${max_size:,.2f}"
                 else:
                     max_size_text = ""
 
-                unlevered_apr = row.get('unlevered_apr', row['net_apr'])
+                # Build token flow based on leverage toggle
+                if use_unlevered:
+                    token_flow = f"{row['token1']} → {row['token2']}"
+                else:
+                    token_flow = f"{row['token1']} → {row['token2']} → {row['token3']}"
 
-                with st.expander(
-                    f"▶ {row['token1']} → {row['token2']} → {row['token3']} | "
-                    f"{row['protocol_A']} ↔ {row['protocol_B']}{max_size_text} | "
-                    f"{unlevered_apr:.2f}%->{row['net_apr']:.2f}% (unlev->lev)",
-                    expanded=is_expanded
-                ):
+                title = f"▶ {token_flow} | {row['protocol_A']} ↔ {row['protocol_B']}{max_size_text} | {get_apr_value(row, use_unlevered):.2f}% APR"
+
+                with st.expander(title, expanded=is_expanded):
                     # Button to load historical chart
                     if st.button("📈 Load Historical Chart", key=f"btn_tab2_{idx}"):
                         with st.spinner("Loading historical data..."):
@@ -1079,7 +1110,7 @@ def main():
                             
                             # Summary metrics
                             col1, col2, col3, col4 = st.columns(4)
-                            col1.metric("Current APR", f"{row['net_apr']:.2f}%")
+                            col1.metric("Current APR", f"{get_apr_value(row, use_unlevered):.2f}%")
                             col2.metric("Avg APR", f"{history_df['net_apr'].mean():.2f}%")
                             col3.metric("Max APR", f"{history_df['net_apr'].max():.2f}%")
                             col4.metric("Min APR", f"{history_df['net_apr'].min():.2f}%")
@@ -1089,7 +1120,7 @@ def main():
                             st.info("📊 No historical data available yet. Run main.py to build up history.")
                     
                     # Always show strategy details table
-                    display_strategy_details(row)
+                    display_strategy_details(row, use_unlevered)
         else:
             st.warning("⚠️ No strategies found with current filters")
 
@@ -1161,14 +1192,20 @@ def main():
                 else:
                     max_size_text = " | No Liquidity Data"
 
+                # Build token flow based on leverage toggle
+                if use_unlevered:
+                    token_flow = f"{row['token1']} → {row['token2']}"
+                else:
+                    token_flow = f"{row['token1']} → {row['token2']} → {row['token3']}"
+
                 with st.expander(
-                    f"▶ {row['token1']} → {row['token2']} → {row['token3']} | "
+                    f"▶ {token_flow} | "
                     f"{row['protocol_A']} ↔ {row['protocol_B']} | "
-                    f"{row['net_apr']:.2f}% APR{max_size_text}",
+                    f"{get_apr_value(row, use_unlevered):.2f}% APR{max_size_text}",
                     expanded=False
                 ):
                     # Show strategy details table
-                    display_strategy_details(row)
+                    display_strategy_details(row, use_unlevered)
         else:
             st.success("✅ All strategies have sufficient liquidity for the current deployment size!")
 
