@@ -32,8 +32,11 @@ def format_usd_abbreviated(value: float) -> str:
 
 
 def get_apr_value(row, use_unlevered: bool) -> float:
-    """Get the appropriate APR value based on leverage toggle"""
-    return row['unlevered_apr'] if use_unlevered else row['net_apr']
+    """Get the appropriate Net APR value based on leverage toggle"""
+    if use_unlevered:
+        return row.get('unlevered_apr', 0)
+    else:
+        return row.get('apr_net', row.get('net_apr', 0))  # Prefer apr_net, fallback to base
 
 
 # ============================================================================
@@ -185,10 +188,11 @@ def fetch_historical_rates(conn, token1_contract: str, token2_contract: str, tok
 
 def calculate_net_apr_history(raw_df: pd.DataFrame, token1_contract: str, token2_contract: str,
                               token3_contract: str, protocol_A: str, protocol_B: str,
-                              L_A: float, B_A: float, L_B: float, B_B: float):
+                              L_A: float, B_A: float, L_B: float, B_B: float,
+                              borrow_fee_2A: float = 0.0, borrow_fee_3B: float = 0.0):
     """
-    Calculate net APR for each timestamp using static weightings
-    
+    Calculate net APR for each timestamp using static weightings and fees
+
     Args:
         raw_df: Raw rates DataFrame
         token1_contract: Token1 contract address
@@ -197,9 +201,11 @@ def calculate_net_apr_history(raw_df: pd.DataFrame, token1_contract: str, token2
         protocol_A: First protocol name
         protocol_B: Second protocol name
         L_A, B_A, L_B, B_B: Position weightings
-        
+        borrow_fee_2A: Borrow fee for token2 from Protocol A (decimal, e.g., 0.0030)
+        borrow_fee_3B: Borrow fee for token3 from Protocol B (decimal, e.g., 0.0030)
+
     Returns:
-        DataFrame with columns: timestamp, net_apr, token2_price
+        DataFrame with columns: timestamp, net_apr (fee-adjusted), token2_price
     """
     results = []
 
@@ -238,12 +244,17 @@ def calculate_net_apr_history(raw_df: pd.DataFrame, token1_contract: str, token2
         earn_B = L_B * lend_2B
         cost_A = B_A * borrow_2A
         cost_B = B_B * borrow_3B
-        
-        net_apr = (earn_A + earn_B - cost_A - cost_B) * 100
-        
+
+        # Calculate base APR
+        base_apr = (earn_A + earn_B - cost_A - cost_B) * 100
+
+        # Subtract annualized fee cost to get Net APR
+        total_fee_cost = (B_A * borrow_fee_2A + B_B * borrow_fee_3B) * 100
+        net_apr = base_apr - total_fee_cost
+
         results.append({
             'timestamp': timestamp,
-            'net_apr': net_apr,
+            'net_apr': net_apr,  # Now contains fee-adjusted Net APR
             'token2_price': token2_price
         })
     
@@ -401,20 +412,26 @@ def get_strategy_history(strategy_row: dict, liquidation_distance: float, days_b
         B_A = strategy_row['B_A']
         L_B = strategy_row['L_B']
         B_B = strategy_row['B_B']
-        
+
+        # Get current fees from the strategy row
+        borrow_fee_2A = strategy_row.get('borrow_fee_2A', 0.0)
+        borrow_fee_3B = strategy_row.get('borrow_fee_3B', 0.0)
+
         # Fetch historical rates
         raw_df = fetch_historical_rates(
             conn, token1_contract, token2_contract, token3_contract,
             protocol_A, protocol_B, days_back
         )
-        
+
         if raw_df.empty:
             return None, L_A, B_A, L_B, B_B
-        
+
         # Calculate net APR history using the SAME weightings as the displayed strategy
+        # Apply current fees retroactively to all historical data points
         history_df = calculate_net_apr_history(
             raw_df, token1_contract, token2_contract, token3_contract,
-            protocol_A, protocol_B, L_A, B_A, L_B, B_B
+            protocol_A, protocol_B, L_A, B_A, L_B, B_B,
+            borrow_fee_2A, borrow_fee_3B
         )
         
         return history_df, L_A, B_A, L_B, B_B
@@ -524,13 +541,94 @@ def run_analysis(lend_rates, borrow_rates, collateral_ratios, prices, lend_rewar
         return None, None, pd.DataFrame(), str(e)
 
 
+def display_apr_table(strategy_row):
+    """
+    Display compact APR comparison table with both levered and unlevered strategies
+    Returns warnings/info to be displayed later
+
+    Args:
+        strategy_row: A row from the all_results DataFrame (as a dict or Series)
+
+    Returns:
+        tuple: (fee_caption, warning_message) - strings to display after other content
+    """
+    # Extract token names
+    token1 = strategy_row['token1']
+    token2 = strategy_row['token2']
+    token3 = strategy_row['token3']
+
+    # Extract levered APR values
+    apr_base = strategy_row['net_apr']
+    apr_net_levered = strategy_row.get('apr_net', apr_base)
+    apr90_levered = strategy_row.get('apr90', apr_base)
+    apr30_levered = strategy_row.get('apr30', apr_base)
+    apr5_levered = strategy_row.get('apr5', apr_base)
+
+    # Extract unlevered APR values
+    unlevered_base = strategy_row.get('unlevered_apr', apr_base)
+    # For unlevered, we need to recalculate fee-adjusted APRs with B_B = 0
+    # For now, use the levered values as placeholder (will be more accurate in future)
+    apr_net_unlevered = unlevered_base  # Simplified for now
+    apr90_unlevered = unlevered_base
+    apr30_unlevered = unlevered_base
+    apr5_unlevered = unlevered_base
+
+    # Build row names with emojis at the start
+    row_name_levered = f"🔄 {token1}→{token2}→{token3} Loop 🔄"
+    row_name_unlevered = f"▶️  {token1}→{token2} No-Loop ⏹️"
+
+    # Build two-row table with Strategy column first
+    apr_table_data = {
+        'Strategy': [row_name_levered, row_name_unlevered],
+        'APR(net)': [f"{apr_net_levered:.2f}%", f"{apr_net_unlevered:.2f}%"],
+        'APR5': [f"{apr5_levered:.2f}%", f"{apr5_unlevered:.2f}%"],
+        'APR30': [f"{apr30_levered:.2f}%", f"{apr30_unlevered:.2f}%"],
+        'APR90': [f"{apr90_levered:.2f}%", f"{apr90_unlevered:.2f}%"]
+    }
+
+    apr_df = pd.DataFrame(apr_table_data)
+
+    # Apply styling for negative values
+    def highlight_negative(val):
+        """Highlight negative APR values in red"""
+        if isinstance(val, str) and '%' in val:
+            try:
+                numeric_val = float(val.replace('%', ''))
+                if numeric_val < 0:
+                    return 'color: red; font-weight: bold'
+            except:
+                pass
+        return ''
+
+    styled_apr_df = apr_df.style.map(highlight_negative, subset=['APR(net)', 'APR5', 'APR30', 'APR90'])
+
+    # Display compact table without header
+    st.dataframe(styled_apr_df, hide_index=True)
+
+    # Prepare fee caption (default to 0 if missing)
+    borrow_fee_2A = strategy_row.get('borrow_fee_2A', 0.0)
+    borrow_fee_3B = strategy_row.get('borrow_fee_3B', 0.0)
+    fee_caption = f"💰 Fees: token2={borrow_fee_2A*100:.3f}% | token3={borrow_fee_3B*100:.3f}%"
+
+    # Prepare warning for negative short-term holds (only check levered)
+    warning_message = None
+    if apr5_levered < 0:
+        warning_message = "⚠️ **5-day APR is negative for looped strategy!** Upfront fees make very short-term positions unprofitable."
+
+    return fee_caption, warning_message
+
+
 def display_strategy_details(strategy_row, use_unlevered: bool = False):
     """
     Display expanded strategy details when row is clicked
+    Returns liquidity info to be displayed at the end
 
     Args:
         strategy_row: A row from the all_results DataFrame (as a dict or Series)
         use_unlevered: If True, show only unlevered strategy (3 rows instead of 4)
+
+    Returns:
+        tuple: (max_size_message, liquidity_constraints_message) - strings to display at the end
     """
     # Extract all the values we need
     token1 = strategy_row['token1']
@@ -538,19 +636,19 @@ def display_strategy_details(strategy_row, use_unlevered: bool = False):
     token3 = strategy_row['token3']
     protocol_A = strategy_row['protocol_A']
     protocol_B = strategy_row['protocol_B']
-    
+
     # USD values (multiply by 100 for $100 notional)
     L_A = strategy_row['L_A']
     B_A = strategy_row['B_A']
     L_B = strategy_row['L_B']
     B_B = strategy_row['B_B']
-    
+
     # Rates (already as percentages in the dict)
     lend_rate_1A = strategy_row['lend_rate_1A']
     borrow_rate_2A = strategy_row['borrow_rate_2A']
     lend_rate_2B = strategy_row['lend_rate_2B']
     borrow_rate_3B = strategy_row['borrow_rate_3B']
-    
+
     # Prices
     P1_A = strategy_row['P1_A']
     P2_A = strategy_row['P2_A']
@@ -562,20 +660,19 @@ def display_strategy_details(strategy_row, use_unlevered: bool = False):
     T2_A = strategy_row['T2_A']
     T3_B = strategy_row['T3_B']
 
-    # Borrow fees and available liquidity
+    # Borrow fees and available liquidity (already extracted above but kept for compatibility)
     borrow_fee_2A = strategy_row.get('borrow_fee_2A')
     borrow_fee_3B = strategy_row.get('borrow_fee_3B')
 
-    # Max deployable size
+    # Prepare max deployable size message
     max_size = strategy_row.get('max_size')
+    max_size_message = None
     if max_size is not None and not pd.isna(max_size):
-        st.success(f"📊 **Max Deployable Size:** ${max_size:,.2f}")
+        max_size_message = f"📊 **Max Deployable Size:** ${max_size:,.2f}"
 
-    # Show individual liquidity constraints (detailed view)
+    # Prepare liquidity constraints message (detailed view)
     available_borrow_2A = strategy_row.get('available_borrow_2A')
     available_borrow_3B = strategy_row.get('available_borrow_3B')
-    B_A = strategy_row.get('B_A')
-    B_B = strategy_row.get('B_B')
 
     liquidity_details = []
     if available_borrow_2A is not None and not pd.isna(available_borrow_2A) and B_A is not None:
@@ -586,8 +683,9 @@ def display_strategy_details(strategy_row, use_unlevered: bool = False):
         constraint_3B = available_borrow_3B / B_B if B_B > 0 else float('inf')
         liquidity_details.append(f"• {token3} on {protocol_B}: ${available_borrow_3B:,.2f} available → max ${constraint_3B:,.2f}")
 
+    liquidity_constraints_message = None
     if liquidity_details:
-        st.info("💵 **Liquidity Constraints:**\n" + "\n".join(liquidity_details))
+        liquidity_constraints_message = "💵 **Liquidity Constraints:**\n" + "\n".join(liquidity_details)
 
     # Build the table data
     table_data = [
@@ -646,6 +744,8 @@ def display_strategy_details(strategy_row, use_unlevered: bool = False):
     # Create DataFrame and display
     details_df = pd.DataFrame(table_data)
     st.dataframe(details_df, width='stretch', hide_index=True)
+
+    return max_size_message, liquidity_constraints_message
 
 
 def main():
@@ -761,6 +861,14 @@ def main():
 
         st.markdown("---")
 
+        # Filters section (will be populated after data is loaded)
+        st.subheader("🔍 Filters")
+
+        # Placeholder for filters - will be filled after data loading
+        filter_placeholder = st.container()
+
+        st.markdown("---")
+
         st.subheader("📊 Data Source")
         st.info(f"Live data from {len(['Navi', 'AlphaFi', 'Suilend'])} protocols")
 
@@ -872,173 +980,157 @@ def main():
         (zero_liquidity_results['max_size'] < deployment_usd)
     ]
 
-    # Sort filtered results by the selected APR column
-    apr_col = 'unlevered_apr' if use_unlevered else 'net_apr'
+    # Sort filtered results by Net APR (apr_net for levered, unlevered_apr for unlevered)
+    # Note: apr_net is fee-adjusted Net APR, not base net_apr
+    apr_col = 'unlevered_apr' if use_unlevered else 'apr_net'
     filtered_results = filtered_results.sort_values(by=apr_col, ascending=False)
     zero_liquidity_results = zero_liquidity_results.sort_values(by=apr_col, ascending=False)
 
+    # Now populate the sidebar filters with the loaded data
+    with filter_placeholder:
+        min_apr = st.number_input("Min Net APR (%)", value=0.0, step=0.5)
+
+        token_filter = st.multiselect(
+            "Filter by Token",
+            options=sorted(set(filtered_results['token1']).union(set(filtered_results['token2'])).union(set(filtered_results['token3']))) if not filtered_results.empty else [],
+            default=[]
+        )
+
+        protocol_filter = st.multiselect(
+            "Filter by Protocol",
+            options=['Navi','AlphaFi','Suilend'],
+            default=[]
+        )
+
+    # Apply additional filters based on user input
+    display_results = filtered_results[filtered_results[apr_col] >= min_apr]
+
+    if token_filter:
+        display_results = display_results[
+            display_results['token1'].isin(token_filter) |
+            display_results['token2'].isin(token_filter)
+        ]
+
+    if protocol_filter:
+        display_results = display_results[
+            display_results['protocol_A'].isin(protocol_filter) |
+            display_results['protocol_B'].isin(protocol_filter)
+        ]
+
+    # Add strategy count to sidebar
+    with filter_placeholder:
+        st.metric("Strategies Found", f"{len(display_results)} / {len(all_results)}")
+
     # Tabs
-    tab1, tab2, tab3, tab4 = st.tabs([
-        "🏆 Best Opportunities",
+    # tab1, tab2, tab3, tab4 = st.tabs([
+    #     "🏆 Best Opportunities",
+    #     "📊 All Strategies",
+    #     "📈 Rate Tables",
+    #     "⚠️ 0 Liquidity"
+    # ])
+    tab1, tab2, tab3 = st.tabs([
         "📊 All Strategies",
         "📈 Rate Tables",
         "⚠️ 0 Liquidity"
     ])
 
-    # ---------------- Tab 1 ----------------
+    # # ---------------- Tab 1: Best Opportunities (COMMENTED OUT) ----------------
+    # # with tab1:
+    # #     st.header("🏆 Best Opportunities")
+    # #
+    # #     if protocol_A and not filtered_results.empty:
+    # #
+    # #         for idx, row in filtered_results.head(10).iterrows():
+    # #             # Chart data key
+    # #             chart_key = f"chart_tab1_{idx}"
+    # #
+    # #             # Expander should be open if chart data exists for this strategy
+    # #             is_expanded = chart_key in st.session_state
+    # #
+    # #             # Build expander title with max size and APR
+    # #             max_size = row.get('max_size')
+    # #             if max_size is not None and not pd.isna(max_size):
+    # #                 max_size_text = f" | Max Size ${max_size:,.2f}"
+    # #             else:
+    # #                 max_size_text = ""
+    # #
+    # #             # Build token flow based on leverage toggle
+    # #             if use_unlevered:
+    # #                 token_flow = f"{row['token1']} → {row['token2']}"
+    # #             else:
+    # #                 token_flow = f"{row['token1']} → {row['token2']} → {row['token3']}"
+    # #
+    # #             title = f"▶ {token_flow} | {row['protocol_A']} ↔ {row['protocol_B']}{max_size_text} | {get_apr_value(row, use_unlevered):.2f}% APR"
+    # #
+    # #             with st.expander(title, expanded=is_expanded):
+    # #                 # Display APR comparison table at the top
+    # #                 display_apr_table(row)
+    # #
+    # #                 # Button to load historical chart
+    # #                 if st.button("📈 Load Historical Chart", key=f"btn_tab1_{idx}"):
+    # #                     with st.spinner("Loading historical data..."):
+    # #                         history_df, L_A, B_A, L_B, B_B = get_strategy_history(
+    # #                             strategy_row=row.to_dict(),
+    # #                             liquidation_distance=liquidation_distance,
+    # #                             days_back=30
+    # #                         )
+    # #
+    # #                         # Store in session state
+    # #                         st.session_state[chart_key] = {
+    # #                             'history_df': history_df,
+    # #                             'L_A': L_A,
+    # #                             'B_A': B_A,
+    # #                             'L_B': L_B,
+    # #                             'B_B': B_B
+    # #                         }
+    # #
+    # #                     # Force rerun to show chart
+    # #                     st.rerun()
+    # #
+    # #                 # Display chart if loaded
+    # #                 if chart_key in st.session_state:
+    # #                     chart_data = st.session_state[chart_key]
+    # #                     history_df = chart_data['history_df']
+    # #
+    # #                     if history_df is not None and not history_df.empty:
+    # #                         st.subheader("📈 Historical Performance")
+    # #
+    # #                         # Create and display chart
+    # #                         fig = create_strategy_history_chart(
+    # #                             df=history_df,
+    # #                             token1=row['token1'],
+    # #                             token2=row['token2'],
+    # #                             token3=row['token3'],
+    # #                             protocol_A=row['protocol_A'],
+    # #                             protocol_B=row['protocol_B'],
+    # #                             liq_dist=liquidation_distance,
+    # #                             L_A=chart_data['L_A'],
+    # #                             B_A=chart_data['B_A'],
+    # #                             L_B=chart_data['L_B'],
+    # #                             B_B=chart_data['B_B']
+    # #                         )
+    # #                         st.plotly_chart(fig, width='stretch')
+    # #
+    # #                         # Summary metrics
+    # #                         col1, col2, col3, col4 = st.columns(4)
+    # #                         col1.metric("Current APR", f"{get_apr_value(row, use_unlevered):.2f}%")
+    # #                         col2.metric("Avg APR", f"{history_df['net_apr'].mean():.2f}%")
+    # #                         col3.metric("Max APR", f"{history_df['net_apr'].max():.2f}%")
+    # #                         col4.metric("Min APR", f"{history_df['net_apr'].min():.2f}%")
+    # #
+    # #                         st.markdown("---")
+    # #                     else:
+    # #                         st.info("📊 No historical data available yet. Run main.py to build up history.")
+    # #
+    # #                 # Always show strategy details table
+    # #                 display_strategy_details(row, use_unlevered)
+    # #     else:
+    # #         st.warning("⚠️ No strategies found with current filters")
+
+    # ---------------- Tab 1: All Strategies (formerly Tab 2) ----------------
     with tab1:
-        st.header("🏆 Best Opportunities")
 
-        if protocol_A and not filtered_results.empty:
-            best = filtered_results.iloc[0]
-
-            col1, col2, col3, col4, col5 = st.columns(5)
-            apr_label = "Unlevered APR" if use_unlevered else "Net APR"
-            col1.metric(apr_label, f"{get_apr_value(best, use_unlevered):.2f}%")
-            col2.metric("Liquidation Distance", f"{best['liquidation_distance']:.0f}%")
-            col3.metric("Protocol A", protocol_A)
-            col4.metric("Protocol B", protocol_B)
-
-            # Show max deployable size if available
-            max_size = best.get('max_size')
-            if max_size is not None and not pd.isna(max_size):
-                col5.metric("Max Size", f"${max_size:,.2f}")
-
-            st.subheader("Strategy Details")
-            st.write(f"**Token 1 (Start):** {best['token1']}")
-            st.write(f"**Token 2 (Middle):** {best['token2']}")
-            if not use_unlevered:
-                st.write(f"**Token 3 (Close):** {best['token3']}")
-
-            if not use_unlevered and best['token1'] != best['token3']:
-                st.info(f"💱 This strategy includes stablecoin conversion: {best['token3']} → {best['token1']}")
-
-            st.subheader("Top 10 Strategies")
-
-            for idx, row in filtered_results.head(10).iterrows():
-                # Chart data key
-                chart_key = f"chart_tab1_{idx}"
-
-                # Expander should be open if chart data exists for this strategy
-                is_expanded = chart_key in st.session_state
-
-                # Build expander title with max size and APR
-                max_size = row.get('max_size')
-                if max_size is not None and not pd.isna(max_size):
-                    max_size_text = f" | Max Size ${max_size:,.2f}"
-                else:
-                    max_size_text = ""
-
-                # Build token flow based on leverage toggle
-                if use_unlevered:
-                    token_flow = f"{row['token1']} → {row['token2']}"
-                else:
-                    token_flow = f"{row['token1']} → {row['token2']} → {row['token3']}"
-
-                title = f"▶ {token_flow} | {row['protocol_A']} ↔ {row['protocol_B']}{max_size_text} | {get_apr_value(row, use_unlevered):.2f}% APR"
-
-                with st.expander(title, expanded=is_expanded):
-                    # Button to load historical chart
-                    if st.button("📈 Load Historical Chart", key=f"btn_tab1_{idx}"):
-                        with st.spinner("Loading historical data..."):
-                            history_df, L_A, B_A, L_B, B_B = get_strategy_history(
-                                strategy_row=row.to_dict(),
-                                liquidation_distance=liquidation_distance,
-                                days_back=30
-                            )
-                            
-                            # Store in session state
-                            st.session_state[chart_key] = {
-                                'history_df': history_df,
-                                'L_A': L_A,
-                                'B_A': B_A,
-                                'L_B': L_B,
-                                'B_B': B_B
-                            }
-                        
-                        # Force rerun to show chart
-                        st.rerun()
-                    
-                    # Display chart if loaded
-                    if chart_key in st.session_state:
-                        chart_data = st.session_state[chart_key]
-                        history_df = chart_data['history_df']
-                        
-                        if history_df is not None and not history_df.empty:
-                            st.subheader("📈 Historical Performance")
-                            
-                            # Create and display chart
-                            fig = create_strategy_history_chart(
-                                df=history_df,
-                                token1=row['token1'],
-                                token2=row['token2'],
-                                token3=row['token3'],
-                                protocol_A=row['protocol_A'],
-                                protocol_B=row['protocol_B'],
-                                liq_dist=liquidation_distance,
-                                L_A=chart_data['L_A'],
-                                B_A=chart_data['B_A'],
-                                L_B=chart_data['L_B'],
-                                B_B=chart_data['B_B']
-                            )
-                            st.plotly_chart(fig, width='stretch')
-                            
-                            # Summary metrics
-                            col1, col2, col3, col4 = st.columns(4)
-                            col1.metric("Current APR", f"{get_apr_value(row, use_unlevered):.2f}%")
-                            col2.metric("Avg APR", f"{history_df['net_apr'].mean():.2f}%")
-                            col3.metric("Max APR", f"{history_df['net_apr'].max():.2f}%")
-                            col4.metric("Min APR", f"{history_df['net_apr'].min():.2f}%")
-                            
-                            st.markdown("---")
-                        else:
-                            st.info("📊 No historical data available yet. Run main.py to build up history.")
-                    
-                    # Always show strategy details table
-                    display_strategy_details(row, use_unlevered)
-        else:
-            st.warning("⚠️ No strategies found with current filters")
-
-    # ---------------- Tab 2 ----------------
-    with tab2:
-        st.header("📊 All Valid Strategies")
-
-        if not filtered_results.empty:
-            col1, col2, col3 = st.columns(3)
-
-            with col1:
-                min_apr = st.number_input("Min APR (%)", value=0.0, step=0.5)
-
-            with col2:
-                token_filter = st.multiselect(
-                    "Filter by Token",
-                    options=sorted(set(filtered_results['token1']).union(set(filtered_results['token2'])).union(set(filtered_results['token3']))) if not filtered_results.empty else [],
-                    default=[]
-                )
-
-            with col3:
-                protocol_filter = st.multiselect(
-                    "Filter by Protocol",
-                    options=['Navi','AlphaFi','Suilend'],
-                    default=[]
-                )
-
-            display_results = filtered_results[filtered_results[apr_col] >= min_apr]
-
-            if token_filter:
-                display_results = display_results[
-                    display_results['token1'].isin(token_filter) |
-                    display_results['token2'].isin(token_filter)
-                ]
-
-            if protocol_filter:
-                display_results = display_results[
-                    display_results['protocol_A'].isin(protocol_filter) |
-                    display_results['protocol_B'].isin(protocol_filter)
-                ]
-
-            st.metric("Strategies Found", f"{len(display_results)} / {len(all_results)}")
-
+        if not display_results.empty:
             # Display with expanders
             for idx, row in display_results.iterrows():
                 # Chart data key
@@ -1060,10 +1152,33 @@ def main():
                 else:
                     token_flow = f"{row['token1']} → {row['token2']} → {row['token3']}"
 
-                title = f"▶ {token_flow} | {row['protocol_A']} ↔ {row['protocol_B']}{max_size_text} | {get_apr_value(row, use_unlevered):.2f}% APR"
+                # Get Net APR and APR5 values (use apr_net and apr5 columns)
+                if use_unlevered:
+                    # For unlevered, calculate fee-adjusted values from unlevered_apr
+                    # For now, use unlevered_apr as both (simplified - can enhance later)
+                    net_apr_value = row.get('unlevered_apr', 0)
+                    apr5_value = row.get('unlevered_apr', 0)  # Simplified
+                else:
+                    # For levered, use apr_net and apr5 columns
+                    net_apr_value = row.get('apr_net', row['net_apr'])  # Fallback to base if missing
+                    apr5_value = row.get('apr5', row['net_apr'])  # Fallback to base if missing
+
+                # Format APR values with color indicators (emoji-based since expander titles are plain text)
+                # Use ✅ for positive, ⚠️ for negative Net APR
+                # Use 🟢 for positive, 🔴 for negative APR5
+                net_apr_indicator = "🟢" if net_apr_value >= 0 else "🔴"
+                apr5_indicator = "🟢" if apr5_value >= 0 else "🔴"
+
+                title = f"▶ {token_flow} | {row['protocol_A']} ↔ {row['protocol_B']}{max_size_text} | {net_apr_indicator} Net APR {net_apr_value:.2f}% | {apr5_indicator} 5day APR {apr5_value:.2f}%"
 
                 with st.expander(title, expanded=is_expanded):
-                    # Button to load historical chart
+                    # 1. Display APR comparison table at the top
+                    fee_caption, warning_message = display_apr_table(row)
+
+                    # 2. Display strategy details table right after
+                    max_size_msg, liquidity_msg = display_strategy_details(row, use_unlevered)
+
+                    # 3. Button to load historical chart
                     if st.button("📈 Load Historical Chart", key=f"btn_tab2_{idx}"):
                         with st.spinner("Loading historical data..."):
                             history_df, L_A, B_A, L_B, B_B = get_strategy_history(
@@ -1071,7 +1186,7 @@ def main():
                                 liquidation_distance=liquidation_distance,
                                 days_back=30
                             )
-                            
+
                             # Store in session state
                             st.session_state[chart_key] = {
                                 'history_df': history_df,
@@ -1080,18 +1195,18 @@ def main():
                                 'L_B': L_B,
                                 'B_B': B_B
                             }
-                        
+
                         # Force rerun to show chart
                         st.rerun()
-                    
+
                     # Display chart if loaded
                     if chart_key in st.session_state:
                         chart_data = st.session_state[chart_key]
                         history_df = chart_data['history_df']
-                        
+
                         if history_df is not None and not history_df.empty:
                             st.subheader("📈 Historical Performance")
-                            
+
                             # Create and display chart
                             fig = create_strategy_history_chart(
                                 df=history_df,
@@ -1107,25 +1222,33 @@ def main():
                                 B_B=chart_data['B_B']
                             )
                             st.plotly_chart(fig, width='stretch')
-                            
+
                             # Summary metrics
                             col1, col2, col3, col4 = st.columns(4)
-                            col1.metric("Current APR", f"{get_apr_value(row, use_unlevered):.2f}%")
-                            col2.metric("Avg APR", f"{history_df['net_apr'].mean():.2f}%")
-                            col3.metric("Max APR", f"{history_df['net_apr'].max():.2f}%")
-                            col4.metric("Min APR", f"{history_df['net_apr'].min():.2f}%")
-                            
+                            col1.metric("Current Net APR", f"{get_apr_value(row, use_unlevered):.2f}%")
+                            col2.metric("Avg Net APR", f"{history_df['net_apr'].mean():.2f}%")
+                            col3.metric("Max Net APR", f"{history_df['net_apr'].max():.2f}%")
+                            col4.metric("Min Net APR", f"{history_df['net_apr'].min():.2f}%")
+
                             st.markdown("---")
                         else:
                             st.info("📊 No historical data available yet. Run main.py to build up history.")
-                    
-                    # Always show strategy details table
-                    display_strategy_details(row, use_unlevered)
+
+                    # 4. Display warnings/info at the end
+                    st.caption(fee_caption)
+                    if warning_message:
+                        st.warning(warning_message)
+
+                    # 5. Display liquidity info at the very end
+                    if max_size_msg:
+                        st.success(max_size_msg)
+                    if liquidity_msg:
+                        st.info(liquidity_msg)
         else:
             st.warning("⚠️ No strategies found with current filters")
 
-    # ---------------- Tab 3 ----------------
-    with tab3:
+    # ---------------- Tab 2: Rate Tables (formerly Tab 3) ----------------
+    with tab2:
         st.header("📈 Current Rates")
 
         col1, col2 = st.columns(2)
@@ -1174,8 +1297,8 @@ def main():
 
         st.dataframe(borrow_fees_display, width='stretch', hide_index=True)
 
-    # ---------------- Tab 4 ----------------
-    with tab4:
+    # ---------------- Tab 3: Zero Liquidity (formerly Tab 4) ----------------
+    with tab3:
         st.header("⚠️ Zero Liquidity Strategies")
 
         if not zero_liquidity_results.empty:
@@ -1198,14 +1321,40 @@ def main():
                 else:
                     token_flow = f"{row['token1']} → {row['token2']} → {row['token3']}"
 
+                # Get Net APR and APR5 values
+                if use_unlevered:
+                    net_apr_value = row.get('unlevered_apr', 0)
+                    apr5_value = row.get('unlevered_apr', 0)
+                else:
+                    net_apr_value = row.get('apr_net', row['net_apr'])
+                    apr5_value = row.get('apr5', row['net_apr'])
+
+                # Format APR values with color indicators
+                net_apr_indicator = "🟢" if net_apr_value >= 0 else "🔴"
+                apr5_indicator = "🟢" if apr5_value >= 0 else "🔴"
+
                 with st.expander(
                     f"▶ {token_flow} | "
                     f"{row['protocol_A']} ↔ {row['protocol_B']} | "
-                    f"{get_apr_value(row, use_unlevered):.2f}% APR{max_size_text}",
+                    f"{net_apr_indicator} Net APR {net_apr_value:.2f}% | {apr5_indicator} 5day APR {apr5_value:.2f}%{max_size_text}",
                     expanded=False
                 ):
-                    # Show strategy details table
-                    display_strategy_details(row, use_unlevered)
+                    # 1. Display APR comparison table at the top
+                    fee_caption, warning_message = display_apr_table(row)
+
+                    # 2. Display strategy details table right after
+                    max_size_msg, liquidity_msg = display_strategy_details(row, use_unlevered)
+
+                    # 3. Display warnings/info at the end
+                    st.caption(fee_caption)
+                    if warning_message:
+                        st.warning(warning_message)
+
+                    # 4. Display liquidity info at the very end
+                    if max_size_msg:
+                        st.success(max_size_msg)
+                    if liquidity_msg:
+                        st.info(liquidity_msg)
         else:
             st.success("✅ All strategies have sufficient liquidity for the current deployment size!")
 

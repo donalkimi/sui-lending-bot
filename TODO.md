@@ -31,27 +31,31 @@ These are straightforward improvements with minimal complexity:
 - ~~**Effort:** 1-2 hours~~
 - ✅ **COMPLETED**
 
-#### 13. Incorporate enhanced liquidity and fees into APR display strategy
-- **Decision Point:** How to display and use the various APR metrics we've built
-  - APR30 (30-day holding period accounting for upfront fees)
-  - Levered vs Unlevered APR (already toggleable in dashboard)
-  - Fee-adjusted APR calculations
-- **Enhanced Liquidity Metrics:**
-  - Projected APR change given deposit size
-  - "How much supply needed to decrease lending rate by 1%"
-  - "How much borrow before borrow rate increases by 1%"
-  - Display impact analysis for different position sizes
-  - Add liquidity depth visualization
-- **Fee Integration:**
-  - Incorporate borrow fees into position_calculator.py APR calculations
-  - Build APR30 metric (annualized return over 30-day period net of fees)
-  - Add fee impact analysis to strategy details
-- **Display Strategy:**
-  - Determine which metrics to show by default
-  - Design UI/UX for switching between different APR views
-  - Decide on Slack notification strategy (which APR to highlight)
-- **Effort:** 4-6 hours
-- **Dependencies:** Tasks 5 (fees) and 10 (basic liquidity) complete
+#### 13a. Enhanced liquidity metrics implementation
+- Projected APR change given deposit size
+- "How much supply needed to decrease lending rate by 1%"
+- "How much borrow before borrow rate increases by 1%"
+- Display impact analysis for different position sizes
+- Add liquidity depth visualization
+- **Effort:** 2-3 hours
+- **Dependencies:** Task 10 (basic liquidity) complete
+
+#### ~~13b. Fee integration and APR display strategy~~
+- ~~**Decision Point:** How to display and use the various APR metrics we've built~~
+  - ~~APR30 (30-day holding period accounting for upfront fees)~~
+  - ~~Levered vs Unlevered APR (already toggleable in dashboard)~~
+  - ~~Fee-adjusted APR calculations~~
+- ~~**Fee Integration:**~~
+  - ~~Incorporate borrow fees into position_calculator.py APR calculations~~
+  - ~~Build APR30 metric (annualized return over 30-day period net of fees)~~
+  - ~~Add fee impact analysis to strategy details~~
+- ~~**Display Strategy:**~~
+  - ~~Determine which metrics to show by default~~
+  - ~~Design UI/UX for switching between different APR views~~
+  - ~~Decide on Slack notification strategy (which APR to highlight)~~
+- ~~**Effort:** 2-3 hours~~
+- ~~**Dependencies:** Tasks 5 (fees), 11 (time-adjusted APR), and 13a (enhanced liquidity) complete~~
+- ✅ **COMPLETED**
 
 #### ~~12. Dashboard enhancements - leverage/looping toggle~~
 - ~~Add "No leverage/looping" toggle to switch between levered and unlevered APR display~~
@@ -93,15 +97,16 @@ These require some design decisions and moderate implementation:
 - ~~**Decision:** SQLite vs PostgreSQL vs time-series DB?~~
 - ✅ **COMPLETED**
 
-#### 11. Add time-adjusted APR metrics (accounting for upfront fees)
-- Add 10-day APR, 30-day APR, 90-day APR calculations
-- Account for upfront fees amortized over holding period
-- Formula: `(quoted_apr/365*days - fee_bps/10000) / days * 365`
-- Example: 36.5% APR with 30bps fee over 10 days = `(0.365/365*10 - 0.003)/10*365`
-- Display alongside standard APR in strategy details
-- **Effort:** 2-3 hours
-- **Dependencies:** Task 13 (display strategy decision must be made first)
-- **Note:** Core APR30 calculation will be built in Task 13; this task focuses on 10/30/90-day variants and additional display options
+#### ~~11. Add time-adjusted APR metrics (accounting for upfront fees)~~
+- ~~Add 10-day APR, 30-day APR, 90-day APR calculations~~
+- ~~Account for upfront fees amortized over holding period~~
+- ~~Formula: `(quoted_apr/365*days - fee_bps/10000) / days * 365`~~
+- ~~Example: 36.5% APR with 30bps fee over 10 days = `(0.365/365*10 - 0.003)/10*365`~~
+- ~~Display alongside standard APR in strategy details~~
+- ~~**Effort:** 2-3 hours~~
+- ~~**Dependencies:** Task 13 (display strategy decision must be made first)~~
+- ~~**Note:** Core APR30 calculation will be built in Task 13; this task focuses on 10/30/90-day variants and additional display options~~
+- ✅ **COMPLETED**
 
 ---
 
@@ -138,7 +143,7 @@ These are complex features requiring significant architecture:
 
 ## ONE-PAGER: Progress Tracker
 
-Last Updated: 2026-01-13
+Last Updated: 2026-01-14
 
 ### Phase 1: Polish & Foundation 🟢
 - [x] 1 - Dashboard: Remove contract addresses (15 min) ✅ *07Jan*
@@ -146,7 +151,7 @@ Last Updated: 2026-01-13
 - [x] 3 - Slack: Clean up messaging (1-2 hrs) ✅ *13Jan*
 - [x] 4 - Dashboard: Add prices (2-3 hrs) ✅ *07Jan*
 - [x] 6 - Database: Track rates history (4-6 hrs) ✅ *08Jan*
-- [x] 10 - Dashboard: Add liquidity metrics (1-2 hrs) ✅ *13Jan*
+- [x] 10 - Dashboard: Add liquidity metrics (1-2 hrs) ✅ *14Jan*
 - [x] 12 - Dashboard: Leverage/looping toggle (2-3 hrs) ✅ *13Jan*
 
 **Phase 1 Progress: 7/7 complete ✅**
@@ -155,10 +160,11 @@ Last Updated: 2026-01-13
 
 ### Phase 2: Enhanced Analytics 🟡
 - [x] 5 - Fees: Research & collect fee data (3-4 hrs) ✅ *13Jan*
-- [ ] 13 - Enhanced liquidity & fees APR display strategy (4-6 hrs)
-- [ ] 11 - Time-adjusted APR variants (2-3 hrs)
+- [ ] 13a - Enhanced liquidity metrics (2-3 hrs)
+- [x] 13b - Fee integration & APR display strategy (2-3 hrs) ✅ *14Jan*
+- [x] 11 - Time-adjusted APR variants (2-3 hrs) ✅ *14Jan*
 
-**Phase 2 Progress: 1/3 complete**
+**Phase 2 Progress: 3/4 complete**
 
 ---
 
@@ -178,9 +184,9 @@ Last Updated: 2026-01-13
 ---
 
 ## Overall Progress
-**Total: 8/13 tasks complete**
+**Total: 10/14 tasks complete**
 - Phase 1: 7/7 🟢🟢🟢🟢🟢🟢🟢 ✅ **COMPLETE**
-- Phase 2: 1/3 🟡⚪⚪
+- Phase 2: 3/4 🟡🟡🟡⚪
 - Phase 3: 0/1 ⚪
 - Phase 4: 0/2 ⚪⚪
 

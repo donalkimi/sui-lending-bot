@@ -158,6 +158,80 @@ class PositionCalculator:
 
         return unlevered_apr
 
+    def calculate_apr_for_days(
+        self,
+        net_apr: float,
+        B_A: float,
+        B_B: float,
+        borrow_fee_2A: float,
+        borrow_fee_3B: float,
+        days: int
+    ) -> float:
+        """
+        Calculate time-adjusted APR for a given holding period
+
+        Args:
+            net_apr: Base APR without fees (%)
+            B_A: Borrow amount from Protocol A (position multiplier)
+            B_B: Borrow amount from Protocol B (position multiplier)
+            borrow_fee_2A: Borrow fee for token2 from Protocol A (decimal, e.g., 0.0030)
+            borrow_fee_3B: Borrow fee for token3 from Protocol B (decimal, e.g., 0.0030)
+            days: Holding period in days
+
+        Returns:
+            Time-adjusted APR accounting for upfront fees (%)
+
+        Formula:
+            APRx = net_apr - [(B_A × f_2A + B_B × f_3B) × 365 / days] × 100%
+        """
+        # Total fee cost (decimal)
+        total_fee_cost = B_A * borrow_fee_2A + B_B * borrow_fee_3B
+
+        # Time-adjusted fee impact (percentage)
+        fee_impact = (total_fee_cost * 365 / days) * 100
+
+        return net_apr - fee_impact
+
+    def calculate_fee_adjusted_aprs(
+        self,
+        net_apr: float,
+        positions: Dict,
+        borrow_fee_2A: float,
+        borrow_fee_3B: float
+    ) -> Dict[str, float]:
+        """
+        Calculate fee-adjusted APR metrics for multiple time horizons
+
+        Args:
+            net_apr: Base APR without fees (%)
+            positions: Dict with L_A, B_A, L_B, B_B
+            borrow_fee_2A: Borrow fee for token2 from Protocol A (decimal, e.g., 0.0030)
+            borrow_fee_3B: Borrow fee for token3 from Protocol B (decimal, e.g., 0.0030)
+
+        Returns:
+            Dictionary with apr_net, apr5, apr30, apr90
+        """
+        B_A = positions['B_A']
+        B_B = positions['B_B']
+
+        # Total annualized fee cost (percentage)
+        total_fee_cost = (B_A * borrow_fee_2A + B_B * borrow_fee_3B) * 100
+
+        # APR(net) = APR - annualized fees (equivalent to 365-day APR)
+        apr_net = net_apr - total_fee_cost
+
+        # Time-adjusted APRs using helper function
+        apr5 = self.calculate_apr_for_days(net_apr, B_A, B_B, borrow_fee_2A, borrow_fee_3B, 5)
+        apr30 = self.calculate_apr_for_days(net_apr, B_A, B_B, borrow_fee_2A, borrow_fee_3B, 30)
+        apr90 = self.calculate_apr_for_days(net_apr, B_A, B_B, borrow_fee_2A, borrow_fee_3B, 90)
+
+        return {
+            'apr_net': apr_net,
+            'apr5': apr5,
+            'apr30': apr30,
+            'apr90': apr90
+        }
+
     def analyze_strategy(
         self,
         token1: str,
@@ -249,6 +323,15 @@ class PositionCalculator:
                 lend_rate_token2_B
             )
 
+            # Calculate fee-adjusted APRs
+            # Default to 0 if fees are missing - all APRs will equal base APR
+            fee_adjusted_aprs = self.calculate_fee_adjusted_aprs(
+                net_apr,
+                positions,
+                borrow_fee_2A if borrow_fee_2A is not None else 0.0,
+                borrow_fee_3B if borrow_fee_3B is not None else 0.0
+            )
+
             # Calculate token amounts per $100 notional
             T1_A = (positions['L_A'] / price_token1_A) * 100
             T2_A = (positions['B_A'] / price_token2_A) * 100
@@ -262,6 +345,10 @@ class PositionCalculator:
                 'protocol_B': protocol_B,
                 'net_apr': net_apr,
                 'unlevered_apr': unlevered_apr,  # NEW: APR without the loop
+                'apr_net': fee_adjusted_aprs['apr_net'],  # APR minus annualized fees
+                'apr5': fee_adjusted_aprs['apr5'],  # 5-day time-adjusted APR
+                'apr30': fee_adjusted_aprs['apr30'],  # 30-day time-adjusted APR
+                'apr90': fee_adjusted_aprs['apr90'],  # 90-day time-adjusted APR
                 'liquidation_distance': positions['liquidation_distance'] * 100,  # Convert to percentage
                 'L_A': positions['L_A'],
                 'B_A': positions['B_A'],
@@ -282,8 +369,8 @@ class PositionCalculator:
                 'available_borrow_2A': available_borrow_2A,
                 'available_borrow_3B': available_borrow_3B,
                 'max_size': max_size,
-                'borrow_fee_2A': borrow_fee_2A,  # NEW
-                'borrow_fee_3B': borrow_fee_3B,  # NEW
+                'borrow_fee_2A': borrow_fee_2A if borrow_fee_2A is not None else 0.0,  # Default to 0
+                'borrow_fee_3B': borrow_fee_3B if borrow_fee_3B is not None else 0.0,  # Default to 0
                 'valid': True,
                 'error': None
             }
