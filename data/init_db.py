@@ -10,8 +10,12 @@ Usage:
 
 import os
 import sqlite3
-import psycopg2
 from pathlib import Path
+
+try:
+    import psycopg2
+except ImportError:
+    psycopg2 = None
 
 
 def init_sqlite(db_path='data/lending_rates.db'):
@@ -52,18 +56,23 @@ def init_sqlite(db_path='data/lending_rates.db'):
 
 def init_postgres(connection_url):
     """Initialize PostgreSQL database with schema"""
-    
+
+    if psycopg2 is None:
+        print("❌ Error: psycopg2 not installed")
+        print("   Install with: pip install psycopg2-binary")
+        return
+
     if not connection_url:
         print("❌ Error: SUPABASE_URL not set")
         print("   Set environment variable:")
         print("   export SUPABASE_URL='postgresql://...'")
         return
-    
+
     # Read schema
     schema_path = Path(__file__).parent / 'schema.sql'
     with open(schema_path, 'r') as f:
         schema_sql = f.read()
-    
+
     # Create database
     print(f"🌐 Connecting to PostgreSQL...")
     conn = psycopg2.connect(connection_url)

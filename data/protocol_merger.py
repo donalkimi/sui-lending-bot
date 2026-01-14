@@ -47,36 +47,44 @@ def normalize_coin_type(coin_type: str) -> str:
 def fetch_protocol_data(protocol_name: str) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
     Fetch data from a single protocol.
-    
+
     Args:
         protocol_name: Protocol to fetch ("Navi", "AlphaFi", or "Suilend")
-        
+
     Returns:
         Tuple of (lend_df, borrow_df, collateral_df)
+        Returns empty DataFrames if fetch fails
     """
-    if protocol_name == "Navi":
-        print("\tgetting navi rates:")
-        reader = NaviReader()
-        return reader.get_all_data()
-        
-    elif protocol_name == "AlphaFi":
-        print("\t\tgetting AlphaFi rates:")
-        config = AlphaFiReaderConfig(
-            node_script_path="data/alphalend/alphalend_reader-sdk.mjs"
-        )
-        reader = AlphaFiReader(config)
-        return reader.get_all_data()
-        
-    elif protocol_name == "Suilend":
-        print("\t\tgetting SuiLend rates:")
-        config = SuilendReaderConfig(
-            node_script_path="data/suilend/suilend_reader-sdk.mjs"
-        )
-        reader = SuilendReader(config)
-        return reader.get_all_data()
-        
-    else:
-        raise ValueError(f"Unknown protocol: {protocol_name}")
+    try:
+        if protocol_name == "Navi":
+            print("\tgetting navi rates:")
+            reader = NaviReader()
+            return reader.get_all_data()
+
+        elif protocol_name == "AlphaFi":
+            print("\t\tgetting AlphaFi rates:")
+            config = AlphaFiReaderConfig(
+                node_script_path="data/alphalend/alphalend_reader-sdk.mjs"
+            )
+            reader = AlphaFiReader(config)
+            return reader.get_all_data()
+
+        elif protocol_name == "Suilend":
+            print("\t\tgetting SuiLend rates:")
+            config = SuilendReaderConfig(
+                node_script_path="data/suilend/suilend_reader-sdk.mjs"
+            )
+            reader = SuilendReader(config)
+            return reader.get_all_data()
+
+        else:
+            raise ValueError(f"Unknown protocol: {protocol_name}")
+
+    except Exception as e:
+        print(f"\t\t⚠️  WARNING: Failed to fetch {protocol_name} data: {e}")
+        print(f"\t\t   Continuing with other protocols...")
+        # Return empty DataFrames to allow pipeline to continue
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
 
 def get_rate_for_contract(df: pd.DataFrame, contract: str, value_column: str) -> float:

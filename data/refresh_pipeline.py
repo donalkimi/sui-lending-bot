@@ -55,6 +55,7 @@ def refresh_pipeline(
     stablecoin_contracts=STABLECOIN_CONTRACTS,
     liquidation_distance: float = settings.DEFAULT_LIQUIDATION_DISTANCE,
     save_snapshots: bool = settings.SAVE_SNAPSHOTS,
+    create_position_snapshots: bool = False,
 ) -> RefreshResult:
     """Run one full refresh: fetch -> merge -> (optional) save -> analyze.
 
@@ -95,6 +96,34 @@ def refresh_pipeline(
             tokens_df=tokens_df,
             timestamp=ts,
         )
+
+    # Position snapshot automation (Step 5 enhancement)
+    if create_position_snapshots:
+        try:
+            from analysis.position_service import PositionService
+
+            # Use same connection as RateTracker (if snapshots were saved)
+            if save_snapshots:
+                position_service = PositionService(tracker.conn)
+                active_positions = position_service.get_active_positions()
+
+                if not active_positions.empty:
+                    print(f"Creating snapshots for {len(active_positions)} active positions...")
+
+                    for _, position in active_positions.iterrows():
+                        try:
+                            snapshot_id = position_service.create_snapshot(
+                                position['position_id'],
+                                snapshot_timestamp=ts  # Use same timestamp as rates_snapshot
+                            )
+                            print(f"  ✓ Created snapshot {snapshot_id[:8]} for position {position['position_id'][:8]}")
+                        except Exception as e:
+                            print(f"  ✗ Failed to create snapshot for {position['position_id'][:8]}: {e}")
+                            # Continue to next position - don't block pipeline
+
+        except Exception as e:
+            print(f"⚠️  Position snapshot automation failed: {e}")
+            # Don't raise - snapshot failures shouldn't break the pipeline
 
     # Initialize strategy results (always, regardless of save_snapshots)
     protocol_A: Optional[str] = None
