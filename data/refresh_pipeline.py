@@ -56,12 +56,24 @@ def refresh_pipeline(
     liquidation_distance: float = settings.DEFAULT_LIQUIDATION_DISTANCE,
     save_snapshots: bool = settings.SAVE_SNAPSHOTS,
     create_position_snapshots: bool = False,
+    send_slack_notifications: bool = True,
 ) -> RefreshResult:
     """Run one full refresh: fetch -> merge -> (optional) save -> analyze.
 
-    Returns a RefreshResult containing both the merged market data and the analysis outputs.
+    Args:
+        timestamp: Optional timestamp for the refresh (default: now)
+        stablecoin_contracts: Contract addresses for stablecoins
+        liquidation_distance: Liquidation distance setting for analysis
+        save_snapshots: Whether to save snapshots to database
+        create_position_snapshots: Whether to create position snapshots
+        send_slack_notifications: Whether to send Slack notifications (default: True)
+
+    Returns:
+        RefreshResult containing both the merged market data and the analysis outputs.
     """
-    ts = timestamp or datetime.now()
+    # Round timestamp to nearest minute to reduce granularity
+    raw_ts = timestamp or datetime.now()
+    ts = raw_ts.replace(second=0, microsecond=0)
 
 
     notifier = SlackNotifier()
@@ -144,25 +156,28 @@ def refresh_pipeline(
             available_borrow=available_borrow,
             borrow_fees=borrow_fees,
             liquidation_distance=liquidation_distance,
+            timestamp=ts  # Pass the rounded timestamp that was used to save to DB
         )
 
         protocol_A, protocol_B, all_results = analyzer.find_best_protocol_pair()
 
-        # Slack: always notify once per run
-        if all_results is None or all_results.empty:
-            notifier.alert_error("No valid strategies found in this refresh run.")
-        else:
-            notifier.alert_top_strategies(
-                all_results=all_results,
-                liquidation_distance=liquidation_distance,
-                deployment_usd=100.0,
-                timestamp=ts
-            )
+        # Slack: notify once per run (if enabled)
+        if send_slack_notifications:
+            if all_results is None or all_results.empty:
+                notifier.alert_error("No valid strategies found in this refresh run.")
+            else:
+                notifier.alert_top_strategies(
+                    all_results=all_results,
+                    liquidation_distance=liquidation_distance,
+                    deployment_usd=100.0,
+                    timestamp=ts
+                )
 
     except Exception as e:
         error_msg = f"Error during analysis: {str(e)}"
         print(f"✗ {error_msg}")
-        notifier.alert_error(error_msg)
+        if send_slack_notifications:
+            notifier.alert_error(error_msg)
     return RefreshResult(
         timestamp=ts,
         lend_rates=lend_rates,

@@ -34,7 +34,7 @@ def main():
         # Toggle: False = Live, True = Historical
         is_historical = st.toggle(
             "Historical Mode",
-            value=True,  # Default to Historical
+            value=False,  # Default to Live
             key="mode_selector",
             help="Toggle between Live and Historical data views"
         )
@@ -67,22 +67,42 @@ def main():
             from data.refresh_pipeline import refresh_pipeline
 
             try:
-                # Fetch fresh data from APIs and save to DB
-                result = refresh_pipeline()
+                # Fetch fresh data from APIs and save to DB (no Slack notifications for dashboard refresh)
+                result = refresh_pipeline(send_slack_notifications=False)
 
                 if result is None:
                     return None, "refresh_pipeline() returned None"
 
-                # Extract data from RefreshResult dataclass
+                # Extract data from RefreshResult dataclass (including analysis results)
                 return (result.lend_rates, result.borrow_rates, result.collateral_ratios,
                        result.prices, result.lend_rewards, result.borrow_rewards,
-                       result.available_borrow, result.borrow_fees, result.timestamp), None
+                       result.available_borrow, result.borrow_fees, result.timestamp,
+                       result.protocol_A, result.protocol_B, result.all_results), None
 
             except Exception as e:
                 return None, str(e)
 
-        # Load data with cache busting
-        data_result, error = load_live_data(st.session_state.refresh_nonce)
+        # Check if we should skip data reload (e.g., when showing deployment form)
+        skip_reload = st.session_state.get('skip_data_reload', False)
+        if skip_reload:
+            # Clear the flag immediately so next refresh works normally
+            st.session_state.skip_data_reload = False
+            # Set a flag for render_dashboard to skip analysis too
+            st.session_state.skip_analysis = True
+
+            # Use cached data from session state if available (avoids calling load_live_data)
+            if 'last_live_data' in st.session_state:
+                data_result, error = st.session_state.last_live_data
+            else:
+                # Fallback to normal load if no cached data
+                data_result, error = load_live_data(st.session_state.refresh_nonce)
+        else:
+            # Normal flow - load data with cache busting
+            data_result, error = load_live_data(st.session_state.refresh_nonce)
+            # Store result in session state for potential skip_reload use
+            st.session_state.last_live_data = (data_result, error)
+            # Clear skip_analysis flag for normal flow
+            st.session_state.skip_analysis = False
 
         if error:
             st.error(f"❌ Error loading data: {error}")
@@ -93,14 +113,18 @@ def main():
             st.warning("⚠️ No data available. Please check protocol connections.")
             st.stop()
 
-        # Unpack data
-        lend_rates, borrow_rates, collateral_ratios, prices, lend_rewards, borrow_rewards, available_borrow, borrow_fees, timestamp = data_result
+        # Unpack data (now includes analysis results from refresh_pipeline)
+        lend_rates, borrow_rates, collateral_ratios, prices, lend_rewards, borrow_rewards, available_borrow, borrow_fees, timestamp, protocol_A, protocol_B, all_results = data_result
+
+        # Store analysis results in session state for dashboard to use
+        st.session_state.pipeline_analysis_results = (protocol_A, protocol_B, all_results)
 
         # Create LiveDataLoader wrapper with pre-loaded data
         class PreLoadedLiveDataLoader(LiveDataLoader):
             def __init__(self, preloaded_data):
                 super().__init__()
-                self._preloaded_data = preloaded_data
+                # Only store the first 9 elements (exclude analysis results)
+                self._preloaded_data = preloaded_data[:9]
                 self._timestamp = preloaded_data[8]
 
             def load_data(self):

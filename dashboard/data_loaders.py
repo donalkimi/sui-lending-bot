@@ -52,17 +52,24 @@ class LiveDataLoader(DataLoader):
     def load_data(self) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame,
                                    pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, datetime]:
         """Fetch live data from protocol APIs"""
-        # Call refresh_pipeline which returns 8 DataFrames
-        result = refresh_pipeline()
+        # Call refresh_pipeline with Slack notifications disabled (dashboard refreshes should be silent)
+        result = refresh_pipeline(send_slack_notifications=False)
 
-        if result is None or len(result) != 8:
-            raise ValueError("refresh_pipeline() did not return expected 8 DataFrames")
+        if result is None:
+            raise ValueError("refresh_pipeline() returned None")
 
-        (lend_rates, borrow_rates, collateral_ratios, prices,
-         lend_rewards, borrow_rewards, available_borrow, borrow_fees) = result
+        # Extract data from RefreshResult dataclass
+        lend_rates = result.lend_rates
+        borrow_rates = result.borrow_rates
+        collateral_ratios = result.collateral_ratios
+        prices = result.prices
+        lend_rewards = result.lend_rewards
+        borrow_rewards = result.borrow_rewards
+        available_borrow = result.available_borrow
+        borrow_fees = result.borrow_fees
 
-        # Use current timestamp for live data
-        self._timestamp = datetime.now()
+        # Use timestamp from result
+        self._timestamp = result.timestamp
 
         return (lend_rates, borrow_rates, collateral_ratios, prices,
                 lend_rewards, borrow_rewards, available_borrow, borrow_fees, self._timestamp)

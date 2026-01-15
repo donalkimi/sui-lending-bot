@@ -27,7 +27,8 @@ class RateAnalyzer:
         borrow_rewards: pd.DataFrame,            # NEW
         available_borrow: pd.DataFrame,          # NEW
         borrow_fees: pd.DataFrame,               # NEW
-        liquidation_distance: Optional[float] = None
+        liquidation_distance: Optional[float] = None,
+        timestamp: Optional[datetime] = None     # NEW
     ):
         """
         Initialize the rate analyzer
@@ -72,6 +73,9 @@ class RateAnalyzer:
         
         # Initialize calculator
         self.calculator = PositionCalculator(self.liquidation_distance)
+
+        # Store timestamp (when this data was captured)
+        self.timestamp = timestamp or datetime.now()
         
         print(f"\n🔧 Initialized Rate Analyzer:")
         print(f"   Protocols: {len(self.protocols)} ({', '.join(self.protocols)})")
@@ -188,7 +192,32 @@ class RateAnalyzer:
                 return np.nan
         except:
             return np.nan
-    
+
+    def get_contract(self, token: str, protocol: str) -> Optional[str]:
+        """
+        Get contract address for a token on a specific protocol
+
+        Args:
+            token: Token symbol (e.g., 'USDC')
+            protocol: Protocol name (e.g., 'navi')
+
+        Returns:
+            Contract address or None if not found
+        """
+        # Check lend_rates first (has 'Token' and 'Contract' columns)
+        mask = (self.lend_rates['Token'] == token)
+        if mask.any():
+            row = self.lend_rates[mask].iloc[0]
+            return row.get('Contract')
+
+        # Fallback to borrow_rates
+        mask = (self.borrow_rates['Token'] == token)
+        if mask.any():
+            row = self.borrow_rates[mask].iloc[0]
+            return row.get('Contract')
+
+        return None
+
     def analyze_all_combinations(self, tokens: Optional[List[str]] = None) -> pd.DataFrame:
         """
         Analyze all possible protocol pairs and token combinations
@@ -292,7 +321,12 @@ class RateAnalyzer:
                                 borrow_fee_2A=borrow_fee_2A,  # NEW
                                 borrow_fee_3B=borrow_fee_3B   # NEW
                             )
-                            
+
+                            # Add contract addresses to result (for historical chart queries)
+                            result['token1_contract'] = self.get_contract(token1, protocol_A)
+                            result['token2_contract'] = self.get_contract(token2, protocol_A)  # Use Protocol A
+                            result['token3_contract'] = self.get_contract(token3, protocol_B)
+
                             if result['valid']:
                                 valid += 1
                                 results.append(result)
@@ -303,7 +337,10 @@ class RateAnalyzer:
         # Convert to DataFrame and sort by net APR
         if results:
             df_results = pd.DataFrame(results)
-            
+
+            # Add timestamp column - when this data was captured
+            df_results['timestamp'] = self.timestamp
+
             # Add flag for stablecoin-only strategies (both tokens are stablecoins)
             df_results['is_stablecoin_only'] = df_results.apply(
                 lambda row: row['token1'] in self.STABLECOINS and row['token2'] in self.STABLECOINS,

@@ -106,13 +106,15 @@ class PositionService:
         protocol_B = strategy_row['protocol_B']
 
         # Entry timestamp (should match the rates_snapshot timestamp being displayed)
-        entry_timestamp = strategy_row.get('timestamp', datetime.now())
+        # Round to nearest minute to match rates_snapshot granularity
+        raw_timestamp = strategy_row.get('timestamp', datetime.now())
+        entry_timestamp = raw_timestamp.replace(second=0, microsecond=0) if raw_timestamp else datetime.now().replace(second=0, microsecond=0)
 
         # Position multipliers (normalized)
-        L_A = strategy_row['L_A']
-        B_A = strategy_row['B_A']
-        L_B = strategy_row['L_B']
-        B_B = strategy_row.get('B_B') if is_levered else None
+        L_A = strategy_row.get('L_A', 0) or 0
+        B_A = strategy_row.get('B_A', 0) or 0
+        L_B = strategy_row.get('L_B', 0) or 0
+        B_B = (strategy_row.get('B_B', 0) or 0) if is_levered else 0
 
         # Entry rates
         entry_lend_rate_1A = strategy_row.get('lend_rate_1A', 0)
@@ -219,7 +221,8 @@ class PositionService:
         WHERE position_id = {ph}
         """
 
-        close_timestamp = datetime.now()
+        # Round to nearest minute to match rates_snapshot granularity
+        close_timestamp = datetime.now().replace(second=0, microsecond=0)
         params = ('closed', close_timestamp, reason, notes, close_timestamp, position_id)
 
         if not self._execute_write(query, params):
@@ -414,7 +417,9 @@ class PositionService:
 
             # For active positions, last iteration uses "now" as end time
             if is_active and i == len(snapshots) - 1:
-                time_delta = (datetime.now() - current_snap['snapshot_timestamp']).total_seconds()
+                # Round to nearest minute for consistency
+                now = datetime.now().replace(second=0, microsecond=0)
+                time_delta = (now - current_snap['snapshot_timestamp']).total_seconds()
             else:
                 next_snap = snapshots.iloc[i + 1]
                 time_delta = (next_snap['snapshot_timestamp'] - current_snap['snapshot_timestamp']).total_seconds()
@@ -443,7 +448,9 @@ class PositionService:
 
             # For active positions, last iteration uses "now" as end time
             if is_active and i == len(snapshots) - 1:
-                time_delta = (datetime.now() - current_snap['snapshot_timestamp']).total_seconds()
+                # Round to nearest minute for consistency
+                now = datetime.now().replace(second=0, microsecond=0)
+                time_delta = (now - current_snap['snapshot_timestamp']).total_seconds()
             else:
                 next_snap = snapshots.iloc[i + 1]
                 time_delta = (next_snap['snapshot_timestamp'] - current_snap['snapshot_timestamp']).total_seconds()
@@ -510,8 +517,8 @@ class PositionService:
             pnl_price_leg4 = 0
 
         # Calculate Fee Costs (one-time upfront)
-        fee_cost_2A = deployment * B_A * (position.get('entry_borrow_fee_2A') or 0)
-        fee_cost_3B = deployment * B_B * (position.get('entry_borrow_fee_3B') or 0) if is_levered else 0
+        fee_cost_2A = deployment * B_A * (position.get('entry_borrow_fee_2A', 0) or 0)
+        fee_cost_3B = (deployment * B_B * (position.get('entry_borrow_fee_3B', 0) or 0)) if is_levered else 0
         pnl_fees = -(fee_cost_2A + fee_cost_3B)
 
         # Net Token2 Hedge (for validation)
@@ -713,9 +720,9 @@ class PositionService:
         if position is None:
             raise Exception(f"Position not found: {position_id}")
 
-        # Use provided timestamp or current time
+        # Use provided timestamp or current time, rounded to nearest minute
         if snapshot_timestamp is None:
-            snapshot_timestamp = datetime.now()
+            snapshot_timestamp = datetime.now().replace(second=0, microsecond=0)
 
         # Generate snapshot ID
         snapshot_id = str(uuid.uuid4())
@@ -916,7 +923,7 @@ class PositionService:
         if start_time is None:
             start_time = position['entry_timestamp']
         if end_time is None:
-            end_time = position.get('close_timestamp') or datetime.now()
+            end_time = position.get('close_timestamp') or datetime.now().replace(second=0, microsecond=0)
 
         # Generate timestamps
         delta = timedelta(hours=1) if frequency == 'hourly' else timedelta(days=1)

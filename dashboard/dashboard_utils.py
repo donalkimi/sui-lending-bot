@@ -296,6 +296,7 @@ def fetch_historical_rates(conn: Any, token1_contract: str, token2_contract: str
             FROM rates_snapshot
             WHERE
                 timestamp >= ?
+                AND token_contract != ''
                 AND (
                     (token_contract = ? AND protocol = ?) OR
                     (token_contract = ? AND protocol = ?) OR
@@ -527,13 +528,19 @@ def get_strategy_history(strategy_row: Dict[str, Any], liquidation_distance: flo
         protocol_A = strategy_row['protocol_A']
         protocol_B = strategy_row['protocol_B']
 
-        # Get contract addresses
-        token1_contract = get_token_contract(conn, token1)
-        token2_contract = get_token_contract(conn, token2)
-        token3_contract = get_token_contract(conn, token3)
+        # Get contract addresses from strategy_row (populated by analysis phase)
+        token1_contract = strategy_row.get('token1_contract')
+        token2_contract = strategy_row.get('token2_contract')
+        token3_contract = strategy_row.get('token3_contract')
 
-        if token1_contract is None or token2_contract is None or token3_contract is None:
+        # Critical check - token1 and token2 MUST have contracts
+        if token1_contract is None or token2_contract is None:
+            print(f"Error: Missing contracts for tokens - token1={token1} ({token1_contract}), token2={token2} ({token2_contract})")
             return None, None, None, None, None
+
+        # token3 can be None for unlevered strategies - use empty string to skip SQL query
+        if token3_contract is None:
+            token3_contract = ""  # Will be filtered in SQL WHERE clause
 
         # USE THE WEIGHTINGS ALREADY CALCULATED IN THE ANALYSIS
         L_A = strategy_row['L_A']

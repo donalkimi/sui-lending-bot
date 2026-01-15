@@ -58,12 +58,15 @@ def render_deployment_form(mode: str):
     st.markdown("---")
     st.markdown("## 📄 PAPER TRADE - Position Deployment Confirmation")
 
-    # Mode-specific warning
+    # Mode-specific info message
     if mode == 'historical':
-        st.warning(
-            "⚠️ **Deploying from historical view:** Position will be created using CURRENT market rates, "
-            "but entry time will be set to the historical timestamp being viewed."
-        )
+        hist_ts = deployment_data.get('historical_timestamp')
+        if hist_ts:
+            st.info(
+                f"📸 **Historical Deployment:** Creating position using market data from snapshot "
+                f"({hist_ts.strftime('%Y-%m-%d %H:%M UTC')}). "
+                f"All rates, prices, and fees are from this historical snapshot."
+            )
 
     # Strategy summary
     st.markdown("### Strategy Details")
@@ -90,6 +93,47 @@ def render_deployment_form(mode: str):
     }
     st.table(pd.DataFrame(apr_data))
 
+    # Token breakdown table
+    st.markdown("### Token Breakdown")
+    use_unlevered = not is_levered
+    max_size_msg, liquidity_msg = display_strategy_details(strategy, use_unlevered, deployment_usd)
+
+    # Historical chart
+    st.markdown("### Historical Performance")
+    with st.spinner("Loading historical chart..."):
+        history_df, L_A, B_A, L_B, B_B = get_strategy_history(
+            strategy_row=strategy,
+            liquidation_distance=liquidation_distance,
+            days_back=30
+        )
+
+    if history_df is not None and not history_df.empty:
+        fig = create_strategy_history_chart(
+            df=history_df,
+            token1=strategy['token1'],
+            token2=strategy['token2'],
+            token3=strategy['token3'],
+            protocol_A=strategy['protocol_A'],
+            protocol_B=strategy['protocol_B'],
+            liq_dist=liquidation_distance,
+            L_A=L_A, B_A=B_A, L_B=L_B, B_B=B_B
+        )
+
+        # Add horizontal line for current net APR
+        current_apr = strategy.get('apr_net' if is_levered else 'unlevered_apr', strategy['net_apr'])
+        fig.add_hline(
+            y=current_apr,
+            line_dash="dash",
+            line_color="orange",
+            line_width=2,
+            annotation_text=f"Current: {current_apr:.2f}%",
+            annotation_position="right"
+        )
+
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("📊 No historical data available for this strategy")
+
     # Position parameters
     st.markdown("### Position Parameters")
     col1, col2 = st.columns(2)
@@ -114,11 +158,14 @@ def render_deployment_form(mode: str):
                     # Use historical timestamp from session state
                     entry_timestamp = deployment_data.get('historical_timestamp', datetime.now())
                 else:
-                    entry_timestamp = datetime.now()
+                    # Use timestamp from strategy_row (when data was captured)
+                    entry_timestamp = strategy.get('timestamp', datetime.now())
 
-                # Add timestamp to strategy dict
-                strategy_dict = strategy.copy()
-                strategy_dict['timestamp'] = entry_timestamp
+                # Convert strategy to dict (already has timestamp from all_results)
+                strategy_dict = strategy.to_dict() if isinstance(strategy, pd.Series) else strategy.copy()
+                # Override timestamp for historical mode
+                if mode == 'historical':
+                    strategy_dict['timestamp'] = entry_timestamp
 
                 # Create position
                 position_id = service.create_position(
@@ -137,6 +184,8 @@ def render_deployment_form(mode: str):
                 st.session_state.pending_deployment = None
                 st.success(f"✅ Paper position created: {position_id}")
                 st.info("📊 View your position in the Positions tab")
+                # Skip data reload and analysis after deployment confirmation
+                st.session_state.skip_data_reload = True
                 st.rerun()
 
             except Exception as e:
@@ -146,6 +195,8 @@ def render_deployment_form(mode: str):
         if st.button("❌ Cancel", width="stretch"):
             st.session_state.show_deploy_form = False
             st.session_state.pending_deployment = None
+            # Skip data reload and analysis when canceling
+            st.session_state.skip_data_reload = True
             st.rerun()
 
     st.markdown("---")
@@ -237,6 +288,7 @@ def display_apr_table(strategy_row: Union[pd.Series, Dict[str, Any]], deployment
                 'historical_timestamp': historical_timestamp
             }
             st.session_state.show_deploy_form = True
+            st.session_state.skip_data_reload = True  # Skip data refresh when showing deploy form
             st.rerun()
 
         # Deploy button for unlevered strategy
@@ -250,6 +302,7 @@ def display_apr_table(strategy_row: Union[pd.Series, Dict[str, Any]], deployment
                 'historical_timestamp': historical_timestamp
             }
             st.session_state.show_deploy_form = True
+            st.session_state.skip_data_reload = True  # Skip data refresh when showing deploy form
             st.rerun()
 
     # Prepare fee caption (default to 0 if missing)
@@ -265,7 +318,7 @@ def display_apr_table(strategy_row: Union[pd.Series, Dict[str, Any]], deployment
     return fee_caption, warning_message
 
 
-def display_strategy_details(strategy_row: Union[pd.Series, Dict[str, Any]], use_unlevered: bool = False) -> Tuple[Optional[str], Optional[str]]:
+def display_strategy_details(strategy_row: Union[pd.Series, Dict[str, Any]], use_unlevered: bool = False, deployment_usd: float = 1.0) -> Tuple[Optional[str], Optional[str]]:
     """
     Display expanded strategy details when row is clicked
     Returns liquidity info to be displayed at the end
@@ -273,6 +326,7 @@ def display_strategy_details(strategy_row: Union[pd.Series, Dict[str, Any]], use
     Args:
         strategy_row: A row from the all_results DataFrame (as a dict or Series)
         use_unlevered: If True, show only unlevered strategy (3 rows instead of 4)
+        deployment_usd: Deployment size in USD (for scaling token amounts)
 
     Returns:
         tuple: (max_size_message, liquidity_constraints_message) - strings to display at the end
@@ -338,7 +392,7 @@ def display_strategy_details(strategy_row: Union[pd.Series, Dict[str, Any]], use
             'Action': 'Lend',
             'Rate': f"{lend_rate_1A:.2f}%",
             'Weight': f"{L_A:.2f}",
-            'Token Amount': f"{L_A / P1_A:.2f}",
+            'Token Amount': f"{(L_A * deployment_usd) / P1_A:.2f}",
             'Price': f"${P1_A:.4f}",
             'Fee': '',
             'Available': ''
@@ -350,7 +404,7 @@ def display_strategy_details(strategy_row: Union[pd.Series, Dict[str, Any]], use
             'Action': 'Borrow',
             'Rate': f"{borrow_rate_2A:.2f}%",
             'Weight': f"{B_A:.2f}",
-            'Token Amount': f"{B_A / P2_A:.2f}",
+            'Token Amount': f"{(B_A * deployment_usd) / P2_A:.2f}",
             'Price': f"${P2_A:.4f}",
             'Fee': f"{borrow_fee_2A*100:.2f}%" if pd.notna(borrow_fee_2A) else 'N/A',
             'Available': format_usd_abbreviated(available_borrow_2A) if pd.notna(available_borrow_2A) else 'N/A'
@@ -362,7 +416,7 @@ def display_strategy_details(strategy_row: Union[pd.Series, Dict[str, Any]], use
             'Action': 'Lend',
             'Rate': f"{lend_rate_2B:.2f}%",
             'Weight': f"{L_B:.2f}",
-            'Token Amount': f"{L_B / P2_B:.2f}",
+            'Token Amount': f"{(L_B * deployment_usd) / P2_B:.2f}",
             'Price': f"${P2_B:.4f}",
             'Fee': '',
             'Available': ''
@@ -377,7 +431,7 @@ def display_strategy_details(strategy_row: Union[pd.Series, Dict[str, Any]], use
             'Action': 'Borrow',
             'Rate': f"{borrow_rate_3B:.2f}%",
             'Weight': f"{B_B:.2f}",
-            'Token Amount': f"{B_B / P3_B:.2f}",
+            'Token Amount': f"{(B_B * deployment_usd) / P3_B:.2f}",
             'Price': f"${P3_B:.4f}",
             'Fee': f"{borrow_fee_3B*100:.2f}%" if pd.notna(borrow_fee_3B) else 'N/A',
             'Available': format_usd_abbreviated(available_borrow_3B) if pd.notna(available_borrow_3B) else 'N/A'
@@ -504,7 +558,7 @@ def render_all_strategies_tab(all_results: pd.DataFrame, mode: str, deployment_u
                 )
 
                 # 2. Display strategy details table right after
-                max_size_msg, liquidity_msg = display_strategy_details(row, use_unlevered)
+                max_size_msg, liquidity_msg = display_strategy_details(row, use_unlevered, deployment_usd)
 
                 # 3. Button to load historical chart
                 if st.button("📈 Load Historical Chart", key=f"btn_{mode}_{idx}"):
@@ -691,7 +745,7 @@ def render_positions_tab(timestamp: datetime, mode: str):
                             'Multiplier': f"{position['B_A']:.2f}x",
                             'USD Value': f"${position['deployment_usd'] * position['B_A']:,.2f}",
                             'Entry Rate': f"{position['entry_borrow_rate_2A']*100:.2f}%",
-                            'Entry Price': f"${position['entry_price_2']:.4f}"
+                            'Entry Price': f"${position['entry_price_2A']:.4f}"
                         },
                         {
                             'Protocol': position['protocol_B'],
@@ -700,7 +754,7 @@ def render_positions_tab(timestamp: datetime, mode: str):
                             'Multiplier': f"{position['L_B']:.2f}x",
                             'USD Value': f"${position['deployment_usd'] * position['L_B']:,.2f}",
                             'Entry Rate': f"{position['entry_lend_rate_2B']*100:.2f}%",
-                            'Entry Price': f"${position['entry_price_2']:.4f}"
+                            'Entry Price': f"${position['entry_price_2B']:.4f}"
                         }
                     ]
 
@@ -902,7 +956,7 @@ def render_zero_liquidity_tab(zero_liquidity_results: pd.DataFrame, deployment_u
                 fee_caption, warning_message = display_apr_table(row, deployment_usd, 0.2, idx, mode, historical_timestamp)
 
                 # Display strategy details
-                max_size_msg, liquidity_msg = display_strategy_details(row, use_unlevered)
+                max_size_msg, liquidity_msg = display_strategy_details(row, use_unlevered, deployment_usd)
 
                 # Display warnings/info
                 st.caption(fee_caption)
@@ -1020,13 +1074,13 @@ def render_sidebar_filters(display_results: pd.DataFrame):
     # Toggles
     force_usdc_start = st.toggle(
         "Force token1 = USDC",
-        value=True,
+        value=False,
         help="When enabled, only shows strategies starting with USDC"
     )
 
     force_token3_equals_token1 = st.toggle(
         "Force token3 = token1 (no conversion)",
-        value=True,
+        value=False,
         help="When enabled, only shows strategies where the closing stablecoin matches the starting stablecoin"
     )
 
@@ -1140,19 +1194,43 @@ def render_dashboard(data_loader: DataLoader, mode: str):
          stablecoin_only, use_unlevered, min_apr, token_filter, protocol_filter) = render_sidebar_filters(empty_df)
 
     # === RUN ANALYSIS ===
-    analyzer = RateAnalyzer(
-        lend_rates=lend_rates,
-        borrow_rates=borrow_rates,
-        collateral_ratios=collateral_ratios,
-        prices=prices,
-        lend_rewards=lend_rewards,
-        borrow_rewards=borrow_rewards,
-        available_borrow=available_borrow,
-        borrow_fees=borrow_fees,
-        liquidation_distance=liquidation_distance
-    )
+    # Check if we should skip analysis (when showing deploy form with cached data)
+    skip_analysis = st.session_state.get('skip_analysis', False)
 
-    protocol_A, protocol_B, all_results = analyzer.find_best_protocol_pair()
+    # Create cache key based on timestamp and liquidation distance
+    cache_key = f"{timestamp}_{liquidation_distance}"
+
+    # First, check if we have analysis results from refresh_pipeline (most recent)
+    if 'pipeline_analysis_results' in st.session_state:
+        # Use analysis results from refresh_pipeline (already computed, no need to re-run)
+        protocol_A, protocol_B, all_results = st.session_state.pipeline_analysis_results
+        # Also cache for skip_reload scenario
+        st.session_state.last_analysis_results = (protocol_A, protocol_B, all_results)
+        st.session_state.last_analysis_cache_key = cache_key
+    elif skip_analysis and 'last_analysis_results' in st.session_state:
+        # Use cached analysis results (skips expensive analyze_all_combinations)
+        protocol_A, protocol_B, all_results = st.session_state.last_analysis_results
+        # Clear the skip flag after using it
+        st.session_state.skip_analysis = False
+    else:
+        # Run analysis (this is the expensive operation) - only if we don't have results
+        analyzer = RateAnalyzer(
+            lend_rates=lend_rates,
+            borrow_rates=borrow_rates,
+            collateral_ratios=collateral_ratios,
+            prices=prices,
+            lend_rewards=lend_rewards,
+            borrow_rewards=borrow_rewards,
+            available_borrow=available_borrow,
+            borrow_fees=borrow_fees,
+            liquidation_distance=liquidation_distance
+        )
+
+        protocol_A, protocol_B, all_results = analyzer.find_best_protocol_pair()
+
+        # Cache the results for potential skip_reload use
+        st.session_state.last_analysis_results = (protocol_A, protocol_B, all_results)
+        st.session_state.last_analysis_cache_key = cache_key
 
     # Apply filters
     filtered_results = all_results.copy()
