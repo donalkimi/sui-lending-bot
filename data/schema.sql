@@ -30,7 +30,10 @@ CREATE TABLE IF NOT EXISTS rates_snapshot (
     total_supply_usd DECIMAL(20,10),
     total_borrow_usd DECIMAL(20,10),
     available_borrow_usd DECIMAL(20,10),
-    
+
+    -- Fees
+    borrow_fee DECIMAL(10,6),
+
     -- Reward token details (optional, per protocol)
     reward_token VARCHAR(50),
     reward_token_contract TEXT,

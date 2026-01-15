@@ -132,7 +132,8 @@ def load_historical_snapshot(timestamp: str, conn: Optional[Any] = None) -> Tupl
             price_usd,
             lend_reward_apr,
             borrow_reward_apr,
-            available_borrow_usd
+            available_borrow_usd,
+            borrow_fee
         FROM rates_snapshot
         WHERE timestamp = {ph}
         ORDER BY token, protocol
@@ -142,9 +143,6 @@ def load_historical_snapshot(timestamp: str, conn: Optional[Any] = None) -> Tupl
         timestamp_param = timestamp
 
         df = pd.read_sql_query(query, conn, params=(timestamp_param,))
-
-        # Add borrow_fee column with zeros (not stored in historical snapshots)
-        df['borrow_fee'] = 0.0
 
         if df.empty:
             raise ValueError(f"No snapshot data found for timestamp: {timestamp}")

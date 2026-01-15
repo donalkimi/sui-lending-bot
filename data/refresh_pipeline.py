@@ -86,6 +86,8 @@ def refresh_pipeline(
             prices=prices,
             lend_rewards=lend_rewards,
             borrow_rewards=borrow_rewards,
+            available_borrow=available_borrow,
+            borrow_fees=borrow_fees,
         )
         
         # Update token registry - just use lend_rates with simple rename

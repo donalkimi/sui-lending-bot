@@ -31,13 +31,14 @@ def main():
 
     # === MODE NAVIGATION ===
     with st.sidebar:
-        mode = st.radio(
-            "View Mode",
-            ["📊 Live", "📜 Historical"],
-            index=1,  # Default to Historical (index=0 for Live, index=1 for Historical)
-            key="mode_selector"
+        # Toggle: False = Live, True = Historical
+        is_historical = st.toggle(
+            "Historical Mode",
+            value=True,  # Default to Historical
+            key="mode_selector",
+            help="Toggle between Live and Historical data views"
         )
-        st.divider()
+        mode = "📜 Historical" if is_historical else "📊 Live"
 
     # Clear chart cache when switching modes
     if "last_selected_mode" not in st.session_state:
@@ -112,8 +113,6 @@ def main():
         render_dashboard(loader, mode='live')
 
     else:  # Historical
-        st.title("📜 Historical Snapshot Dashboard")
-
         # Get available timestamps
         from dashboard.dashboard_utils import get_available_timestamps
 
@@ -126,13 +125,12 @@ def main():
 
         # === TIMESTAMP PICKER IN SIDEBAR ===
         with st.sidebar:
-            st.markdown("### 📅 Timestamp Selection")
-
-            # Initialize selected timestamp in session state
+            # Initialize both states
             if "selected_timestamp_index" not in st.session_state:
-                st.session_state.selected_timestamp_index = 0  # Default to latest
+                st.session_state.selected_timestamp_index = 0  # Active timestamp
+            if "pending_timestamp_index" not in st.session_state:
+                st.session_state.pending_timestamp_index = 0  # Dropdown selection
 
-            # Dropdown selector
             # Parse timestamps for display
             timestamp_options = []
             for ts in available_timestamps:
@@ -142,65 +140,33 @@ def main():
                 except:
                     timestamp_options.append(str(ts))
 
-            selected_index = st.selectbox(
+            # Get the active timestamp for loading data
+            selected_timestamp = available_timestamps[st.session_state.selected_timestamp_index]
+
+            # Show viewing timestamp right under the toggle
+            st.caption(f"Viewing: {timestamp_options[st.session_state.selected_timestamp_index]}")
+            st.divider()
+
+            st.markdown("### 📅 Timestamp Selection")
+
+            # Dropdown (stores to pending, NOT selected)
+            pending_index = st.selectbox(
                 "Select Snapshot",
                 range(len(timestamp_options)),
                 format_func=lambda i: timestamp_options[i],
-                index=st.session_state.selected_timestamp_index,
+                index=st.session_state.pending_timestamp_index,
                 key="timestamp_selector"
             )
+            st.session_state.pending_timestamp_index = pending_index
 
-            # Store selected index in session state (for button navigation)
-            st.session_state.selected_timestamp_index = selected_index
-
-            selected_timestamp = available_timestamps[selected_index]
-
-            # Show position in timeline
-            st.caption(f"Snapshot {selected_index + 1} of {len(available_timestamps)}")
-
-            # Navigation buttons
-            col1, col2, col3, col4 = st.columns(4)
-
-            with col1:
-                if st.button("⏮️", help="Oldest", use_container_width=True):
-                    st.session_state.selected_timestamp_index = len(available_timestamps) - 1
+            # Apply button appears when selection differs from active
+            if pending_index != st.session_state.selected_timestamp_index:
+                st.info(f"Click Apply to load: {timestamp_options[pending_index]}")
+                if st.button("✓ Apply Selected Timestamp", width="stretch", type="primary"):
+                    st.session_state.selected_timestamp_index = pending_index
                     st.rerun()
 
-            with col2:
-                if st.button("⬅️", help="Previous",
-                            disabled=(selected_index >= len(available_timestamps) - 1),
-                            use_container_width=True):
-                    st.session_state.selected_timestamp_index = selected_index + 1
-                    st.rerun()
-
-            with col3:
-                if st.button("➡️", help="Next",
-                            disabled=(selected_index <= 0),
-                            use_container_width=True):
-                    st.session_state.selected_timestamp_index = selected_index - 1
-                    st.rerun()
-
-            with col4:
-                if st.button("⏭️", help="Latest", use_container_width=True):
-                    st.session_state.selected_timestamp_index = 0
-                    st.rerun()
-
-            # Optional: Timeline slider
-            st.divider()
-            st.markdown("**Timeline Scrubber**")
-            slider_index = st.slider(
-                "Timeline",
-                min_value=0,
-                max_value=len(available_timestamps) - 1,
-                value=selected_index,
-                key="timeline_slider",
-                label_visibility="collapsed"
-            )
-
-            # Update if slider changed
-            if slider_index != selected_index:
-                st.session_state.selected_timestamp_index = slider_index
-                st.rerun()
+        st.title("📜 Historical Snapshot Dashboard")
 
         # Create historical data loader with selected timestamp
         loader = HistoricalDataLoader(selected_timestamp)

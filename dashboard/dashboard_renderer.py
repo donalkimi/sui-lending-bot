@@ -103,7 +103,7 @@ def render_deployment_form(mode: str):
     col1, col2, col3 = st.columns([1, 1, 2])
 
     with col1:
-        if st.button("✅ Confirm Deploy", type="primary", use_container_width=True):
+        if st.button("✅ Confirm Deploy", type="primary", width="stretch"):
             try:
                 # Connect to database
                 conn = get_db_connection()
@@ -140,7 +140,7 @@ def render_deployment_form(mode: str):
                 st.error(f"❌ Failed to create position: {e}")
 
     with col2:
-        if st.button("❌ Cancel", use_container_width=True):
+        if st.button("❌ Cancel", width="stretch"):
             st.session_state.show_deploy_form = False
             st.session_state.pending_deployment = None
             st.rerun()
@@ -159,7 +159,7 @@ def display_apr_table(strategy_row: Union[pd.Series, Dict[str, Any]], deployment
         strategy_row: A row from the all_results DataFrame (as a dict or Series)
         deployment_usd: Deployment amount in USD from sidebar
         liquidation_distance: Liquidation distance from sidebar
-        strategy_idx: Index of the strategy for unique button keys
+        strategy_idx: Unique identifier for the strategy (DataFrame index) for unique button keys
         mode: 'live' or 'historical'
         historical_timestamp: Timestamp for historical mode deployments
 
@@ -219,12 +219,12 @@ def display_apr_table(strategy_row: Union[pd.Series, Dict[str, Any]], deployment
 
     with col1:
         # Display compact table without header
-        st.dataframe(styled_apr_df, hide_index=True, use_container_width=True)
+        st.dataframe(styled_apr_df, hide_index=True, width="stretch")
 
     with col2:
         st.markdown("**Deploy**")
         # Deploy button for levered strategy
-        if st.button(f"🚀 ${deployment_usd:,.0f}", key=f"deploy_levered_{strategy_idx}_{mode}", use_container_width=True):
+        if st.button(f"🚀 ${deployment_usd:,.0f}", key=f"deploy_levered_{strategy_idx}_{mode}", width="stretch"):
             # Store strategy details in session state for confirmation form
             st.session_state.pending_deployment = {
                 'strategy_row': strategy_row if isinstance(strategy_row, dict) else strategy_row.to_dict(),
@@ -237,7 +237,7 @@ def display_apr_table(strategy_row: Union[pd.Series, Dict[str, Any]], deployment
             st.rerun()
 
         # Deploy button for unlevered strategy
-        if st.button(f"🚀 ${deployment_usd:,.0f}", key=f"deploy_unlevered_{strategy_idx}_{mode}", use_container_width=True):
+        if st.button(f"🚀 ${deployment_usd:,.0f}", key=f"deploy_unlevered_{strategy_idx}_{mode}", width="stretch"):
             # Store strategy details in session state for confirmation form
             st.session_state.pending_deployment = {
                 'strategy_row': strategy_row if isinstance(strategy_row, dict) else strategy_row.to_dict(),
@@ -460,7 +460,7 @@ def render_all_strategies_tab(all_results: pd.DataFrame, mode: str, deployment_u
     """
     if not all_results.empty:
         # Display with expanders
-        for enum_idx, (idx, row) in enumerate(all_results.iterrows()):
+        for _enum_idx, (idx, row) in enumerate(all_results.iterrows()):
             # Chart data key - include mode to avoid collisions
             chart_key = f"chart_{mode}_{idx}"
 
@@ -497,7 +497,7 @@ def render_all_strategies_tab(all_results: pd.DataFrame, mode: str, deployment_u
             with st.expander(title, expanded=is_expanded):
                 # 1. Display APR comparison table at the top with deploy buttons
                 fee_caption, warning_message = display_apr_table(
-                    row, deployment_usd, liquidation_distance, enum_idx, mode, historical_timestamp
+                    row, deployment_usd, liquidation_distance, idx, mode, historical_timestamp
                 )
 
                 # 2. Display strategy details table right after
@@ -867,7 +867,7 @@ def render_zero_liquidity_tab(zero_liquidity_results: pd.DataFrame, deployment_u
         st.metric("Strategies Found", f"{len(zero_liquidity_results)}")
 
         # Display with expanders (no historical charts)
-        for enum_idx, (idx, row) in enumerate(zero_liquidity_results.iterrows()):
+        for _enum_idx, (idx, row) in enumerate(zero_liquidity_results.iterrows()):
             max_size = row.get('max_size')
             if max_size is not None and not pd.isna(max_size):
                 max_size_text = f" | Max Size ${max_size:,.2f}"
@@ -896,7 +896,7 @@ def render_zero_liquidity_tab(zero_liquidity_results: pd.DataFrame, deployment_u
                 expanded=False
             ):
                 # Display APR comparison table
-                fee_caption, warning_message = display_apr_table(row, deployment_usd, 0.2, enum_idx, mode, historical_timestamp)
+                fee_caption, warning_message = display_apr_table(row, deployment_usd, 0.2, idx, mode, historical_timestamp)
 
                 # Display strategy details
                 max_size_msg, liquidity_msg = display_strategy_details(row, use_unlevered)
@@ -929,7 +929,7 @@ def render_data_controls(data_loader: DataLoader, mode: str):
     if mode == 'live':
         st.header("📊 Live Data")
 
-        if st.button("🔄 Refresh Data", use_container_width=True):
+        if st.button("🔄 Refresh Data", width="stretch"):
             st.cache_data.clear()
             st.rerun()
 
