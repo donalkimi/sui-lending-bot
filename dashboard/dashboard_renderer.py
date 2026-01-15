@@ -116,15 +116,18 @@ def render_deployment_form(mode: str):
                 else:
                     entry_timestamp = datetime.now()
 
+                # Add timestamp to strategy dict
+                strategy_dict = strategy.copy()
+                strategy_dict['timestamp'] = entry_timestamp
+
                 # Create position
                 position_id = service.create_position(
-                    strategy_row=pd.Series(strategy),
+                    strategy_row=pd.Series(strategy_dict),
                     deployment_usd=deployment_usd,
                     liquidation_distance=liquidation_distance,
                     is_levered=is_levered,
                     notes=notes,
-                    is_paper_trade=True,
-                    entry_timestamp=entry_timestamp
+                    is_paper_trade=True
                 )
 
                 conn.close()
