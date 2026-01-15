@@ -50,13 +50,12 @@ def get_latest_timestamp(conn: Optional[Any] = None) -> Optional[str]:
             conn.close()
 
 
-def get_available_timestamps(conn: Optional[Any] = None, limit: int = 100) -> List[str]:
+def get_available_timestamps(conn: Optional[Any] = None) -> List[str]:
     """
-    Get list of all available snapshot timestamps (for Phase 5 picker)
+    Get list of ALL available snapshot timestamps (for unified dashboard picker)
 
     Args:
         conn: Database connection (will create if None)
-        limit: Max timestamps to return (default 100)
 
     Returns:
         List of timestamp strings in descending order (newest first)
@@ -68,7 +67,7 @@ def get_available_timestamps(conn: Optional[Any] = None, limit: int = 100) -> Li
         should_close = False
 
     try:
-        query = f"SELECT DISTINCT timestamp FROM rates_snapshot ORDER BY timestamp DESC LIMIT {limit}"
+        query = "SELECT DISTINCT timestamp FROM rates_snapshot ORDER BY timestamp DESC"
         df = pd.read_sql_query(query, conn)
         # Return timestamps as strings to avoid precision issues
         return df['timestamp'].tolist()

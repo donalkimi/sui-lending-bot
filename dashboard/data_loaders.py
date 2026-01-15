@@ -42,49 +42,59 @@ class DataLoader(ABC):
         pass
 
 
-class LiveDataLoader(DataLoader):
-    """Loads live data from protocol APIs via refresh_pipeline()"""
+class UnifiedDataLoader(DataLoader):
+    """
+    Unified data loader that loads historical snapshots from the database.
 
-    def __init__(self):
-        self._timestamp = None
+    This loader is used for both "latest" and historical data - there is no distinction.
+    When user clicks "Get Live Data", refresh_pipeline() is called externally (in streamlit_app.py),
+    which creates a new snapshot in the database. This loader then loads that snapshot.
+    """
+
+    def __init__(self, timestamp: str):
+        """
+        Args:
+            timestamp: Timestamp string from database (REQUIRED, never None)
+        """
+        assert timestamp is not None, "timestamp must not be None - use explicit button to call refresh_pipeline()"
+
+        self._timestamp_str = timestamp
+        # Parse to datetime for display purposes
+        self._timestamp = pd.to_datetime(timestamp)
         self._data = None
 
     def load_data(self) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame,
                                    pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, datetime]:
-        """Fetch live data from protocol APIs"""
-        # Call refresh_pipeline with Slack notifications disabled (dashboard refreshes should be silent)
-        result = refresh_pipeline(send_slack_notifications=False)
+        """Load snapshot from database at the specified timestamp"""
+        result = load_historical_snapshot(self._timestamp_str)
 
-        if result is None:
-            raise ValueError("refresh_pipeline() returned None")
+        if result is None or len(result) != 8:
+            raise ValueError(f"load_historical_snapshot() did not return expected 8 DataFrames for timestamp {self._timestamp_str}")
 
-        # Extract data from RefreshResult dataclass
-        lend_rates = result.lend_rates
-        borrow_rates = result.borrow_rates
-        collateral_ratios = result.collateral_ratios
-        prices = result.prices
-        lend_rewards = result.lend_rewards
-        borrow_rewards = result.borrow_rewards
-        available_borrow = result.available_borrow
-        borrow_fees = result.borrow_fees
-
-        # Use timestamp from result
-        self._timestamp = result.timestamp
+        (lend_rates, borrow_rates, collateral_ratios, prices,
+         lend_rewards, borrow_rewards, available_borrow, borrow_fees) = result
 
         return (lend_rates, borrow_rates, collateral_ratios, prices,
                 lend_rewards, borrow_rewards, available_borrow, borrow_fees, self._timestamp)
 
     @property
     def timestamp(self) -> datetime:
-        return self._timestamp or datetime.now()
+        return self._timestamp
 
     @property
     def is_live(self) -> bool:
-        return True
+        # All data is now "historical" - even the latest timestamp
+        # Return True if this is the most recent snapshot for backward compatibility
+        # (This property will be removed in a later phase)
+        return False
 
 
 class HistoricalDataLoader(DataLoader):
-    """Loads historical data from rates_snapshot table via load_historical_snapshot()"""
+    """
+    DEPRECATED: Use UnifiedDataLoader instead.
+
+    Loads historical data from rates_snapshot table via load_historical_snapshot()
+    """
 
     def __init__(self, timestamp: str):
         """

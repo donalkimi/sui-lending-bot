@@ -1,8 +1,8 @@
 """
-Shared dashboard renderer for both live and historical modes
+Unified dashboard renderer for Sui Lending Bot
 
-This renderer works with any DataLoader (LiveDataLoader or HistoricalDataLoader)
-and provides mode-specific behavior via the 'mode' parameter.
+This renderer works with UnifiedDataLoader and displays strategies,
+positions, and rates in a tabbed interface for any timestamp.
 """
 
 import streamlit as st
@@ -57,16 +57,6 @@ def render_deployment_form(mode: str):
     # Display in a prominent container
     st.markdown("---")
     st.markdown("## 📄 PAPER TRADE - Position Deployment Confirmation")
-
-    # Mode-specific info message
-    if mode == 'historical':
-        hist_ts = deployment_data.get('historical_timestamp')
-        if hist_ts:
-            st.info(
-                f"📸 **Historical Deployment:** Creating position using market data from snapshot "
-                f"({hist_ts.strftime('%Y-%m-%d %H:%M UTC')}). "
-                f"All rates, prices, and fees are from this historical snapshot."
-            )
 
     # Strategy summary
     st.markdown("### Strategy Details")
@@ -153,19 +143,11 @@ def render_deployment_form(mode: str):
                 conn = get_db_connection()
                 service = PositionService(conn)
 
-                # Determine entry timestamp based on mode
-                if mode == 'historical':
-                    # Use historical timestamp from session state
-                    entry_timestamp = deployment_data.get('historical_timestamp', datetime.now())
-                else:
-                    # Use timestamp from strategy_row (when data was captured)
-                    entry_timestamp = strategy.get('timestamp', datetime.now())
+                # Use timestamp from strategy_row (when data was captured)
+                entry_timestamp = strategy.get('timestamp', datetime.now())
 
                 # Convert strategy to dict (already has timestamp from all_results)
                 strategy_dict = strategy.to_dict() if isinstance(strategy, pd.Series) else strategy.copy()
-                # Override timestamp for historical mode
-                if mode == 'historical':
-                    strategy_dict['timestamp'] = entry_timestamp
 
                 # Create position
                 position_id = service.create_position(
@@ -204,7 +186,7 @@ def render_deployment_form(mode: str):
 
 def display_apr_table(strategy_row: Union[pd.Series, Dict[str, Any]], deployment_usd: float,
                      liquidation_distance: float, strategy_idx: int, mode: str,
-                     historical_timestamp: Optional[datetime] = None) -> Tuple[str, Optional[str]]:
+                     timestamp: Optional[datetime] = None) -> Tuple[str, Optional[str]]:
     """
     Display compact APR comparison table with both levered and unlevered strategies
     with integrated deploy buttons
@@ -214,8 +196,8 @@ def display_apr_table(strategy_row: Union[pd.Series, Dict[str, Any]], deployment
         deployment_usd: Deployment amount in USD from sidebar
         liquidation_distance: Liquidation distance from sidebar
         strategy_idx: Unique identifier for the strategy (DataFrame index) for unique button keys
-        mode: 'live' or 'historical'
-        historical_timestamp: Timestamp for historical mode deployments
+        mode: 'unified' (kept for compatibility)
+        timestamp: Timestamp of the data being displayed
 
     Returns:
         tuple: (fee_caption, warning_message) - strings to display after other content
@@ -285,7 +267,7 @@ def display_apr_table(strategy_row: Union[pd.Series, Dict[str, Any]], deployment
                 'is_levered': True,
                 'deployment_usd': deployment_usd,
                 'liquidation_distance': liquidation_distance,
-                'historical_timestamp': historical_timestamp
+                'timestamp': timestamp
             }
             st.session_state.show_deploy_form = True
             st.session_state.skip_data_reload = True  # Skip data refresh when showing deploy form
@@ -299,7 +281,7 @@ def display_apr_table(strategy_row: Union[pd.Series, Dict[str, Any]], deployment
                 'is_levered': False,
                 'deployment_usd': deployment_usd,
                 'liquidation_distance': liquidation_distance,
-                'historical_timestamp': historical_timestamp
+                'timestamp': timestamp
             }
             st.session_state.show_deploy_form = True
             st.session_state.skip_data_reload = True  # Skip data refresh when showing deploy form
@@ -503,23 +485,23 @@ def load_historical_positions(timestamp: datetime) -> pd.DataFrame:
 
 def render_all_strategies_tab(all_results: pd.DataFrame, mode: str, deployment_usd: float,
                               liquidation_distance: float, use_unlevered: bool,
-                              historical_timestamp: Optional[datetime] = None):
+                              timestamp: Optional[datetime] = None):
     """
     Render the All Strategies tab
 
     Args:
         all_results: Filtered results DataFrame
-        mode: 'live' or 'historical'
+        mode: 'unified' (kept for compatibility)
         deployment_usd: Deployment amount
         liquidation_distance: Liquidation distance setting
         use_unlevered: Whether to show unlevered APR
-        historical_timestamp: Timestamp for historical mode
+        timestamp: Timestamp of the data being displayed (for chart caching)
     """
     if not all_results.empty:
         # Display with expanders
         for _enum_idx, (idx, row) in enumerate(all_results.iterrows()):
-            # Chart data key - include mode to avoid collisions
-            chart_key = f"chart_{mode}_{idx}"
+            # Chart data key - include timestamp to avoid collisions when switching timestamps
+            chart_key = f"chart_{timestamp}_{idx}"
 
             # Expander should be open if chart data exists for this strategy
             is_expanded = chart_key in st.session_state
@@ -554,7 +536,7 @@ def render_all_strategies_tab(all_results: pd.DataFrame, mode: str, deployment_u
             with st.expander(title, expanded=is_expanded):
                 # 1. Display APR comparison table at the top with deploy buttons
                 fee_caption, warning_message = display_apr_table(
-                    row, deployment_usd, liquidation_distance, idx, mode, historical_timestamp
+                    row, deployment_usd, liquidation_distance, idx, mode, timestamp
                 )
 
                 # 2. Display strategy details table right after
@@ -645,53 +627,45 @@ def render_positions_tab(timestamp: datetime, mode: str):
         conn = get_db_connection()
         service = PositionService(conn)
 
-        if mode == 'live':
-            # Get active positions for live mode
-            active_positions = service.get_active_positions()
+        # Always get active positions (unified mode)
+        active_positions = service.get_active_positions()
 
-            # Get portfolio summary
-            summary = service.get_portfolio_summary()
+        # Get portfolio summary
+        summary = service.get_portfolio_summary()
 
-            # Display portfolio summary
-            st.markdown("### 📊 Portfolio Summary (PAPER TRADING)")
-            col1, col2, col3, col4 = st.columns(4)
-            col1.metric("Total Capital", f"${summary['total_capital']:,.2f}", help="Hypothetical deployed capital")
-            col2.metric("Avg APR", f"{summary['avg_apr']:.2f}%", help="Weighted average APR")
-            col3.metric("Total Earned", f"${summary['total_earned']:,.2f}", help="Hypothetical earnings")
-            col4.metric("Active Positions", f"{summary['position_count']}", help="Number of active positions")
+        # Display portfolio summary
+        st.markdown("### 📊 Portfolio Summary (PAPER TRADING)")
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Total Capital", f"${summary['total_capital']:,.2f}", help="Hypothetical deployed capital")
+        col2.metric("Avg APR", f"{summary['avg_apr']:.2f}%", help="Weighted average APR")
+        col3.metric("Total Earned", f"${summary['total_earned']:,.2f}", help="Hypothetical earnings")
+        col4.metric("Active Positions", f"{summary['position_count']}", help="Number of active positions")
 
-            st.markdown("---")
+        st.markdown("---")
 
-            # Global snapshot button
-            col1, col2 = st.columns([4, 1])
-            with col1:
-                st.markdown("### 📄 Active Positions")
-            with col2:
-                if st.button("📸 Snapshot All", key="snapshot_all_positions", help="Create snapshots for all active positions"):
-                    if len(active_positions) == 0:
-                        st.warning("No active positions to snapshot")
-                    else:
-                        with st.spinner(f"Creating snapshots for {len(active_positions)} position(s)..."):
-                            results = service.create_snapshots_for_all_positions()
+        # Global snapshot button
+        col1, col2 = st.columns([4, 1])
+        with col1:
+            st.markdown("### 📄 Active Positions")
+        with col2:
+            if st.button("📸 Snapshot All", key="snapshot_all_positions", help="Create snapshots for all active positions"):
+                if len(active_positions) == 0:
+                    st.warning("No active positions to snapshot")
+                else:
+                    with st.spinner(f"Creating snapshots for {len(active_positions)} position(s)..."):
+                        results = service.create_snapshots_for_all_positions()
 
-                            if results['success_count'] > 0:
-                                st.success(f"✅ Created {results['success_count']} snapshot(s)")
-                            if results['error_count'] > 0:
-                                st.warning(f"⚠️ {results['error_count']} snapshot(s) failed")
-                                for error in results['errors']:
-                                    st.error(f"Position {error['position_id'][:8]}: {error['error_message']}")
+                        if results['success_count'] > 0:
+                            st.success(f"✅ Created {results['success_count']} snapshot(s)")
+                        if results['error_count'] > 0:
+                            st.warning(f"⚠️ {results['error_count']} snapshot(s) failed")
+                            for error in results['errors']:
+                                st.error(f"Position {error['position_id'][:8]}: {error['error_message']}")
 
-                            st.rerun()
-
-        else:  # historical
-            st.info(f"💡 **Historical view:** Showing positions active at {timestamp.strftime('%Y-%m-%d %H:%M UTC')}")
-            active_positions = load_historical_positions(timestamp)
+                        st.rerun()
 
         if active_positions.empty:
-            if mode == 'live':
-                st.info("📭 No active positions. Deploy a strategy from the All Strategies tab to get started!")
-            else:
-                st.info("📭 No positions were active at this timestamp.")
+            st.info("📭 No active positions. Deploy a strategy from the All Strategies tab to get started!")
         else:
             # Display each position
             for _, position in active_positions.iterrows():
@@ -714,10 +688,6 @@ def render_positions_tab(timestamp: datetime, mode: str):
 
                 # Card title with key metrics
                 with st.expander(f"📄 PAPER | {token_flow} | {position['protocol_A']} ↔ {position['protocol_B']} | Entry APR: {position['entry_net_apr']*100:.2f}% | PnL: ${total_pnl:.2f} ({pnl_pct:+.2f}%)"):
-                    # Mode-specific info
-                    if mode == 'historical':
-                        st.info("💡 Historical view - current position status may differ from live data")
-
                     # Entry details
                     st.markdown("#### Entry Details")
                     col1, col2, col3, col4 = st.columns(4)
@@ -830,15 +800,13 @@ def render_positions_tab(timestamp: datetime, mode: str):
                     # Actions (mode-specific)
                     st.markdown("#### Actions")
 
-                    if mode == 'live':
-                        col1, col2 = st.columns([1, 5])
-                        with col1:
-                            if st.button("❌ Close", key=f"close_{position['position_id']}"):
-                                service.close_position(position['position_id'], reason='manual', notes='Closed from dashboard')
-                                st.success("Position closed!")
-                                st.rerun()
-                    else:
-                        st.info("💡 Position close button disabled in historical mode")
+                    # Close position button (always available for active positions)
+                    col1, col2 = st.columns([1, 5])
+                    with col1:
+                        if st.button("❌ Close", key=f"close_{position['position_id']}"):
+                            service.close_position(position['position_id'], reason='manual', notes='Closed from dashboard')
+                            st.success("Position closed!")
+                            st.rerun()
 
                     if position.get('notes'):
                         st.markdown(f"**Notes:** {position['notes']}")
@@ -905,7 +873,7 @@ def render_rate_tables_tab(lend_rates: pd.DataFrame, borrow_rates: pd.DataFrame,
 
 def render_zero_liquidity_tab(zero_liquidity_results: pd.DataFrame, deployment_usd: float,
                               use_unlevered: bool, mode: str,
-                              historical_timestamp: Optional[datetime] = None):
+                              timestamp: Optional[datetime] = None):
     """
     Render the Zero Liquidity tab
 
@@ -913,8 +881,8 @@ def render_zero_liquidity_tab(zero_liquidity_results: pd.DataFrame, deployment_u
         zero_liquidity_results: Strategies with insufficient liquidity
         deployment_usd: Deployment amount threshold
         use_unlevered: Whether to show unlevered APR
-        mode: 'live' or 'historical'
-        historical_timestamp: Timestamp for historical mode
+        mode: 'unified' (kept for compatibility)
+        timestamp: Timestamp of the data being displayed
     """
     st.header("⚠️ Zero Liquidity Strategies")
 
@@ -953,7 +921,7 @@ def render_zero_liquidity_tab(zero_liquidity_results: pd.DataFrame, deployment_u
                 expanded=False
             ):
                 # Display APR comparison table
-                fee_caption, warning_message = display_apr_table(row, deployment_usd, 0.2, idx, mode, historical_timestamp)
+                fee_caption, warning_message = display_apr_table(row, deployment_usd, 0.2, idx, mode, timestamp)
 
                 # Display strategy details
                 max_size_msg, liquidity_msg = display_strategy_details(row, use_unlevered, deployment_usd)
@@ -1125,11 +1093,11 @@ def render_sidebar_filters(display_results: pd.DataFrame):
 
 def render_dashboard(data_loader: DataLoader, mode: str):
     """
-    Main dashboard renderer - works for both live and historical modes
+    Main dashboard renderer - unified mode for all timestamps
 
     Args:
-        data_loader: DataLoader instance (LiveDataLoader or HistoricalDataLoader)
-        mode: 'live' or 'historical'
+        data_loader: DataLoader instance (UnifiedDataLoader)
+        mode: 'unified' (kept for backward compatibility, no longer used for branching logic)
     """
     # Custom CSS
     st.markdown("""
@@ -1158,10 +1126,7 @@ def render_dashboard(data_loader: DataLoader, mode: str):
 
     # === SIDEBAR ===
     with st.sidebar:
-        # Data controls (refresh button or timestamp info)
-        render_data_controls(data_loader, mode)
-
-        st.divider()
+        # Data controls now handled in streamlit_app.py
 
         # Placeholder for filters (will populate after data load)
         filter_placeholder = st.container()
@@ -1169,10 +1134,7 @@ def render_dashboard(data_loader: DataLoader, mode: str):
         st.markdown("---")
 
         st.subheader("📊 Data Source")
-        if mode == 'live':
-            st.info(f"Live data from {len(['Navi', 'AlphaFi', 'Suilend'])} protocols")
-        else:
-            st.info("Historical snapshot from database")
+        st.info("Historical snapshot from database (use 'Get Live Data' button to refresh)")
 
         st.caption(f"Last updated: {datetime.now().strftime('%H:%M:%S')}")
 
@@ -1193,27 +1155,30 @@ def render_dashboard(data_loader: DataLoader, mode: str):
         (liquidation_distance, deployment_usd, force_usdc_start, force_token3_equals_token1,
          stablecoin_only, use_unlevered, min_apr, token_filter, protocol_filter) = render_sidebar_filters(empty_df)
 
-    # === RUN ANALYSIS ===
-    # Check if we should skip analysis (when showing deploy form with cached data)
-    skip_analysis = st.session_state.get('skip_analysis', False)
+    # === RUN ANALYSIS WITH SMART CACHING ===
+    # Initialize analysis cache if not exists
+    if 'analysis_cache' not in st.session_state:
+        st.session_state.analysis_cache = {}
 
     # Create cache key based on timestamp and liquidation distance
     cache_key = f"{timestamp}_{liquidation_distance}"
 
-    # First, check if we have analysis results from refresh_pipeline (most recent)
-    if 'pipeline_analysis_results' in st.session_state:
-        # Use analysis results from refresh_pipeline (already computed, no need to re-run)
+    # Check if we have cached results for this exact combination
+    if cache_key in st.session_state.analysis_cache:
+        # Use cached analysis results (instant load)
+        protocol_A, protocol_B, all_results = st.session_state.analysis_cache[cache_key]
+        st.sidebar.caption("✅ Using cached analysis")
+    elif 'pipeline_analysis_results' in st.session_state:
+        # Use analysis results from refresh_pipeline (already computed during refresh)
         protocol_A, protocol_B, all_results = st.session_state.pipeline_analysis_results
-        # Also cache for skip_reload scenario
-        st.session_state.last_analysis_results = (protocol_A, protocol_B, all_results)
-        st.session_state.last_analysis_cache_key = cache_key
-    elif skip_analysis and 'last_analysis_results' in st.session_state:
-        # Use cached analysis results (skips expensive analyze_all_combinations)
-        protocol_A, protocol_B, all_results = st.session_state.last_analysis_results
-        # Clear the skip flag after using it
-        st.session_state.skip_analysis = False
+        # Cache these results
+        st.session_state.analysis_cache[cache_key] = (protocol_A, protocol_B, all_results)
+        # Clear pipeline results after using once
+        del st.session_state.pipeline_analysis_results
+        st.sidebar.caption("⚡ Used fresh analysis from refresh_pipeline")
     else:
-        # Run analysis (this is the expensive operation) - only if we don't have results
+        # Run analysis (expensive operation)
+        st.sidebar.caption("⏳ Running strategy analysis...")
         analyzer = RateAnalyzer(
             lend_rates=lend_rates,
             borrow_rates=borrow_rates,
@@ -1228,9 +1193,8 @@ def render_dashboard(data_loader: DataLoader, mode: str):
 
         protocol_A, protocol_B, all_results = analyzer.find_best_protocol_pair()
 
-        # Cache the results for potential skip_reload use
-        st.session_state.last_analysis_results = (protocol_A, protocol_B, all_results)
-        st.session_state.last_analysis_cache_key = cache_key
+        # Cache the results for future use
+        st.session_state.analysis_cache[cache_key] = (protocol_A, protocol_B, all_results)
 
     # Apply filters
     filtered_results = all_results.copy()

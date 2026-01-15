@@ -13,7 +13,7 @@ ALERT_RATE_SPREAD_THRESHOLD = 2.0  # Alert when spread > 2%
 ALERT_NET_APR_THRESHOLD = 5.0  # Alert when net APR > 5%
 
 # Scheduler Configuration
-CHECK_INTERVAL_MINUTES = 15  # Scheduler runs at :00, :15, :30, :45 of every hour
+CHECK_INTERVAL_MINUTES = 15  # Daytime: 15min (8am-6pm), Nighttime: 2hr (6pm-8am)
 
 # Dashboard Configuration
 DASHBOARD_PORT = 8501
