@@ -87,10 +87,13 @@ class RateTracker:
             
             # Commit
             conn.commit()
-            
+
             print(f"✅ Saved snapshot: {rows_saved} rate rows, {reward_rows} reward price rows")
             print(f"   Timestamp: {timestamp.strftime('%Y-%m-%d %H:%M:%S UTC')}")
-            
+
+            # Validate snapshot quality
+            self._validate_snapshot_quality(conn, timestamp, rows_saved)
+
         except Exception as e:
             conn.rollback()
             print(f"❌ Error saving snapshot: {e}")
@@ -453,5 +456,91 @@ class RateTracker:
             if close_conn:
                 conn.close()
 
+    # ---------------------------------------------------------------------
+    # Data Quality Validation
+    # ---------------------------------------------------------------------
+    def _validate_snapshot_quality(self, conn, timestamp: datetime, rows_saved: int) -> None:
+        """
+        Validate snapshot data quality and send alerts if quality is low.
 
-    
+        Args:
+            conn: Database connection
+            timestamp: Timestamp of the snapshot
+            rows_saved: Number of rows saved in this snapshot
+        """
+        # Thresholds
+        MIN_ROW_COUNT = 20  # Normal snapshots have ~47 rows
+        MIN_PROTOCOL_COUNT = 2  # Need at least 2 protocols for cross-protocol strategies
+
+        # Count protocols in current snapshot
+        protocol_count = self._count_protocols_in_snapshot(conn, timestamp)
+
+        # Check if data quality is low
+        if rows_saved < MIN_ROW_COUNT or protocol_count <= MIN_PROTOCOL_COUNT:
+            warning_msg = (
+                f"⚠️ Low data quality detected:\n"
+                f"  - Rows saved: {rows_saved} (expected ~47)\n"
+                f"  - Protocols: {protocol_count} (expected 3)\n"
+                f"  - Timestamp: {timestamp.strftime('%Y-%m-%d %H:%M:%S UTC')}"
+            )
+            print(warning_msg)
+
+            # Send Slack alert
+            try:
+                from alerts.slack_notifier import SlackNotifier
+                notifier = SlackNotifier()
+
+                # Build message for Slack Workflow
+                variables = {
+                    "title": "⚠️ Data Quality Warning",
+                    "rows_saved": str(rows_saved),
+                    "expected_rows": "47",
+                    "protocols": str(protocol_count),
+                    "expected_protocols": "3",
+                    "timestamp": timestamp.strftime('%Y-%m-%d %H:%M:%S UTC')
+                }
+
+                # For classic webhooks, build a message
+                message = (
+                    f"⚠️ Data Quality Warning\n\n"
+                    f"Low data quality detected in snapshot:\n"
+                    f"• Rows saved: {rows_saved} (expected ~47)\n"
+                    f"• Protocols: {protocol_count} (expected 3)\n"
+                    f"• Timestamp: {timestamp.strftime('%Y-%m-%d %H:%M:%S UTC')}\n\n"
+                    f"This may indicate protocol API failures or chain downtime."
+                )
+
+                notifier.send_message(message, variables=variables)
+
+            except Exception as e:
+                print(f"Failed to send Slack alert: {e}")
+
+    def _count_protocols_in_snapshot(self, conn, timestamp: datetime) -> int:
+        """
+        Count distinct protocols in a specific snapshot
+
+        Args:
+            conn: Database connection
+            timestamp: Timestamp to check
+
+        Returns:
+            Number of distinct protocols
+        """
+        cur = conn.cursor()
+
+        if self.db_type == 'postgresql':
+            cur.execute(
+                "SELECT COUNT(DISTINCT protocol) FROM rates_snapshot WHERE timestamp = %s",
+                (timestamp,)
+            )
+        else:
+            cur.execute(
+                "SELECT COUNT(DISTINCT protocol) FROM rates_snapshot WHERE timestamp = ?",
+                (timestamp,)
+            )
+
+        result = cur.fetchone()
+        return int(result[0]) if result else 0
+
+
+
