@@ -402,11 +402,11 @@ def calculate_net_apr_history(raw_df: pd.DataFrame, token1_contract: str, token2
         cost_A = B_A * borrow_2A
         cost_B = B_B * borrow_3B
 
-        # Calculate base APR
-        base_apr = (earn_A + earn_B - cost_A - cost_B) * 100
+        # Calculate base APR (as decimal)
+        base_apr = earn_A + earn_B - cost_A - cost_B
 
-        # Subtract annualized fee cost to get Net APR
-        total_fee_cost = (B_A * borrow_fee_2A + B_B * borrow_fee_3B) * 100
+        # Subtract annualized fee cost to get Net APR (as decimal)
+        total_fee_cost = B_A * borrow_fee_2A + B_B * borrow_fee_3B
         net_apr = base_apr - total_fee_cost
 
         results.append({
@@ -440,6 +440,9 @@ def create_strategy_history_chart(df: pd.DataFrame, token1: str, token2: str, to
     df_display = df.copy()
     df_display['timestamp_display'] = df_display['timestamp'].apply(to_datetime_str)
 
+    # Convert APR from decimal to percentage for display
+    df_display['net_apr_pct'] = df_display['net_apr'] * 100
+
     fig = go.Figure()
 
     # Calculate axis ranges with padding
@@ -448,8 +451,8 @@ def create_strategy_history_chart(df: pd.DataFrame, token1: str, token2: str, to
     price_padding = (price_max - price_min) * 0.1 if price_max > price_min else price_min * 0.1
     price_range = [price_min - price_padding, price_max + price_padding]
 
-    apr_min = df['net_apr'].min()
-    apr_max = df['net_apr'].max()
+    apr_min = df_display['net_apr_pct'].min()
+    apr_max = df_display['net_apr_pct'].max()
     apr_padding = (apr_max - apr_min) * 0.1 if apr_max > apr_min else 1.0
     apr_range = [apr_min - apr_padding, apr_max + apr_padding]
 
@@ -466,11 +469,11 @@ def create_strategy_history_chart(df: pd.DataFrame, token1: str, token2: str, to
     ))
 
     # Net APR (primary, right axis)
-    apr_color = 'green' if df_display['net_apr'].iloc[-1] > 0 else 'red'
+    apr_color = 'green' if df_display['net_apr_pct'].iloc[-1] > 0 else 'red'
 
     fig.add_trace(go.Scatter(
         x=df_display['timestamp_display'],
-        y=df_display['net_apr'],
+        y=df_display['net_apr_pct'],
         name='Net APR (%)',
         yaxis='y2',
         mode='lines+markers',

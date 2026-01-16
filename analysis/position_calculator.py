@@ -103,13 +103,13 @@ class PositionCalculator:
         # Earnings from lending
         earn_A = L_A * lend_rate_token1_A
         earn_B = L_B * lend_rate_token2_B
-        
+
         # Costs from borrowing
         cost_A = B_A * borrow_rate_token2_A
         cost_B = B_B * borrow_rate_token1_B
-        
-        # Net APR
-        net_apr = (earn_A + earn_B - cost_A - cost_B) * 100  # Convert to percentage
+
+        # Net APR (as decimal)
+        net_apr = earn_A + earn_B - cost_A - cost_B
 
         return net_apr
 
@@ -153,8 +153,8 @@ class PositionCalculator:
         earn_B = L_B * lend_rate_token2_B
         cost_A = B_A * borrow_rate_token2_A
 
-        # Unlevered APR (no borrowing cost from Protocol B)
-        unlevered_apr = (earn_A + earn_B - cost_A) * 100  # Convert to percentage
+        # Unlevered APR (no borrowing cost from Protocol B, as decimal)
+        unlevered_apr = earn_A + earn_B - cost_A
 
         return unlevered_apr
 
@@ -171,7 +171,7 @@ class PositionCalculator:
         Calculate time-adjusted APR for a given holding period
 
         Args:
-            net_apr: Base APR without fees (%)
+            net_apr: Base APR without fees (decimal)
             B_A: Borrow amount from Protocol A (position multiplier)
             B_B: Borrow amount from Protocol B (position multiplier)
             borrow_fee_2A: Borrow fee for token2 from Protocol A (decimal, e.g., 0.0030)
@@ -179,16 +179,16 @@ class PositionCalculator:
             days: Holding period in days
 
         Returns:
-            Time-adjusted APR accounting for upfront fees (%)
+            Time-adjusted APR accounting for upfront fees (decimal)
 
         Formula:
-            APRx = net_apr - [(B_A × f_2A + B_B × f_3B) × 365 / days] × 100%
+            APRx = net_apr - (B_A × f_2A + B_B × f_3B) × 365 / days
         """
         # Total fee cost (decimal)
         total_fee_cost = B_A * borrow_fee_2A + B_B * borrow_fee_3B
 
-        # Time-adjusted fee impact (percentage)
-        fee_impact = (total_fee_cost * 365 / days) * 100
+        # Time-adjusted fee impact (annualized, as decimal)
+        fee_impact = total_fee_cost * 365 / days
 
         return net_apr - fee_impact
 
@@ -203,19 +203,19 @@ class PositionCalculator:
         Calculate fee-adjusted APR metrics for multiple time horizons
 
         Args:
-            net_apr: Base APR without fees (%)
+            net_apr: Base APR without fees (decimal)
             positions: Dict with L_A, B_A, L_B, B_B
             borrow_fee_2A: Borrow fee for token2 from Protocol A (decimal, e.g., 0.0030)
             borrow_fee_3B: Borrow fee for token3 from Protocol B (decimal, e.g., 0.0030)
 
         Returns:
-            Dictionary with apr_net, apr5, apr30, apr90
+            Dictionary with apr_net, apr5, apr30, apr90 (all as decimals)
         """
         B_A = positions['B_A']
         B_B = positions['B_B']
 
-        # Total annualized fee cost (percentage)
-        total_fee_cost = (B_A * borrow_fee_2A + B_B * borrow_fee_3B) * 100
+        # Total annualized fee cost (decimal)
+        total_fee_cost = B_A * borrow_fee_2A + B_B * borrow_fee_3B
 
         # APR(net) = APR - annualized fees (equivalent to 365-day APR)
         apr_net = net_apr - total_fee_cost
@@ -343,21 +343,21 @@ class PositionCalculator:
                 'token3': token3,  # NEW: Track closing stablecoin
                 'protocol_A': protocol_A,
                 'protocol_B': protocol_B,
-                'net_apr': net_apr,
-                'unlevered_apr': unlevered_apr,  # NEW: APR without the loop
-                'apr_net': fee_adjusted_aprs['apr_net'],  # APR minus annualized fees
-                'apr5': fee_adjusted_aprs['apr5'],  # 5-day time-adjusted APR
-                'apr30': fee_adjusted_aprs['apr30'],  # 30-day time-adjusted APR
-                'apr90': fee_adjusted_aprs['apr90'],  # 90-day time-adjusted APR
-                'liquidation_distance': positions['liquidation_distance'] * 100,  # Convert to percentage
+                'net_apr': net_apr,  # As decimal
+                'unlevered_apr': unlevered_apr,  # As decimal
+                'apr_net': fee_adjusted_aprs['apr_net'],  # As decimal
+                'apr5': fee_adjusted_aprs['apr5'],  # As decimal
+                'apr30': fee_adjusted_aprs['apr30'],  # As decimal
+                'apr90': fee_adjusted_aprs['apr90'],  # As decimal
+                'liquidation_distance': positions['liquidation_distance'],  # As decimal
                 'L_A': positions['L_A'],
                 'B_A': positions['B_A'],
                 'L_B': positions['L_B'],
                 'B_B': positions['B_B'],
-                'lend_rate_1A': lend_rate_token1_A * 100,
-                'borrow_rate_2A': borrow_rate_token2_A * 100,
-                'lend_rate_2B': lend_rate_token2_B * 100,
-                'borrow_rate_3B': borrow_rate_token3_B * 100,  # Changed: token3 borrow rate,
+                'lend_rate_1A': lend_rate_token1_A,  # As decimal
+                'borrow_rate_2A': borrow_rate_token2_A,  # As decimal
+                'lend_rate_2B': lend_rate_token2_B,  # As decimal
+                'borrow_rate_3B': borrow_rate_token3_B,  # As decimal
                 'P1_A': price_token1_A,
                 'P2_A': price_token2_A,
                 'P2_B': price_token2_B,
@@ -463,6 +463,6 @@ if __name__ == "__main__":
     print(f"  B_A ({token2} borrowed from {protocol_A}): ${result['B_A']:.4f} = {result['T2_A']:.2f} {token2} @ ${result['P2_A']:.4f}")
     print(f"  L_B ({token2} lent in {protocol_B}):  ${result['L_B']:.4f} = {result['T2_B']:.2f} {token2} @ ${result['P2_B']:.4f}")
     print(f"  B_B ({token3} borrowed from {protocol_B}): ${result['B_B']:.4f} = {result['T3_B']:.2f} {token3} @ ${result['P3_B']:.4f}")
-    print(f"  Liquidation Distance: {result['liquidation_distance']:.0f}%")
-    
-    print(f"\nNet APR: {result['net_apr']:.2f}%")
+    print(f"  Liquidation Distance: {result['liquidation_distance'] * 100:.0f}%")
+
+    print(f"\nNet APR: {result['net_apr'] * 100:.2f}%")

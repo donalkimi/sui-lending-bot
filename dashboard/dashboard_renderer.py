@@ -76,10 +76,10 @@ def render_deployment_form(mode: str):
     apr_data = {
         'Timeframe': ['Net APR', 'APR5', 'APR30', 'APR90'],
         'Value': [
-            f"{strategy.get('apr_net' if is_levered else 'unlevered_apr', strategy['net_apr']):.2f}%",
-            f"{strategy.get('apr5', strategy['net_apr']):.2f}%",
-            f"{strategy.get('apr30', strategy['net_apr']):.2f}%",
-            f"{strategy.get('apr90', strategy['net_apr']):.2f}%"
+            f"{strategy.get('apr_net' if is_levered else 'unlevered_apr', strategy['net_apr']) * 100:.2f}%",
+            f"{strategy.get('apr5', strategy['net_apr']) * 100:.2f}%",
+            f"{strategy.get('apr30', strategy['net_apr']) * 100:.2f}%",
+            f"{strategy.get('apr90', strategy['net_apr']) * 100:.2f}%"
         ]
     }
     st.table(pd.DataFrame(apr_data))
@@ -112,11 +112,11 @@ def render_deployment_form(mode: str):
         # Add horizontal line for current net APR
         current_apr = strategy.get('apr_net' if is_levered else 'unlevered_apr', strategy['net_apr'])
         fig.add_hline(
-            y=current_apr,
+            y=current_apr * 100,  # Chart expects percentage
             line_dash="dash",
             line_color="orange",
             line_width=2,
-            annotation_text=f"Current: {current_apr:.2f}%",
+            annotation_text=f"Current: {current_apr * 100:.2f}%",
             annotation_position="right"
         )
 
@@ -236,10 +236,10 @@ def display_apr_table(strategy_row: Union[pd.Series, Dict[str, Any]], deployment
     # Build two-row table with Strategy column first
     apr_table_data = {
         'Strategy': [row_name_levered, row_name_unlevered],
-        'APR(net)': [f"{apr_net_levered:.2f}%", f"{apr_net_unlevered:.2f}%"],
-        'APR5': [f"{apr5_levered:.2f}%", f"{apr5_unlevered:.2f}%"],
-        'APR30': [f"{apr30_levered:.2f}%", f"{apr30_unlevered:.2f}%"],
-        'APR90': [f"{apr90_levered:.2f}%", f"{apr90_unlevered:.2f}%"]
+        'APR(net)': [f"{apr_net_levered * 100:.2f}%", f"{apr_net_unlevered * 100:.2f}%"],
+        'APR5': [f"{apr5_levered * 100:.2f}%", f"{apr5_unlevered * 100:.2f}%"],
+        'APR30': [f"{apr30_levered * 100:.2f}%", f"{apr30_unlevered * 100:.2f}%"],
+        'APR90': [f"{apr90_levered * 100:.2f}%", f"{apr90_unlevered * 100:.2f}%"]
     }
 
     apr_df = pd.DataFrame(apr_table_data)
@@ -434,57 +434,6 @@ def display_strategy_details(strategy_row: Union[pd.Series, Dict[str, Any]], use
     return max_size_message, liquidity_constraints_message
 
 
-def load_historical_positions(timestamp: datetime) -> pd.DataFrame:
-    """
-    Load positions that were active at given timestamp
-
-    Args:
-        timestamp: Historical timestamp
-
-    Returns:
-        DataFrame of positions with snapshot data
-    """
-    conn = get_db_connection()
-    service = PositionService(conn)
-
-    ph = '%s' if settings.USE_CLOUD_DB else '?'
-
-    query = f"""
-    SELECT
-        p.*,
-        ps.total_pnl,
-        ps.pnl_base_apr,
-        ps.pnl_reward_apr,
-        ps.pnl_price_leg1,
-        ps.pnl_price_leg2,
-        ps.pnl_price_leg3,
-        ps.pnl_price_leg4,
-        ps.pnl_fees,
-        ps.health_factor_1A_calc,
-        ps.health_factor_2B_calc,
-        ps.distance_to_liq_1A_calc,
-        ps.distance_to_liq_2B_calc
-    FROM positions p
-    LEFT JOIN position_snapshots ps
-        ON p.position_id = ps.position_id
-        AND ps.snapshot_timestamp = {ph}
-    WHERE p.entry_timestamp <= {ph}
-        AND (p.close_timestamp IS NULL OR p.close_timestamp >= {ph})
-    ORDER BY p.entry_timestamp DESC
-    """
-
-    if settings.USE_CLOUD_DB:
-        import psycopg2
-        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cursor.execute(query, (timestamp, timestamp, timestamp))
-        rows = cursor.fetchall()
-        df = pd.DataFrame(rows)
-    else:
-        import sqlite3
-        df = pd.read_sql_query(query, conn, params=(timestamp, timestamp, timestamp))
-
-    conn.close()
-    return df
 
 
 # ============================================================================
@@ -539,7 +488,7 @@ def render_all_strategies_tab(all_results: pd.DataFrame, mode: str, deployment_u
             net_apr_indicator = "🟢" if net_apr_value >= 0 else "🔴"
             apr5_indicator = "🟢" if apr5_value >= 0 else "🔴"
 
-            title = f"▶ {token_flow} | {row['protocol_A']} ↔ {row['protocol_B']}{max_size_text} | {net_apr_indicator} Net APR {net_apr_value:.2f}% | {apr5_indicator} 5day APR {apr5_value:.2f}%"
+            title = f"▶ {token_flow} | {row['protocol_A']} ↔ {row['protocol_B']}{max_size_text} | {net_apr_indicator} Net APR {net_apr_value * 100:.2f}% | {apr5_indicator} 5day APR {apr5_value * 100:.2f}%"
 
             with st.expander(title, expanded=is_expanded):
                 # 1. Display APR comparison table at the top with deploy buttons
@@ -596,10 +545,10 @@ def render_all_strategies_tab(all_results: pd.DataFrame, mode: str, deployment_u
 
                         # Summary metrics
                         col1, col2, col3, col4 = st.columns(4)
-                        col1.metric("Current Net APR", f"{get_apr_value(row, use_unlevered):.2f}%")
-                        col2.metric("Avg Net APR", f"{history_df['net_apr'].mean():.2f}%")
-                        col3.metric("Max Net APR", f"{history_df['net_apr'].max():.2f}%")
-                        col4.metric("Min Net APR", f"{history_df['net_apr'].min():.2f}%")
+                        col1.metric("Current Net APR", f"{get_apr_value(row, use_unlevered) * 100:.2f}%")
+                        col2.metric("Avg Net APR", f"{history_df['net_apr'].mean() * 100:.2f}%")
+                        col3.metric("Max Net APR", f"{history_df['net_apr'].max() * 100:.2f}%")
+                        col4.metric("Min Net APR", f"{history_df['net_apr'].min() * 100:.2f}%")
 
                         st.markdown("---")
                     else:
@@ -619,216 +568,6 @@ def render_all_strategies_tab(all_results: pd.DataFrame, mode: str, deployment_u
         st.warning("⚠️ No strategies found with current filters")
 
 
-def render_positions_tab(timestamp: datetime, mode: str):
-    """
-    Render the Positions tab
-
-    Args:
-        timestamp: Current timestamp (live or historical)
-        mode: 'live' or 'historical'
-    """
-    st.header("💼 Paper Trading Positions")
-
-    try:
-        # Connect to database
-        conn = get_db_connection()
-        service = PositionService(conn)
-
-        # Always get active positions (unified mode)
-        active_positions = service.get_active_positions()
-
-        # Get portfolio summary
-        summary = service.get_portfolio_summary()
-
-        # Display portfolio summary
-        st.markdown("### 📊 Portfolio Summary (PAPER TRADING)")
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Total Capital", f"${summary['total_capital']:,.2f}", help="Hypothetical deployed capital")
-        col2.metric("Avg APR", f"{summary['avg_apr']:.2f}%", help="Weighted average APR")
-        col3.metric("Total Earned", f"${summary['total_earned']:,.2f}", help="Hypothetical earnings")
-        col4.metric("Active Positions", f"{summary['position_count']}", help="Number of active positions")
-
-        st.markdown("---")
-
-        # Global snapshot button
-        col1, col2 = st.columns([4, 1])
-        with col1:
-            st.markdown("### 📄 Active Positions")
-        with col2:
-            if st.button("📸 Snapshot All", key="snapshot_all_positions", help="Create snapshots for all active positions"):
-                if len(active_positions) == 0:
-                    st.warning("No active positions to snapshot")
-                else:
-                    with st.spinner(f"Creating snapshots for {len(active_positions)} position(s)..."):
-                        results = service.create_snapshots_for_all_positions()
-
-                        if results['success_count'] > 0:
-                            st.success(f"✅ Created {results['success_count']} snapshot(s)")
-                        if results['error_count'] > 0:
-                            st.warning(f"⚠️ {results['error_count']} snapshot(s) failed")
-                            for error in results['errors']:
-                                st.error(f"Position {error['position_id'][:8]}: {error['error_message']}")
-
-                        st.rerun()
-
-        if active_positions.empty:
-            st.info("📭 No active positions. Deploy a strategy from the All Strategies tab to get started!")
-        else:
-            # Display each position
-            for _, position in active_positions.iterrows():
-                # Build token flow
-                if position['is_levered']:
-                    token_flow = f"{position['token1']} → {position['token2']} → {position['token3']}"
-                else:
-                    token_flow = f"{position['token1']} → {position['token2']}"
-
-                # Calculate current PnL (simplified - from latest snapshot)
-                snapshots = service.get_position_snapshots(position['position_id'])
-                latest_snap = None
-                if not snapshots.empty:
-                    latest_snap = snapshots.iloc[-1]
-                    total_pnl = latest_snap['total_pnl']
-                    pnl_pct = (total_pnl / position['deployment_usd']) * 100
-                else:
-                    total_pnl = 0
-                    pnl_pct = 0
-
-                # Card title with key metrics
-                with st.expander(f"📄 PAPER | {token_flow} | {position['protocol_A']} ↔ {position['protocol_B']} | Entry APR: {position['entry_net_apr']*100:.2f}% | PnL: ${total_pnl:.2f} ({pnl_pct:+.2f}%)"):
-                    # Entry details
-                    st.markdown("#### Entry Details")
-                    col1, col2, col3, col4 = st.columns(4)
-                    col1.metric("Deployment", f"${position['deployment_usd']:,.2f}")
-                    col2.metric("Entry APR", f"{position['entry_net_apr']*100:.2f}%")
-                    col3.metric("Liq Distance", f"{position['entry_liquidation_distance']*100:.0f}%")
-                    col4.metric("Entry Time", position['entry_timestamp'])
-
-                    # Position sizing
-                    st.markdown("#### Position Sizing")
-                    sizing_data = [
-                        {
-                            'Protocol': position['protocol_A'],
-                            'Token': position['token1'],
-                            'Action': 'Lend',
-                            'Multiplier': f"{position['L_A']:.2f}x",
-                            'USD Value': f"${position['deployment_usd'] * position['L_A']:,.2f}",
-                            'Entry Rate': f"{position['entry_lend_rate_1A']*100:.2f}%",
-                            'Entry Price': f"${position['entry_price_1A']:.4f}"
-                        },
-                        {
-                            'Protocol': position['protocol_A'],
-                            'Token': position['token2'],
-                            'Action': 'Borrow',
-                            'Multiplier': f"{position['B_A']:.2f}x",
-                            'USD Value': f"${position['deployment_usd'] * position['B_A']:,.2f}",
-                            'Entry Rate': f"{position['entry_borrow_rate_2A']*100:.2f}%",
-                            'Entry Price': f"${position['entry_price_2A']:.4f}"
-                        },
-                        {
-                            'Protocol': position['protocol_B'],
-                            'Token': position['token2'],
-                            'Action': 'Lend',
-                            'Multiplier': f"{position['L_B']:.2f}x",
-                            'USD Value': f"${position['deployment_usd'] * position['L_B']:,.2f}",
-                            'Entry Rate': f"{position['entry_lend_rate_2B']*100:.2f}%",
-                            'Entry Price': f"${position['entry_price_2B']:.4f}"
-                        }
-                    ]
-
-                    if position['is_levered']:
-                        sizing_data.append({
-                            'Protocol': position['protocol_B'],
-                            'Token': position['token3'],
-                            'Action': 'Borrow',
-                            'Multiplier': f"{position['B_B']:.2f}x",
-                            'USD Value': f"${position['deployment_usd'] * position['B_B']:,.2f}",
-                            'Entry Rate': f"{position['entry_borrow_rate_3B']*100:.2f}%",
-                            'Entry Price': f"${position['entry_price_3B']:.4f}"
-                        })
-
-                    st.table(pd.DataFrame(sizing_data))
-
-                    # Current Status & PnL (only for positions with snapshots)
-                    if not snapshots.empty and latest_snap is not None:
-                        st.markdown("#### Current Status & PnL")
-
-                        # Time elapsed
-                        time_elapsed = timestamp - position['entry_timestamp']
-                        days = time_elapsed.days
-                        hours = time_elapsed.seconds // 3600
-
-                        col1, col2, col3 = st.columns(3)
-
-                        # Total PnL with color
-                        if total_pnl >= 0:
-                            col1.markdown(f"**Total PnL:** :green[${total_pnl:.2f} (+{pnl_pct:.2f}%)]")
-                        else:
-                            col1.markdown(f"**Total PnL:** :red[${total_pnl:.2f} ({pnl_pct:.2f}%)]")
-
-                        col2.metric("Time Elapsed", f"{days}d {hours}h")
-                        col3.metric("Snapshots", f"{len(snapshots)}")
-
-                        # PnL Breakdown (leg-level)
-                        st.markdown("**PnL Breakdown:**")
-
-                        # Get leg-level PnL from latest snapshot
-                        pnl_base = latest_snap.get('pnl_base_apr', 0) or 0
-                        pnl_reward = latest_snap.get('pnl_reward_apr', 0) or 0
-                        pnl_leg1 = latest_snap.get('pnl_price_leg1', latest_snap.get('pnl_price_token1', 0)) or 0
-                        pnl_leg2 = latest_snap.get('pnl_price_leg2', 0) or 0
-                        pnl_leg3 = latest_snap.get('pnl_price_leg3', 0) or 0
-                        pnl_leg4 = latest_snap.get('pnl_price_leg4', latest_snap.get('pnl_price_token3', 0)) or 0
-                        pnl_fees = latest_snap.get('pnl_fees', 0) or 0
-
-                        # Format with color coding
-                        if pnl_base >= 0:
-                            st.markdown(f"├── Base APR: :green[+${abs(pnl_base):.2f}]")
-                        else:
-                            st.markdown(f"├── Base APR: :red[-${abs(pnl_base):.2f}]")
-
-                        if pnl_reward >= 0:
-                            st.markdown(f"├── Reward APR: :green[+${abs(pnl_reward):.2f}]")
-                        else:
-                            st.markdown(f"├── Reward APR: :red[-${abs(pnl_reward):.2f}]")
-
-                        # Leg-level price impact
-                        price_1A = latest_snap.get('price_1A', position['entry_price_1A'])
-                        price_change_1A_pct = ((price_1A - position['entry_price_1A']) / position['entry_price_1A'] * 100) if position['entry_price_1A'] > 0 else 0
-                        if pnl_leg1 >= 0:
-                            st.markdown(f"├── Price ({position['protocol_A']} Lend - {position['token1']}): :green[+${abs(pnl_leg1):.2f}] ({position['token1']}: {price_change_1A_pct:+.1f}%)")
-                        else:
-                            st.markdown(f"├── Price ({position['protocol_A']} Lend - {position['token1']}): :red[-${abs(pnl_leg1):.2f}] ({position['token1']}: {price_change_1A_pct:+.1f}%)")
-
-                        # More leg-level details (similar pattern for legs 2, 3, 4)
-                        # ... (abbreviated for brevity - see streamlit_app.py lines 1590-1620 for full implementation)
-
-                        st.markdown(f"└── Fees: :red[-${abs(pnl_fees):.2f}]")
-
-                    # Actions (mode-specific)
-                    st.markdown("#### Actions")
-
-                    # Close position button (always available for active positions)
-                    col1, col2 = st.columns([1, 5])
-                    with col1:
-                        if st.button("❌ Close", key=f"close_{position['position_id']}"):
-                            from utils.time_helpers import to_seconds
-                            close_timestamp = to_seconds(st.session_state.selected_timestamp)
-                            service.close_position(
-                                position['position_id'],
-                                close_timestamp=close_timestamp,
-                                reason='manual',
-                                notes='Closed from dashboard'
-                            )
-                            st.success("Position closed!")
-                            st.rerun()
-
-                    if position.get('notes'):
-                        st.markdown(f"**Notes:** {position['notes']}")
-
-        conn.close()
-
-    except Exception as e:
-        st.error(f"❌ Error loading positions: {e}")
 
 
 def render_rate_tables_tab(lend_rates: pd.DataFrame, borrow_rates: pd.DataFrame,
@@ -885,6 +624,111 @@ def render_rate_tables_tab(lend_rates: pd.DataFrame, borrow_rates: pd.DataFrame,
     st.dataframe(borrow_fees_display, width='stretch', hide_index=True)
 
 
+def render_positions_table_tab():
+    """
+    Render simple positions table showing all active positions
+    """
+    st.header("💼 Active Positions")
+
+    try:
+        # Connect to database
+        conn = get_db_connection()
+        service = PositionService(conn)
+
+        # Get active positions
+        active_positions = service.get_active_positions()
+
+        if active_positions.empty:
+            st.info("📭 No active positions. Deploy a strategy from the All Strategies tab to get started!")
+            conn.close()
+            return
+
+        # Get latest rates from rates_snapshot table
+        cursor = conn.cursor()
+        cursor.execute("SELECT MAX(timestamp) FROM rates_snapshot")
+        latest_timestamp = cursor.fetchone()[0]
+
+        # Query all rates at latest timestamp
+        rates_query = """
+        SELECT protocol, token, lend_total_apr, borrow_total_apr, borrow_fee
+        FROM rates_snapshot
+        WHERE timestamp = ?
+        """
+        rates_df = pd.read_sql_query(rates_query, conn, params=(latest_timestamp,))
+
+        # Helper function to get rate
+        def get_rate(token, protocol, rate_type):
+            """Get lend or borrow rate for token/protocol, return 0 if not found"""
+            row = rates_df[(rates_df['token'] == token) & (rates_df['protocol'] == protocol)]
+            if row.empty:
+                return 0.0
+            return float(row[f'{rate_type}_total_apr'].iloc[0])
+
+        # Helper function to get borrow fee
+        def get_borrow_fee(token, protocol):
+            """Get borrow fee for token/protocol, return 0 if not found"""
+            row = rates_df[(rates_df['token'] == token) & (rates_df['protocol'] == protocol)]
+            if row.empty:
+                return 0.0
+            return float(row['borrow_fee'].iloc[0]) if pd.notna(row['borrow_fee'].iloc[0]) else 0.0
+
+        # Build display table
+        display_data = []
+
+        for _, position in active_positions.iterrows():
+            # Build token flow string
+            if position['is_levered']:
+                token_flow = f"{position['token1']} → {position['token2']} → {position['token3']}"
+            else:
+                token_flow = f"{position['token1']} → {position['token2']}"
+
+            # Build protocol pair string
+            protocol_pair = f"{position['protocol_A']} ↔ {position['protocol_B']}"
+
+            # Get current rates for the 4 legs from rates_snapshot
+            lend_1A = get_rate(position['token1'], position['protocol_A'], 'lend')
+            borrow_2A = get_rate(position['token2'], position['protocol_A'], 'borrow')
+            lend_2B = get_rate(position['token2'], position['protocol_B'], 'lend')
+            borrow_3B = get_rate(position['token3'], position['protocol_B'], 'borrow') if position['is_levered'] else 0.0
+
+            # Get borrow fees
+            borrow_fee_2A = get_borrow_fee(position['token2'], position['protocol_A'])
+            borrow_fee_3B = get_borrow_fee(position['token3'], position['protocol_B']) if position['is_levered'] else 0.0
+
+            # Calculate GROSS APR using position multipliers
+            # Rates are already in decimal format (0.05 = 5%)
+            gross_apr = (
+                (position['L_A'] * lend_1A) +
+                (position['L_B'] * lend_2B) -
+                (position['B_A'] * borrow_2A) -
+                (position['B_B'] * borrow_3B if position['is_levered'] else 0)
+            )
+
+            # Calculate annualized fee cost (convert to percentage)
+            total_fee_cost = (position['B_A'] * borrow_fee_2A + position['B_B'] * borrow_fee_3B) * 100
+
+            # Calculate NET APR (gross - fees)
+            current_net_apr = (gross_apr * 100) - total_fee_cost
+
+            # Add row to display table
+            display_data.append({
+                'Entry Time': to_datetime_str(position['entry_timestamp']),
+                'Token Flow': token_flow,
+                'Protocols': protocol_pair,
+                'Entry APR': f"{position['entry_net_apr'] * 100:.2f}%",
+                'Current APR': f"{current_net_apr:.2f}%"
+            })
+
+        # Create DataFrame and display
+        positions_df = pd.DataFrame(display_data)
+        st.dataframe(positions_df, width='stretch', hide_index=True)
+
+        conn.close()
+
+    except Exception as e:
+        st.error(f"❌ Error loading positions: {e}")
+
+
 def render_zero_liquidity_tab(zero_liquidity_results: pd.DataFrame, deployment_usd: float,
                               use_unlevered: bool, mode: str,
                               timestamp: Optional[int] = None):
@@ -931,7 +775,7 @@ def render_zero_liquidity_tab(zero_liquidity_results: pd.DataFrame, deployment_u
             with st.expander(
                 f"▶ {token_flow} | "
                 f"{row['protocol_A']} ↔ {row['protocol_B']} | "
-                f"{net_apr_indicator} Net APR {net_apr_value:.2f}% | {apr5_indicator} 5day APR {apr5_value:.2f}%{max_size_text}",
+                f"{net_apr_indicator} Net APR {net_apr_value * 100:.2f}% | {apr5_indicator} 5day APR {apr5_value * 100:.2f}%{max_size_text}",
                 expanded=False
             ):
                 # Display APR comparison table
@@ -1296,9 +1140,9 @@ def render_dashboard(data_loader: DataLoader, mode: str):
     # === TABS ===
     tab1, tab2, tab3, tab4 = st.tabs([
         "📊 All Strategies",
-        "💼 Positions",
         "📈 Rate Tables",
-        "⚠️ 0 Liquidity"
+        "⚠️ 0 Liquidity",
+        "💼 Positions"
     ])
 
     with tab1:
@@ -1308,15 +1152,15 @@ def render_dashboard(data_loader: DataLoader, mode: str):
         )
 
     with tab2:
-        render_positions_tab(timestamp, mode)  # Still uses datetime - needs future update
-
-    with tab3:
         render_rate_tables_tab(
             lend_rates, borrow_rates, collateral_ratios, prices,
             available_borrow, borrow_fees
         )
 
-    with tab4:
+    with tab3:
         render_zero_liquidity_tab(
             zero_liquidity_results, deployment_usd, use_unlevered, mode, timestamp_seconds  # These render functions need updating
         )
+
+    with tab4:
+        render_positions_table_tab()

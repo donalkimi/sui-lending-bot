@@ -683,7 +683,13 @@ class PositionService:
     # ==================== Query Methods ====================
 
     def get_active_positions(self, user_id: Optional[str] = None) -> pd.DataFrame:
-        """Get all active positions (optionally filtered by user)"""
+        """Get all active positions (optionally filtered by user)
+
+        Returns:
+            DataFrame with timestamp columns converted to Unix seconds (int)
+        """
+        from utils.time_helpers import to_seconds
+
         ph = self._get_placeholder()
         if user_id is not None:
             query = f"SELECT * FROM positions WHERE status = {ph} AND user_id = {ph} ORDER BY entry_timestamp DESC"
@@ -692,7 +698,16 @@ class PositionService:
             query = f"SELECT * FROM positions WHERE status = {ph} ORDER BY entry_timestamp DESC"
             params = ('active',)
 
-        return self._execute_query(query, params)
+        df = self._execute_query(query, params)
+
+        # Convert timestamp columns to Unix seconds immediately after DB fetch
+        if not df.empty:
+            if 'entry_timestamp' in df.columns:
+                df['entry_timestamp'] = df['entry_timestamp'].apply(to_seconds)
+            if 'close_timestamp' in df.columns:
+                df['close_timestamp'] = df['close_timestamp'].apply(lambda x: to_seconds(x) if pd.notna(x) else None)
+
+        return df
 
     def get_position_by_id(self, position_id: str) -> Optional[pd.Series]:
         """Get position by ID"""
@@ -707,35 +722,6 @@ class PositionService:
         query = f"SELECT * FROM position_snapshots WHERE position_id = {ph} ORDER BY snapshot_timestamp ASC"
         return self._execute_query(query, (position_id,))
 
-    def get_portfolio_summary(self, user_id: Optional[str] = None) -> Dict:
-        """Get portfolio summary (optionally filtered by user)"""
-        active_positions = self.get_active_positions(user_id)
-
-        if active_positions.empty:
-            return {
-                'total_capital': 0,
-                'avg_apr': 0,
-                'total_earned': 0,
-                'position_count': 0
-            }
-
-        total_capital = active_positions['deployment_usd'].sum()
-        weighted_apr = (active_positions['deployment_usd'] * active_positions['entry_net_apr']).sum() / total_capital if total_capital > 0 else 0
-
-        # Get latest PnL for each position from snapshots
-        total_earned = 0
-        for _, position in active_positions.iterrows():
-            snapshots = self.get_position_snapshots(position['position_id'])
-            if not snapshots.empty:
-                latest_snapshot = snapshots.iloc[-1]
-                total_earned += latest_snapshot.get('total_pnl', 0) or 0
-
-        return {
-            'total_capital': total_capital,
-            'avg_apr': weighted_apr,
-            'total_earned': total_earned,
-            'position_count': len(active_positions)
-        }
 
     # ==================== Snapshot Management ====================
 

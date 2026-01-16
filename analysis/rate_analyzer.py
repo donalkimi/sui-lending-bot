@@ -405,8 +405,8 @@ class RateAnalyzer:
             print(f" → Convert to {best['token1']}")
         else:
             print()  # Just newline
-        print(f"   Net APR: {best['net_apr']:.2f}%")
-        print(f"   Liquidation Distance: {best['liquidation_distance']:.0f}%")
+        print(f"   Net APR: {best['net_apr'] * 100:.2f}%")
+        print(f"   Liquidation Distance: {best['liquidation_distance'] * 100:.0f}%")
         
         return best['protocol_A'], best['protocol_B'], all_results
 

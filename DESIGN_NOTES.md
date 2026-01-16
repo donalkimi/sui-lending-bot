@@ -116,3 +116,38 @@ def to_datetime_str(int) -> str:
 - `width="content"` instead of `use_container_width=False`
 
 **Applies to:** st.plotly_chart, st.dataframe, st.table, and other display components
+
+### 7. Rate and Number Representation
+
+**Core Principle:** All rates, APRs, fees, and numeric values are stored and calculated as decimals (0.0 to 1.0 scale). Only convert to percentages at the display layer.
+
+**Storage format:**
+- **Database:** Decimals (e.g., 0.05 = 5%, 0.0025 = 0.25%)
+- **Calculations:** All arithmetic uses decimals (e.g., `rate * amount`)
+- **Internal variables:** Decimals throughout Python code
+
+**Display format:**
+- **UI/Dashboard:** Convert to percentages when displaying (e.g., `f"{rate * 100:.2f}%"`)
+- **User input:** Convert from percentage to decimal when receiving input
+
+**Why:**
+- **Consistency:** Eliminates "is this 5 or 0.05?" confusion
+- **Math correctness:** Prevents 100x errors in calculations
+- **Database compatibility:** Standard financial representation
+- **Clear boundary:** Conversion only at display layer
+
+**Example:**
+```python
+# CORRECT: Store as decimal
+entry_net_apr = 0.05  # 5%
+display = f"{entry_net_apr * 100:.2f}%"  # "5.00%"
+
+# WRONG: Store as percentage
+entry_net_apr = 5.0  # Ambiguous!
+display = f"{entry_net_apr}%"  # Could be "5%" or "500%"
+```
+
+**Conversion boundaries:**
+- **Strategy calculation → Database:** Values are already decimals, store as-is
+- **Database → Display:** Multiply by 100 and add "%" symbol
+- **User input → Database:** Divide by 100 to convert percentage to decimal
