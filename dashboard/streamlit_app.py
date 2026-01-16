@@ -18,6 +18,7 @@ from dashboard.data_loaders import UnifiedDataLoader
 from dashboard.dashboard_renderer import render_dashboard
 from dashboard.dashboard_utils import get_available_timestamps
 from data.refresh_pipeline import refresh_pipeline
+from utils.time_helpers import to_seconds, to_datetime_str
 
 
 def main():
@@ -56,8 +57,11 @@ def main():
                     try:
                         result = refresh_pipeline(save_snapshots=True, send_slack_notifications=False)
                         if result and result.timestamp:
-                            st.session_state.selected_timestamp = str(result.timestamp)
-                            st.success(f"✅ Fresh data loaded at {result.timestamp}")
+                            # result.timestamp is already Unix seconds (int)
+                            st.session_state['current_seconds'] = result.timestamp
+                            # Convert to datetime string for display and selection
+                            st.session_state.selected_timestamp = to_datetime_str(result.timestamp)
+                            st.success(f"✅ Fresh data loaded at {to_datetime_str(result.timestamp)}")
                             st.rerun()
                         else:
                             st.error("❌ refresh_pipeline() did not return valid data")
@@ -116,6 +120,15 @@ def main():
             for key in keys_to_delete:
                 del st.session_state[key]
 
+        # IMMEDIATELY convert selected timestamp to seconds (Unix timestamp)
+        # This is the "current time" throughout the session - everything uses this integer
+        try:
+            current_seconds = to_seconds(st.session_state.selected_timestamp)
+            st.session_state['current_seconds'] = current_seconds
+        except Exception as e:
+            st.error(f"❌ Failed to convert timestamp to seconds: {e}")
+            st.stop()
+
         # Show timestamp age
         try:
             selected_dt = pd.to_datetime(st.session_state.selected_timestamp)
@@ -151,10 +164,13 @@ def main():
                 try:
                     result = refresh_pipeline(save_snapshots=True, send_slack_notifications=False)
                     if result and result.timestamp:
-                        st.session_state.selected_timestamp = str(result.timestamp)
+                        # result.timestamp is already Unix seconds (int)
+                        st.session_state['current_seconds'] = result.timestamp
+                        # Convert to datetime string for display and selection
+                        st.session_state.selected_timestamp = to_datetime_str(result.timestamp)
                         # Store analysis results from refresh_pipeline to avoid re-running analysis
                         st.session_state.pipeline_analysis_results = (result.protocol_A, result.protocol_B, result.all_results)
-                        st.success(f"✅ Fresh data loaded at {result.timestamp}")
+                        st.success(f"✅ Fresh data loaded at {to_datetime_str(result.timestamp)}")
                         st.rerun()
                     else:
                         st.error("❌ refresh_pipeline() did not return valid data")

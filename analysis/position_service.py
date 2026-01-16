@@ -24,6 +24,7 @@ except ImportError:
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import settings
+from utils.time_helpers import to_datetime_str
 
 
 class PositionService:
@@ -106,9 +107,17 @@ class PositionService:
         protocol_B = strategy_row['protocol_B']
 
         # Entry timestamp (should match the rates_snapshot timestamp being displayed)
-        # Round to nearest minute to match rates_snapshot granularity
-        raw_timestamp = strategy_row.get('timestamp', datetime.now())
-        entry_timestamp = raw_timestamp.replace(second=0, microsecond=0) if raw_timestamp else datetime.now().replace(second=0, microsecond=0)
+        # Timestamps are already rounded to nearest minute in rates_snapshot
+        entry_timestamp = strategy_row.get('timestamp')
+        if entry_timestamp is None:
+            raise ValueError("strategy_row must contain 'timestamp' - cannot default to datetime.now()")
+
+        # Fail loudly if we receive anything other than an integer
+        if not isinstance(entry_timestamp, int):
+            raise TypeError(
+                f"entry_timestamp must be Unix seconds (int), got {type(entry_timestamp).__name__}. "
+                f"Value: {entry_timestamp}. Convert to seconds using to_seconds() before passing to this function."
+            )
 
         # Position multipliers (normalized)
         L_A = strategy_row.get('L_A', 0) or 0
@@ -169,10 +178,13 @@ class PositionService:
         )
         """
 
+        # Convert timestamp to datetime string for DB write (boundary conversion)
+        entry_timestamp_str = to_datetime_str(entry_timestamp)
+
         params = (
             position_id, 'active', 'recursive_lending', is_paper_trade, is_levered, user_id,
             token1, token2, token3, token1_contract, token2_contract, token3_contract,
-            protocol_A, protocol_B, entry_timestamp, deployment_usd,
+            protocol_A, protocol_B, entry_timestamp_str, deployment_usd,
             L_A, B_A, L_B, B_B,
             entry_lend_rate_1A, entry_borrow_rate_2A, entry_lend_rate_2B, entry_borrow_rate_3B,
             entry_price_1A, entry_price_2A, entry_price_2B, entry_price_3B,
@@ -199,6 +211,7 @@ class PositionService:
     def close_position(
         self,
         position_id: str,
+        close_timestamp: int,
         reason: str = 'manual',
         notes: str = ""
     ) -> bool:
@@ -207,12 +220,25 @@ class PositionService:
 
         Args:
             position_id: Position UUID
+            close_timestamp: Unix timestamp in seconds when position is closed (must be provided)
             reason: Closure reason ('manual', 'liquidated', 'take_profit', etc.)
             notes: Optional closure notes
 
         Returns:
             bool: True if successful
         """
+        if close_timestamp is None:
+            raise ValueError("close_timestamp is required - cannot default to datetime.now()")
+
+        if not isinstance(close_timestamp, int):
+            raise TypeError(
+                f"close_timestamp must be Unix seconds (int), got {type(close_timestamp).__name__}. "
+                f"Value: {close_timestamp}"
+            )
+
+        # Convert to datetime string for DB write
+        close_timestamp_str = to_datetime_str(close_timestamp)
+
         # Update position status
         ph = self._get_placeholder()
         query = f"""
@@ -221,9 +247,7 @@ class PositionService:
         WHERE position_id = {ph}
         """
 
-        # Round to nearest minute to match rates_snapshot granularity
-        close_timestamp = datetime.now().replace(second=0, microsecond=0)
-        params = ('closed', close_timestamp, reason, notes, close_timestamp, position_id)
+        params = ('closed', close_timestamp_str, reason, notes, close_timestamp_str, position_id)
 
         if not self._execute_write(query, params):
             return False
@@ -242,7 +266,7 @@ class PositionService:
         self,
         token: str,
         protocol: str,
-        timestamp: Optional[datetime] = None,
+        timestamp: Optional[int] = None,
         token_contract: Optional[str] = None
     ) -> float:
         """
@@ -254,7 +278,7 @@ class PositionService:
         Args:
             token: Token symbol (e.g., 'SUI', 'USDC')
             protocol: Protocol name (e.g., 'navi', 'suilend', 'alphafi')
-            timestamp: Optional timestamp (None = latest snapshot)
+            timestamp: Unix timestamp in seconds (None = latest snapshot)
             token_contract: Optional token contract address (more reliable than symbol)
 
         Returns:
@@ -269,6 +293,9 @@ class PositionService:
         ph = self._get_placeholder()
 
         if timestamp:
+            # Convert integer timestamp to datetime string for DB query
+            timestamp_str = to_datetime_str(timestamp)
+
             if token_contract:
                 query = f"""
                     SELECT price_usd
@@ -276,7 +303,7 @@ class PositionService:
                     WHERE token_contract = {ph} AND protocol = {ph} AND timestamp = {ph}
                     LIMIT 1
                 """
-                params = (token_contract, protocol, timestamp)
+                params = (token_contract, protocol, timestamp_str)
             else:
                 query = f"""
                     SELECT price_usd
@@ -284,7 +311,7 @@ class PositionService:
                     WHERE token = {ph} AND protocol = {ph} AND timestamp = {ph}
                     LIMIT 1
                 """
-                params = (token, protocol, timestamp)
+                params = (token, protocol, timestamp_str)
         else:
             if token_contract:
                 query = f"""
@@ -316,7 +343,7 @@ class PositionService:
         self,
         position: pd.Series,
         leg: str,
-        timestamp: Optional[datetime] = None
+        timestamp: Optional[int] = None
     ) -> float:
         """
         Get price for a specific position leg for PnL calculation.
@@ -324,7 +351,7 @@ class PositionService:
         Args:
             position: Position record with token/protocol info
             leg: Leg identifier ('1A', '2A', '2B', '3B')
-            timestamp: Optional timestamp (uses latest if None)
+            timestamp: Unix timestamp in seconds (uses latest if None)
 
         Returns:
             float: Price in USD for that leg
@@ -415,11 +442,13 @@ class PositionService:
         for i in range(loop_end):
             current_snap = snapshots.iloc[i]
 
-            # For active positions, last iteration uses "now" as end time
+            # For active positions, last iteration uses the latest_snapshot timestamp as end time
             if is_active and i == len(snapshots) - 1:
-                # Round to nearest minute for consistency
-                now = datetime.now().replace(second=0, microsecond=0)
-                time_delta = (now - current_snap['snapshot_timestamp']).total_seconds()
+                if latest_snapshot is None:
+                    raise ValueError("latest_snapshot is required for active position PnL calculation - cannot use datetime.now()")
+                # Use the latest snapshot timestamp (which was just created) as the end time
+                current_time = latest_snapshot['snapshot_timestamp']
+                time_delta = (current_time - current_snap['snapshot_timestamp']).total_seconds()
             else:
                 next_snap = snapshots.iloc[i + 1]
                 time_delta = (next_snap['snapshot_timestamp'] - current_snap['snapshot_timestamp']).total_seconds()
@@ -446,11 +475,13 @@ class PositionService:
         for i in range(loop_end):
             current_snap = snapshots.iloc[i]
 
-            # For active positions, last iteration uses "now" as end time
+            # For active positions, last iteration uses the latest_snapshot timestamp as end time
             if is_active and i == len(snapshots) - 1:
-                # Round to nearest minute for consistency
-                now = datetime.now().replace(second=0, microsecond=0)
-                time_delta = (now - current_snap['snapshot_timestamp']).total_seconds()
+                if latest_snapshot is None:
+                    raise ValueError("latest_snapshot is required for active position PnL calculation - cannot use datetime.now()")
+                # Use the latest snapshot timestamp (which was just created) as the end time
+                current_time = latest_snapshot['snapshot_timestamp']
+                time_delta = (current_time - current_snap['snapshot_timestamp']).total_seconds()
             else:
                 next_snap = snapshots.iloc[i + 1]
                 time_delta = (next_snap['snapshot_timestamp'] - current_snap['snapshot_timestamp']).total_seconds()
@@ -573,8 +604,12 @@ class PositionService:
         B_B = position.get('B_B', 0) or 0
 
         # Protocol A: Lend Token1, Borrow Token2
-        collateral_1A_usd = deployment * L_A * current_prices.get(position['token1'], position['entry_price_1A'])
-        borrow_2A_usd = deployment * B_A * current_prices.get(position['token2'], position.get('entry_price_2A', position['entry_price_1A']))
+        price_1A = current_prices.get(position['token1']) or position.get('entry_price_1A') or 0
+        price_2A_fallback = position.get('entry_price_2A') or position.get('entry_price_1A') or 0
+        price_2A = current_prices.get(position['token2']) or price_2A_fallback
+
+        collateral_1A_usd = deployment * L_A * price_1A
+        borrow_2A_usd = deployment * B_A * price_2A
 
         health_factor_1A = collateral_1A_usd / borrow_2A_usd if borrow_2A_usd > 0 else float('inf')
         ltv_1A = borrow_2A_usd / collateral_1A_usd if collateral_1A_usd > 0 else 0
@@ -589,7 +624,7 @@ class PositionService:
         # Liquidation price: Token1 price at which LTV hits threshold
         # At liquidation: (L_A * liq_price_1A) / (B_A * price_2A) = liq_threshold_1A
         # Solving for liq_price_1A:
-        price_2A = current_prices.get(position['token2'], position.get('entry_price_2A', position['entry_price_1A']))
+        # price_2A already calculated above
         liquidation_price_1A = (liq_threshold_1A * borrow_2A_usd) / (deployment * L_A) if L_A > 0 else 0
 
         # Collateral ratio drift from entry (Step 8)
@@ -599,8 +634,12 @@ class PositionService:
 
         # Protocol B: Lend Token2, Borrow Token3 (if levered)
         if position['is_levered'] and B_B > 0:
-            collateral_2B_usd = deployment * L_B * current_prices.get(position['token2'], position.get('entry_price_2B', position.get('entry_price_2A', position['entry_price_1A'])))
-            borrow_3B_usd = deployment * B_B * current_prices.get(position['token3'], position.get('entry_price_3B', 0))
+            price_2B_fallback = position.get('entry_price_2B') or position.get('entry_price_2A') or position.get('entry_price_1A') or 0
+            price_2B = current_prices.get(position['token2']) or price_2B_fallback
+            price_3B = current_prices.get(position['token3']) or position.get('entry_price_3B') or 0
+
+            collateral_2B_usd = deployment * L_B * price_2B
+            borrow_3B_usd = deployment * B_B * price_3B
 
             health_factor_2B = collateral_2B_usd / borrow_3B_usd if borrow_3B_usd > 0 else float('inf')
             ltv_2B = borrow_3B_usd / collateral_2B_usd if collateral_2B_usd > 0 else 0
@@ -703,14 +742,14 @@ class PositionService:
     def create_snapshot(
         self,
         position_id: str,
-        snapshot_timestamp: Optional[datetime] = None
+        snapshot_timestamp: Optional[int] = None
     ) -> str:
         """
         Create a snapshot for a position
 
         Args:
             position_id: Position UUID
-            snapshot_timestamp: Optional timestamp (defaults to now, or uses rates_snapshot timestamp)
+            snapshot_timestamp: Unix timestamp in seconds (required - cannot default)
 
         Returns:
             snapshot_id: UUID of created snapshot
@@ -720,9 +759,14 @@ class PositionService:
         if position is None:
             raise Exception(f"Position not found: {position_id}")
 
-        # Use provided timestamp or current time, rounded to nearest minute
+        # Snapshot timestamp must be provided explicitly
         if snapshot_timestamp is None:
-            snapshot_timestamp = datetime.now().replace(second=0, microsecond=0)
+            raise ValueError("snapshot_timestamp is required - cannot default to datetime.now()")
+
+        if not isinstance(snapshot_timestamp, int):
+            raise TypeError(
+                f"snapshot_timestamp must be Unix seconds (int), got {type(snapshot_timestamp).__name__}"
+            )
 
         # Generate snapshot ID
         snapshot_id = str(uuid.uuid4())
@@ -792,32 +836,33 @@ class PositionService:
         risk = self.calculate_liquidation_levels(position, current_prices_dict, current_collateral_ratios)
 
         # Insert snapshot (with leg-level prices, PnL, and risk metrics - Steps 6, 7, 8)
+        # NOTE: Database schema uses different column names than schema.sql:
+        # - current_price_1A (not price_1A)
+        # - current_price_2 (not price_2A/price_2B - uses Protocol A price)
+        # - current_price_3B (not price_3B)
+        # - pnl_price_token1/2/3 (not pnl_price_leg1/2/3/4)
         ph = self._get_placeholder()
         query = f"""
         INSERT INTO position_snapshots (
             snapshot_id, position_id, snapshot_timestamp,
             lend_base_apr_1A, lend_reward_apr_1A, borrow_base_apr_2A, borrow_reward_apr_2A,
             lend_base_apr_2B, lend_reward_apr_2B, borrow_base_apr_3B, borrow_reward_apr_3B,
-            price_1A, price_2A, price_2B, price_3B,
+            current_price_1A, current_price_2, current_price_3B,
             current_collateral_ratio_1A, current_collateral_ratio_2B,
             total_pnl, pnl_base_apr, pnl_reward_apr,
-            pnl_price_leg1, pnl_price_leg2, pnl_price_leg3, pnl_price_leg4, pnl_fees,
+            pnl_price_token1, pnl_price_token2, pnl_price_token3, pnl_fees,
             health_factor_1A_calc, health_factor_2B_calc,
             distance_to_liq_1A_calc, distance_to_liq_2B_calc,
-            ltv_1A_calc, ltv_2B_calc,
-            liquidation_price_1A_calc, liquidation_price_2B_calc,
             collateral_ratio_change_1A, collateral_ratio_change_2B, collateral_warning,
             risk_data_source
         ) VALUES (
             {ph}, {ph}, {ph},
             {ph}, {ph}, {ph}, {ph},
             {ph}, {ph}, {ph}, {ph},
-            {ph}, {ph}, {ph}, {ph},
+            {ph}, {ph}, {ph},
             {ph}, {ph},
             {ph}, {ph}, {ph},
-            {ph}, {ph}, {ph}, {ph}, {ph},
-            {ph}, {ph},
-            {ph}, {ph},
+            {ph}, {ph}, {ph}, {ph},
             {ph}, {ph},
             {ph}, {ph},
             {ph}, {ph}, {ph},
@@ -825,21 +870,22 @@ class PositionService:
         )
         """
 
+        # Convert timestamp to datetime string for DB write (boundary conversion)
+        snapshot_timestamp_str = to_datetime_str(snapshot_timestamp)
+
         params = (
-            snapshot_id, position_id, snapshot_timestamp,
+            snapshot_id, position_id, snapshot_timestamp_str,
             current_rates['lend_base_apr_1A'], current_rates['lend_reward_apr_1A'],
             current_rates['borrow_base_apr_2A'], current_rates['borrow_reward_apr_2A'],
             current_rates['lend_base_apr_2B'], current_rates['lend_reward_apr_2B'],
             current_rates['borrow_base_apr_3B'], current_rates['borrow_reward_apr_3B'],
-            price_1A, price_2A, price_2B, price_3B,
+            price_1A, price_2A, price_3B,  # current_price_1A, current_price_2, current_price_3B
             current_collateral_ratios.get((position['token1'], position['protocol_A'])),
             current_collateral_ratios.get((position['token2'], position['protocol_B'])),
             pnl['total_pnl'], pnl['pnl_base_apr'], pnl['pnl_reward_apr'],
-            pnl['pnl_price_leg1'], pnl['pnl_price_leg2'], pnl['pnl_price_leg3'], pnl['pnl_price_leg4'], pnl['pnl_fees'],
+            pnl['pnl_price_leg1'], pnl['pnl_price_leg2'], pnl['pnl_price_leg3'], pnl['pnl_fees'],
             risk['health_factor_1A_calc'], risk['health_factor_2B_calc'],
             risk['distance_to_liq_1A_calc'], risk['distance_to_liq_2B_calc'],
-            risk['ltv_1A_calc'], risk['ltv_2B_calc'],
-            risk['liquidation_price_1A_calc'], risk['liquidation_price_2B_calc'],
             risk['collateral_ratio_change_1A'], risk['collateral_ratio_change_2B'], risk['collateral_warning'],
             'calculated'
         )
@@ -898,22 +944,25 @@ class PositionService:
     def backfill_snapshots(
         self,
         position_id: str,
+        end_time: datetime,
         frequency: str = 'hourly',
-        start_time: Optional[datetime] = None,
-        end_time: Optional[datetime] = None
+        start_time: Optional[datetime] = None
     ) -> int:
         """
         Backfill snapshots for a position
 
         Args:
             position_id: Position UUID
+            end_time: End time for backfill (required - use close_timestamp or current snapshot time)
             frequency: 'hourly' or 'daily'
             start_time: Start time (defaults to position entry_timestamp)
-            end_time: End time (defaults to now or close_timestamp)
 
         Returns:
             int: Number of snapshots created
         """
+        if end_time is None:
+            raise ValueError("end_time is required for backfill - cannot default to datetime.now()")
+
         # Get position
         position = self.get_position_by_id(position_id)
         if position is None:
@@ -922,8 +971,6 @@ class PositionService:
         # Determine time range
         if start_time is None:
             start_time = position['entry_timestamp']
-        if end_time is None:
-            end_time = position.get('close_timestamp') or datetime.now().replace(second=0, microsecond=0)
 
         # Generate timestamps
         delta = timedelta(hours=1) if frequency == 'hourly' else timedelta(days=1)

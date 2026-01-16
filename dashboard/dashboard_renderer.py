@@ -27,6 +27,7 @@ from dashboard.dashboard_utils import (
 )
 from analysis.rate_analyzer import RateAnalyzer
 from analysis.position_service import PositionService
+from utils.time_helpers import to_seconds, to_datetime_str
 
 
 # ============================================================================
@@ -93,8 +94,7 @@ def render_deployment_form(mode: str):
     with st.spinner("Loading historical chart..."):
         history_df, L_A, B_A, L_B, B_B = get_strategy_history(
             strategy_row=strategy,
-            liquidation_distance=liquidation_distance,
-            days_back=30
+            liquidation_distance=liquidation_distance
         )
 
     if history_df is not None and not history_df.empty:
@@ -120,7 +120,7 @@ def render_deployment_form(mode: str):
             annotation_position="right"
         )
 
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
     else:
         st.info("📊 No historical data available for this strategy")
 
@@ -144,7 +144,9 @@ def render_deployment_form(mode: str):
                 service = PositionService(conn)
 
                 # Use timestamp from strategy_row (when data was captured)
-                entry_timestamp = strategy.get('timestamp', datetime.now())
+                entry_timestamp = strategy.get('timestamp')
+                if entry_timestamp is None:
+                    raise ValueError("Strategy must have timestamp - cannot default to datetime.now()")
 
                 # Convert strategy to dict (already has timestamp from all_results)
                 strategy_dict = strategy.to_dict() if isinstance(strategy, pd.Series) else strategy.copy()
@@ -171,6 +173,12 @@ def render_deployment_form(mode: str):
                 st.rerun()
 
             except Exception as e:
+                import traceback
+                print(f"❌ Position deployment failed:")
+                print(f"Error: {e}")
+                print(f"Strategy timestamp type: {type(strategy.get('timestamp'))}")
+                print(f"Strategy timestamp value: {strategy.get('timestamp')}")
+                traceback.print_exc()
                 st.error(f"❌ Failed to create position: {e}")
 
     with col2:
@@ -186,7 +194,7 @@ def render_deployment_form(mode: str):
 
 def display_apr_table(strategy_row: Union[pd.Series, Dict[str, Any]], deployment_usd: float,
                      liquidation_distance: float, strategy_idx: int, mode: str,
-                     timestamp: Optional[datetime] = None) -> Tuple[str, Optional[str]]:
+                     timestamp: Optional[int] = None) -> Tuple[str, Optional[str]]:
     """
     Display compact APR comparison table with both levered and unlevered strategies
     with integrated deploy buttons
@@ -197,7 +205,7 @@ def display_apr_table(strategy_row: Union[pd.Series, Dict[str, Any]], deployment
         liquidation_distance: Liquidation distance from sidebar
         strategy_idx: Unique identifier for the strategy (DataFrame index) for unique button keys
         mode: 'unified' (kept for compatibility)
-        timestamp: Timestamp of the data being displayed
+        timestamp: Unix timestamp in seconds (for chart caching)
 
     Returns:
         tuple: (fee_caption, warning_message) - strings to display after other content
@@ -485,7 +493,7 @@ def load_historical_positions(timestamp: datetime) -> pd.DataFrame:
 
 def render_all_strategies_tab(all_results: pd.DataFrame, mode: str, deployment_usd: float,
                               liquidation_distance: float, use_unlevered: bool,
-                              timestamp: Optional[datetime] = None):
+                              timestamp: Optional[int] = None):
     """
     Render the All Strategies tab
 
@@ -495,7 +503,7 @@ def render_all_strategies_tab(all_results: pd.DataFrame, mode: str, deployment_u
         deployment_usd: Deployment amount
         liquidation_distance: Liquidation distance setting
         use_unlevered: Whether to show unlevered APR
-        timestamp: Timestamp of the data being displayed (for chart caching)
+        timestamp: Unix timestamp in seconds (for chart caching)
     """
     if not all_results.empty:
         # Display with expanders
@@ -547,8 +555,7 @@ def render_all_strategies_tab(all_results: pd.DataFrame, mode: str, deployment_u
                     with st.spinner("Loading historical data..."):
                         history_df, L_A, B_A, L_B, B_B = get_strategy_history(
                             strategy_row=row.to_dict(),
-                            liquidation_distance=liquidation_distance,
-                            days_back=30
+                            liquidation_distance=liquidation_distance
                         )
 
                         # Store in session state
@@ -804,7 +811,14 @@ def render_positions_tab(timestamp: datetime, mode: str):
                     col1, col2 = st.columns([1, 5])
                     with col1:
                         if st.button("❌ Close", key=f"close_{position['position_id']}"):
-                            service.close_position(position['position_id'], reason='manual', notes='Closed from dashboard')
+                            from utils.time_helpers import to_seconds
+                            close_timestamp = to_seconds(st.session_state.selected_timestamp)
+                            service.close_position(
+                                position['position_id'],
+                                close_timestamp=close_timestamp,
+                                reason='manual',
+                                notes='Closed from dashboard'
+                            )
                             st.success("Position closed!")
                             st.rerun()
 
@@ -873,7 +887,7 @@ def render_rate_tables_tab(lend_rates: pd.DataFrame, borrow_rates: pd.DataFrame,
 
 def render_zero_liquidity_tab(zero_liquidity_results: pd.DataFrame, deployment_usd: float,
                               use_unlevered: bool, mode: str,
-                              timestamp: Optional[datetime] = None):
+                              timestamp: Optional[int] = None):
     """
     Render the Zero Liquidity tab
 
@@ -882,7 +896,7 @@ def render_zero_liquidity_tab(zero_liquidity_results: pd.DataFrame, deployment_u
         deployment_usd: Deployment amount threshold
         use_unlevered: Whether to show unlevered APR
         mode: 'unified' (kept for compatibility)
-        timestamp: Timestamp of the data being displayed
+        timestamp: Unix timestamp in seconds (for chart caching)
     """
     st.header("⚠️ Zero Liquidity Strategies")
 
@@ -1143,6 +1157,10 @@ def render_dashboard(data_loader: DataLoader, mode: str):
         (lend_rates, borrow_rates, collateral_ratios, prices,
          lend_rewards, borrow_rewards, available_borrow, borrow_fees, timestamp) = data_loader.load_data()
 
+    # IMMEDIATELY convert timestamp to seconds (Unix timestamp)
+    # DataLoader may return datetime, pandas.Timestamp, or string - convert to int
+    timestamp_seconds = to_seconds(timestamp)
+
     if lend_rates.empty or borrow_rates.empty or collateral_ratios.empty:
         st.warning("⚠️ No data available. Please check protocol connections.")
         st.stop()
@@ -1160,8 +1178,8 @@ def render_dashboard(data_loader: DataLoader, mode: str):
     if 'analysis_cache' not in st.session_state:
         st.session_state.analysis_cache = {}
 
-    # Create cache key based on timestamp and liquidation distance
-    cache_key = f"{timestamp}_{liquidation_distance}"
+    # Create cache key based on timestamp (seconds) and liquidation distance
+    cache_key = f"{timestamp_seconds}_{liquidation_distance}"
 
     # Check if we have cached results for this exact combination
     if cache_key in st.session_state.analysis_cache:
@@ -1188,6 +1206,7 @@ def render_dashboard(data_loader: DataLoader, mode: str):
             borrow_rewards=borrow_rewards,
             available_borrow=available_borrow,
             borrow_fees=borrow_fees,
+            timestamp=timestamp_seconds,  # Pass Unix seconds (int)
             liquidation_distance=liquidation_distance
         )
 
@@ -1285,11 +1304,11 @@ def render_dashboard(data_loader: DataLoader, mode: str):
     with tab1:
         render_all_strategies_tab(
             display_results, mode, deployment_usd, liquidation_distance,
-            use_unlevered, timestamp
+            use_unlevered, timestamp_seconds  # These render functions need updating to accept seconds
         )
 
     with tab2:
-        render_positions_tab(timestamp, mode)
+        render_positions_tab(timestamp, mode)  # Still uses datetime - needs future update
 
     with tab3:
         render_rate_tables_tab(
@@ -1299,5 +1318,5 @@ def render_dashboard(data_loader: DataLoader, mode: str):
 
     with tab4:
         render_zero_liquidity_tab(
-            zero_liquidity_results, deployment_usd, use_unlevered, mode, timestamp
+            zero_liquidity_results, deployment_usd, use_unlevered, mode, timestamp_seconds  # These render functions need updating
         )

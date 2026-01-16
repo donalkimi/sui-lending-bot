@@ -24,11 +24,12 @@ from data.protocol_merger import merge_protocol_data
 from analysis.rate_analyzer import RateAnalyzer
 from data.rate_tracker import RateTracker
 from alerts.slack_notifier import SlackNotifier
+from utils.time_helpers import to_seconds, to_datetime_str
 
 
 @dataclass
 class RefreshResult:
-    timestamp: datetime
+    timestamp: int  # Unix timestamp in seconds
 
     # Raw merged protocol data
     lend_rates: pd.DataFrame
@@ -74,6 +75,9 @@ def refresh_pipeline(
     # Round timestamp to nearest minute to reduce granularity
     raw_ts = timestamp or datetime.now()
     ts = raw_ts.replace(second=0, microsecond=0)
+
+    # Convert to seconds (Unix timestamp) - this is what we use internally
+    current_seconds = int(ts.timestamp())
 
 
     notifier = SlackNotifier()
@@ -128,7 +132,7 @@ def refresh_pipeline(
                         try:
                             snapshot_id = position_service.create_snapshot(
                                 position['position_id'],
-                                snapshot_timestamp=ts  # Use same timestamp as rates_snapshot
+                                snapshot_timestamp=ts  # PositionService still expects datetime object
                             )
                             print(f"  ✓ Created snapshot {snapshot_id[:8]} for position {position['position_id'][:8]}")
                         except Exception as e:
@@ -155,8 +159,8 @@ def refresh_pipeline(
             borrow_rewards=borrow_rewards,
             available_borrow=available_borrow,
             borrow_fees=borrow_fees,
-            liquidation_distance=liquidation_distance,
-            timestamp=ts  # Pass the rounded timestamp that was used to save to DB
+            timestamp=current_seconds,  # Pass Unix timestamp in seconds (integer)
+            liquidation_distance=liquidation_distance
         )
 
         protocol_A, protocol_B, all_results = analyzer.find_best_protocol_pair()
@@ -170,7 +174,7 @@ def refresh_pipeline(
                     all_results=all_results,
                     liquidation_distance=liquidation_distance,
                     deployment_usd=100.0,
-                    timestamp=ts
+                    timestamp=current_seconds
                 )
 
     except Exception as e:
@@ -179,7 +183,7 @@ def refresh_pipeline(
         if send_slack_notifications:
             notifier.alert_error(error_msg)
     return RefreshResult(
-        timestamp=ts,
+        timestamp=current_seconds,  # Return Unix timestamp in seconds
         lend_rates=lend_rates,
         borrow_rates=borrow_rates,
         collateral_ratios=collateral_ratios,

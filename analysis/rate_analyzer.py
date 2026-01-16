@@ -28,8 +28,8 @@ class RateAnalyzer:
         borrow_rewards: pd.DataFrame,            # NEW
         available_borrow: pd.DataFrame,          # NEW
         borrow_fees: pd.DataFrame,               # NEW
-        liquidation_distance: Optional[float] = None,
-        timestamp: Optional[datetime] = None     # NEW
+        timestamp: int,  # Unix timestamp in seconds
+        liquidation_distance: Optional[float] = None
     ):
         """
         Initialize the rate analyzer
@@ -43,6 +43,7 @@ class RateAnalyzer:
             borrow_rewards: DataFrame with borrow reward APRs (tokens x protocols) # NEW
             available_borrow: DataFrame with available borrow USD (tokens x protocols) # NEW
             borrow_fees: DataFrame with borrow fees (tokens x protocols)          # NEW
+            timestamp: Unix timestamp in seconds (integer) - the "current" moment
             liquidation_distance: Safety buffer (default from settings)
         """
         self.lend_rates = lend_rates
@@ -75,8 +76,12 @@ class RateAnalyzer:
         # Initialize calculator
         self.calculator = PositionCalculator(self.liquidation_distance)
 
-        # Store timestamp (when this data was captured)
-        self.timestamp = timestamp or datetime.now()
+        # Store timestamp (when this data was captured) - must be int (seconds)
+        if timestamp is None:
+            raise ValueError("timestamp is required and must be explicitly provided")
+        if not isinstance(timestamp, int):
+            raise TypeError(f"timestamp must be int (Unix seconds), got {type(timestamp).__name__}")
+        self.timestamp = timestamp
         
         print(f"\n🔧 Initialized Rate Analyzer:")
         print(f"   Protocols: {len(self.protocols)} ({', '.join(self.protocols)})")

@@ -234,9 +234,12 @@ def get_token_contract(conn: Any, token_symbol: str) -> Optional[str]:
 
 
 def fetch_historical_rates(conn: Any, token1_contract: str, token2_contract: str, token3_contract: str,
-                          protocol_A: str, protocol_B: str, days_back: int = 30) -> pd.DataFrame:
+                          protocol_A: str, protocol_B: str, strategy_seconds: int) -> pd.DataFrame:
     """
-    Fetch all 4 required rates + token2 price for each timestamp
+    Fetch ALL historical rates for the given tokens/protocols UP TO the strategy timestamp.
+
+    The strategy_seconds is the "current" moment selected in the dashboard (Unix timestamp).
+    We fetch all historical data where timestamp <= strategy_seconds.
 
     Args:
         conn: Database connection
@@ -245,16 +248,22 @@ def fetch_historical_rates(conn: Any, token1_contract: str, token2_contract: str
         token3_contract: Token3 contract address
         protocol_A: First protocol name
         protocol_B: Second protocol name
-        days_back: Number of days to look back
+        strategy_seconds: Unix timestamp in seconds (the "current" moment)
 
     Returns:
-        DataFrame with columns: timestamp, protocol, token_contract, lend_total_apr, borrow_total_apr, price_usd
+        DataFrame with columns: timestamp (as seconds), protocol, token_contract, lend_total_apr, borrow_total_apr, price_usd
     """
+    from utils.time_helpers import to_seconds, to_datetime_str
+
     if conn is None:
         return pd.DataFrame()
 
     try:
-        cutoff_date = datetime.now() - timedelta(days=days_back)
+        if strategy_seconds is None:
+            raise ValueError("strategy_seconds is required")
+
+        # Convert seconds to datetime string for SQL query
+        strategy_dt_str = to_datetime_str(strategy_seconds)
 
         if settings.USE_CLOUD_DB:
             query = """
@@ -267,7 +276,7 @@ def fetch_historical_rates(conn: Any, token1_contract: str, token2_contract: str
                 price_usd
             FROM rates_snapshot
             WHERE
-                timestamp >= %s
+                timestamp <= %s
                 AND (
                     (token_contract = %s AND protocol = %s) OR
                     (token_contract = %s AND protocol = %s) OR
@@ -277,7 +286,7 @@ def fetch_historical_rates(conn: Any, token1_contract: str, token2_contract: str
             ORDER BY timestamp
             """
             params = (
-                cutoff_date,
+                strategy_dt_str,
                 token1_contract, protocol_A,
                 token2_contract, protocol_A,
                 token2_contract, protocol_B,
@@ -294,8 +303,7 @@ def fetch_historical_rates(conn: Any, token1_contract: str, token2_contract: str
                 price_usd
             FROM rates_snapshot
             WHERE
-                timestamp >= ?
-                AND token_contract != ''
+                timestamp <= ?
                 AND (
                     (token_contract = ? AND protocol = ?) OR
                     (token_contract = ? AND protocol = ?) OR
@@ -305,7 +313,7 @@ def fetch_historical_rates(conn: Any, token1_contract: str, token2_contract: str
             ORDER BY timestamp
             """
             params = (
-                cutoff_date.isoformat(),
+                strategy_dt_str,
                 token1_contract, protocol_A,
                 token2_contract, protocol_A,
                 token2_contract, protocol_B,
@@ -314,11 +322,30 @@ def fetch_historical_rates(conn: Any, token1_contract: str, token2_contract: str
 
         df = pd.read_sql_query(query, conn, params=params)
 
-        if not pd.api.types.is_datetime64_any_dtype(df['timestamp']):
-            df['timestamp'] = pd.to_datetime(df['timestamp'])
+        # DEBUG: Print query results
+        print(f"\n{'='*80}")
+        print(f"DEBUG fetch_historical_rates - SQL Results:")
+        print(f"Strategy timestamp: {strategy_seconds} seconds ({strategy_dt_str})")
+        print(f"Rows returned: {len(df)}")
+        if len(df) > 0:
+            print(f"\nLatest 10 rows:")
+            print(df.tail(10).to_string())
+        else:
+            print("❌ NO ROWS RETURNED FROM QUERY")
+            print(f"\nQuery executed:")
+            print(query)
+            print(f"\nParams: {params}")
+        print(f"{'='*80}\n")
+
+        # IMMEDIATELY convert timestamp column from strings to seconds
+        if 'timestamp' in df.columns and len(df) > 0:
+            df['timestamp'] = df['timestamp'].apply(to_seconds)
 
         return df
-    except Exception:
+    except Exception as e:
+        print(f"❌ Exception in fetch_historical_rates: {e}")
+        import traceback
+        traceback.print_exc()
         return pd.DataFrame()
 
 
@@ -398,7 +425,7 @@ def create_strategy_history_chart(df: pd.DataFrame, token1: str, token2: str, to
     Create Plotly chart with dual axes (price + APR)
 
     Args:
-        df: DataFrame with timestamp, net_apr, token2_price
+        df: DataFrame with timestamp (as seconds), net_apr, token2_price
         token1, token2, token3: Token symbols
         protocol_A, protocol_B: Protocol names
         liq_dist: Liquidation distance (for display)
@@ -407,6 +434,12 @@ def create_strategy_history_chart(df: pd.DataFrame, token1: str, token2: str, to
     Returns:
         Plotly Figure object
     """
+    from utils.time_helpers import to_datetime_str
+
+    # Convert timestamp (seconds) to datetime strings for chart display
+    df_display = df.copy()
+    df_display['timestamp_display'] = df_display['timestamp'].apply(to_datetime_str)
+
     fig = go.Figure()
 
     # Calculate axis ranges with padding
@@ -422,8 +455,8 @@ def create_strategy_history_chart(df: pd.DataFrame, token1: str, token2: str, to
 
     # Token2 price (background, left axis)
     fig.add_trace(go.Scatter(
-        x=df['timestamp'],
-        y=df['token2_price'],
+        x=df_display['timestamp_display'],
+        y=df_display['token2_price'],
         name=f'{token2} Price (USD)',
         yaxis='y1',
         mode='lines',
@@ -433,11 +466,11 @@ def create_strategy_history_chart(df: pd.DataFrame, token1: str, token2: str, to
     ))
 
     # Net APR (primary, right axis)
-    apr_color = 'green' if df['net_apr'].iloc[-1] > 0 else 'red'
+    apr_color = 'green' if df_display['net_apr'].iloc[-1] > 0 else 'red'
 
     fig.add_trace(go.Scatter(
-        x=df['timestamp'],
-        y=df['net_apr'],
+        x=df_display['timestamp_display'],
+        y=df_display['net_apr'],
         name='Net APR (%)',
         yaxis='y2',
         mode='lines+markers',
@@ -502,14 +535,13 @@ def create_strategy_history_chart(df: pd.DataFrame, token1: str, token2: str, to
     return fig
 
 
-def get_strategy_history(strategy_row: Dict[str, Any], liquidation_distance: float = 0.15, days_back: int = 30) -> Tuple[Optional[pd.DataFrame], Optional[float], Optional[float], Optional[float], Optional[float]]:
+def get_strategy_history(strategy_row: Dict[str, Any], liquidation_distance: float = 0.15) -> Tuple[Optional[pd.DataFrame], Optional[float], Optional[float], Optional[float], Optional[float]]:
     """
     Main orchestration function to get historical chart data for a strategy
 
     Args:
         strategy_row: Strategy details from all_results DataFrame
         liquidation_distance: Current liquidation distance setting (for display only)
-        days_back: Days of history to fetch
 
     Returns:
         Tuple of (history_df, L_A, B_A, L_B, B_B) or (None, None, None, None, None) if error
@@ -551,10 +583,27 @@ def get_strategy_history(strategy_row: Dict[str, Any], liquidation_distance: flo
         borrow_fee_2A = strategy_row.get('borrow_fee_2A', 0.0)
         borrow_fee_3B = strategy_row.get('borrow_fee_3B', 0.0)
 
+        # Get the strategy timestamp and convert to seconds
+        from utils.time_helpers import to_seconds, to_datetime_str
+
+        strategy_timestamp_raw = strategy_row.get('timestamp')
+        if strategy_timestamp_raw is None:
+            raise ValueError("strategy_row must contain 'timestamp'")
+
+        # Convert to seconds (handles any input type)
+        strategy_seconds = to_seconds(strategy_timestamp_raw)
+
+        print(f"\n{'='*80}")
+        print(f"DEBUG get_strategy_history - Before SQL query:")
+        print(f"Strategy timestamp: {strategy_seconds} seconds ({to_datetime_str(strategy_seconds)})")
+        print(f"Token contracts: {token1_contract}, {token2_contract}, {token3_contract}")
+        print(f"Protocols: {protocol_A}, {protocol_B}")
+        print(f"{'='*80}\n")
+
         # Fetch historical rates
         raw_df = fetch_historical_rates(
             conn, token1_contract, token2_contract, token3_contract,
-            protocol_A, protocol_B, days_back
+            protocol_A, protocol_B, strategy_seconds
         )
 
         if raw_df.empty:
@@ -569,7 +618,10 @@ def get_strategy_history(strategy_row: Dict[str, Any], liquidation_distance: flo
 
         return history_df, L_A, B_A, L_B, B_B
 
-    except Exception:
-        return None, None, None, None, None
+    except Exception as e:
+        print(f"❌ Error in get_strategy_history: {e}")
+        import traceback
+        traceback.print_exc()
+        raise  # Re-raise the exception instead of silently returning None
     finally:
         conn.close()
