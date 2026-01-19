@@ -203,7 +203,7 @@ class PositionService:
         print(f"   {token1} → {token2} → {token3 if is_levered else 'N/A'}")
         print(f"   {protocol_A} ↔ {protocol_B}")
         print(f"   Deployment: ${deployment_usd:,.2f}")
-        print(f"   Entry APR: {entry_net_apr:.2f}%")
+        print(f"   Entry APR: {entry_net_apr * 100:.2f}%")
         print(f"   Levered: {is_levered}")
 
         return position_id

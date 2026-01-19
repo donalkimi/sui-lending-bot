@@ -646,7 +646,8 @@ def render_positions_table_tab():
         # Get latest rates from rates_snapshot table
         cursor = conn.cursor()
         cursor.execute("SELECT MAX(timestamp) FROM rates_snapshot")
-        latest_timestamp = cursor.fetchone()[0]
+        latest_timestamp_str = cursor.fetchone()[0]
+        latest_timestamp = to_seconds(latest_timestamp_str)  # Convert to Unix timestamp
 
         # Query all rates at latest timestamp
         rates_query = """
@@ -654,7 +655,7 @@ def render_positions_table_tab():
         FROM rates_snapshot
         WHERE timestamp = ?
         """
-        rates_df = pd.read_sql_query(rates_query, conn, params=(latest_timestamp,))
+        rates_df = pd.read_sql_query(rates_query, conn, params=(latest_timestamp_str,))
 
         # Helper function to get rate
         def get_rate(token, protocol, rate_type):
@@ -704,19 +705,35 @@ def render_positions_table_tab():
                 (position['B_B'] * borrow_3B if position['is_levered'] else 0)
             )
 
-            # Calculate annualized fee cost (convert to percentage)
-            total_fee_cost = (position['B_A'] * borrow_fee_2A + position['B_B'] * borrow_fee_3B) * 100
+            # Calculate fee cost (keep as decimal per DESIGN_NOTES.md Rule #7)
+            fee_cost = position['B_A'] * borrow_fee_2A + position['B_B'] * borrow_fee_3B
 
-            # Calculate NET APR (gross - fees)
-            current_net_apr = (gross_apr * 100) - total_fee_cost
+            # Calculate NET APR (in decimal)
+            current_net_apr_decimal = gross_apr - fee_cost
 
-            # Add row to display table
+            # Add row to display table with debug columns
             display_data.append({
                 'Entry Time': to_datetime_str(position['entry_timestamp']),
                 'Token Flow': token_flow,
                 'Protocols': protocol_pair,
                 'Entry APR': f"{position['entry_net_apr'] * 100:.2f}%",
-                'Current APR': f"{current_net_apr:.2f}%"
+                'Current APR': f"{current_net_apr_decimal * 100:.2f}%",
+                'Current Timestamp': to_datetime_str(latest_timestamp),
+                # Entry weights
+                'Entry L_A': f"{position['L_A']:.4f}",
+                'Entry B_A': f"{position['B_A']:.4f}",
+                'Entry L_B': f"{position['L_B']:.4f}",
+                'Entry B_B': f"{position['B_B']:.4f}",
+                # Entry rates (stored as decimals in DB)
+                'Entry Lend1A': f"{position['entry_lend_rate_1A'] * 100:.2f}%",
+                'Entry Borrow2A': f"{position['entry_borrow_rate_2A'] * 100:.2f}%",
+                'Entry Lend2B': f"{position['entry_lend_rate_2B'] * 100:.2f}%",
+                'Entry Borrow3B': f"{position['entry_borrow_rate_3B'] * 100:.2f}%" if position['is_levered'] else "N/A",
+                # Current rates
+                'Live Lend1A': f"{lend_1A * 100:.2f}%",
+                'Live Borrow2A': f"{borrow_2A * 100:.2f}%",
+                'Live Lend2B': f"{lend_2B * 100:.2f}%",
+                'Live Borrow3B': f"{borrow_3B * 100:.2f}%" if position['is_levered'] else "N/A",
             })
 
         # Create DataFrame and display

@@ -78,38 +78,48 @@ class PositionCalculator:
         lend_rate_token1_A: float,
         borrow_rate_token2_A: float,
         lend_rate_token2_B: float,
-        borrow_rate_token1_B: float
+        borrow_rate_token1_B: float,
+        borrow_fee_2A: float = 0.0,
+        borrow_fee_3B: float = 0.0
     ) -> float:
         """
-        Calculate the net APR for the strategy
-        
-        Net APR = (earnings from lending) - (costs from borrowing)
-        
+        Calculate the net APR for the strategy (after fees)
+
+        Net APR = (earnings from lending) - (costs from borrowing) - (borrow fees)
+
         Args:
             positions: Dictionary with L_A, B_A, L_B, B_B
             lend_rate_token1_A: Lending APY for token1 in Protocol A (as decimal)
             borrow_rate_token2_A: Borrow APY for token2 in Protocol A (as decimal)
             lend_rate_token2_B: Lending APY for token2 in Protocol B (as decimal)
             borrow_rate_token1_B: Borrow APY for token1 in Protocol B (as decimal)
-            
+            borrow_fee_2A: Borrow fee for token2 from Protocol A (as decimal, annualized)
+            borrow_fee_3B: Borrow fee for token3 from Protocol B (as decimal, annualized)
+
         Returns:
-            Net APR as percentage
+            Net APR as decimal (after fees)
         """
         L_A = positions['L_A']
         B_A = positions['B_A']
         L_B = positions['L_B']
         B_B = positions['B_B']
-        
+
         # Earnings from lending
         earn_A = L_A * lend_rate_token1_A
         earn_B = L_B * lend_rate_token2_B
 
-        # Costs from borrowing
+        # Costs from borrowing (rates only)
         cost_A = B_A * borrow_rate_token2_A
         cost_B = B_B * borrow_rate_token1_B
 
-        # Net APR (as decimal)
-        net_apr = earn_A + earn_B - cost_A - cost_B
+        # Gross APR (as decimal, before fees)
+        gross_apr = earn_A + earn_B - cost_A - cost_B
+
+        # Fee costs (annualized)
+        fee_cost = B_A * borrow_fee_2A + B_B * borrow_fee_3B
+
+        # Net APR (after fees)
+        net_apr = gross_apr - fee_cost
 
         return net_apr
 
@@ -304,14 +314,16 @@ class PositionCalculator:
                 # Take the minimum (most restrictive constraint)
                 max_size = min(max_size_constraint_2A, max_size_constraint_3B)
 
-            # Calculate net APR (levered)
+            # Calculate net APR (levered, after fees)
             # Note: token3 is converted 1:1 to token1, so we use token3's borrow rate
             net_apr = self.calculate_net_apr(
                 positions,
                 lend_rate_token1_A,
                 borrow_rate_token2_A,
                 lend_rate_token2_B,
-                borrow_rate_token3_B  # Changed: use token3 borrow rate
+                borrow_rate_token3_B,  # Changed: use token3 borrow rate
+                borrow_fee_2A if borrow_fee_2A is not None else 0.0,
+                borrow_fee_3B if borrow_fee_3B is not None else 0.0
             )
 
             # Calculate unlevered APR (without the loop)
@@ -323,10 +335,14 @@ class PositionCalculator:
                 lend_rate_token2_B
             )
 
-            # Calculate fee-adjusted APRs
-            # Default to 0 if fees are missing - all APRs will equal base APR
+            # Calculate fee-adjusted APRs for different time horizons (5, 30, 90 days)
+            # Note: net_apr already includes fees, so we need to back out fees and recalculate for different time periods
+            # For now, calculate based on gross APR
+            gross_apr = net_apr + (positions['B_A'] * (borrow_fee_2A if borrow_fee_2A is not None else 0.0) +
+                                   positions['B_B'] * (borrow_fee_3B if borrow_fee_3B is not None else 0.0))
+
             fee_adjusted_aprs = self.calculate_fee_adjusted_aprs(
-                net_apr,
+                gross_apr,
                 positions,
                 borrow_fee_2A if borrow_fee_2A is not None else 0.0,
                 borrow_fee_3B if borrow_fee_3B is not None else 0.0

@@ -81,7 +81,7 @@ def format_strategy_summary_line(strategy: Dict, liq_dist: float, use_unlevered:
         # Levered: token1 → token2 → token3 (with loop)
         token_flow = f"{token1} → {token2} → {token3}"
 
-    return f"{token_flow} | {protocol_A} ↔ {protocol_B} | Max Size {max_size_str} | {net_apr_indicator} Net APR {net_apr_value:.2f}% | {apr5_indicator} 5day APR {apr5_value:.2f}%"
+    return f"{token_flow} | {protocol_A} ↔ {protocol_B} | Max Size {max_size_str} | {net_apr_indicator} Net APR {net_apr_value * 100:.2f}% | {apr5_indicator} 5day APR {apr5_value * 100:.2f}%"
 
 
 class SlackNotifier:
@@ -242,7 +242,7 @@ class SlackNotifier:
         all_results,  # pd.DataFrame
         liquidation_distance: float = 0.20,
         deployment_usd: float = 100.0,
-        timestamp: datetime = None
+        timestamp: int = None
     ) -> bool:
         """
         Alert with top 3 strategies in two configurations
@@ -251,15 +251,17 @@ class SlackNotifier:
             all_results: DataFrame of all analyzed strategies
             liquidation_distance: Liq dist % for display (default 20%)
             deployment_usd: Min deployment size filter (default 100)
-            timestamp: Timestamp for the data snapshot (default: now)
+            timestamp: Unix timestamp in seconds (required)
 
         Returns:
             True if successful
         """
         import pandas as pd
+        from utils.time_helpers import to_datetime_str
 
+        # Fail loudly if timestamp is missing (per DESIGN_NOTES.md Rule #2)
         if timestamp is None:
-            timestamp = datetime.now()
+            raise ValueError("timestamp is required - datetime.now() should only be called when collecting fresh market data")
 
         # Filter Set 1: Unrestricted (only deployment size filter)
         filtered_set1 = all_results[
@@ -308,7 +310,7 @@ class SlackNotifier:
 
         # Prepare variables for Slack Workflow
         liq_dist_pct = int(liquidation_distance * 100)
-        timestamp_str = timestamp.strftime('%Y-%m-%d %H:%M:%S UTC')
+        timestamp_str = to_datetime_str(timestamp) + ' UTC'
         variables = {
             "liq_dist": str(liq_dist_pct),
             "timestamp": timestamp_str,
