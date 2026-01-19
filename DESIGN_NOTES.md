@@ -39,7 +39,7 @@ Positions use normalized multipliers (L_A, B_A, L_B, B_B) that are scaled by dep
 
 ### 4. Event Sourcing
 
-The positions table stores immutable entry state, while position_snapshots captures state changes over time. Never mutate historical records.
+The positions table stores immutable entry state. Position performance is calculated on-the-fly from the rates_snapshot table. Never mutate historical records.
 
 ### 5. Timestamp Representation: Unix Seconds
 
@@ -151,3 +151,33 @@ display = f"{entry_net_apr}%"  # Could be "5%" or "500%"
 - **Strategy calculation → Database:** Values are already decimals, store as-is
 - **Database → Display:** Multiply by 100 and add "%" symbol
 - **User input → Database:** Divide by 100 to convert percentage to decimal
+
+### 8. No sys.path Manipulation
+
+**Rule:** NEVER use `sys.path.append()`, `sys.path.insert()`, or any other sys.path manipulation in the codebase.
+
+**Forbidden pattern:**
+```python
+# ❌ NEVER DO THIS
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+```
+
+**Why this is bad:**
+- Non-standard Python practice
+- Breaks IDE tooling and autocomplete
+- Makes imports fragile and order-dependent
+- Difficult to debug when things go wrong
+- Prevents proper package installation
+
+**Correct approach:**
+- Install the project as an editable package: `pip install -e .`
+- Use proper package structure with `pyproject.toml`
+- All imports will work without sys.path manipulation
+- Standard Python best practice
+
+**Current state:**
+- We have 11 files that still use this anti-pattern (see plan to refactor)
+- DO NOT add new instances
+- We are working to eliminate all existing instances

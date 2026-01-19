@@ -1,210 +1,171 @@
-"""
-Position Service - Core position management logic for paper trading (Phase 1)
-
-This service handles:
-- Creating/closing positions (paper trading only, no blockchain transactions)
-- Calculating position PnL with detailed breakdown
-- Managing position snapshots (lazy creation)
-- Calculating liquidation risk metrics
-- Querying positions and portfolio summaries
-"""
-
 import sqlite3
-import pandas as pd
 import uuid
-from datetime import datetime, timedelta
-from typing import Dict, Optional, List, Tuple
+from typing import Dict, List, Optional, Tuple
+import pandas as pd
+from datetime import datetime
 import sys
 import os
 
-try:
-    import psycopg2
-except ImportError:
-    psycopg2 = None
-
+# Add parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from config import settings
-from utils.time_helpers import to_datetime_str
+
+from utils.time_helpers import to_datetime_str, to_seconds
 
 
 class PositionService:
-    """Service for managing paper trading positions"""
+    """
+    Service for managing paper trading positions (Phase 1) and real capital positions (Phase 2).
 
-    def __init__(self, conn):
-        """
-        Initialize the position service
+    Key principles:
+    - Event sourcing: positions table stores immutable entry state
+    - Forward-looking calculations: rates at time T apply to period [T, T+1)
+    - No datetime.now() - all timestamps must be explicitly provided
+    - Timestamps in Unix seconds (int) internally
+    """
 
-        Args:
-            conn: Database connection (sqlite3 or psycopg2)
-        """
+    def __init__(self, conn: sqlite3.Connection):
+        """Initialize with database connection"""
         self.conn = conn
-        self.is_postgres = psycopg2 is not None and isinstance(conn, psycopg2.extensions.connection)
 
-    def _get_placeholder(self):
-        """Get the correct parameter placeholder for SQL queries"""
-        return '%s' if self.is_postgres else '?'
-
-    def _execute_query(self, query: str, params: tuple = None) -> pd.DataFrame:
-        """Execute a query and return results as DataFrame"""
-        try:
-            return pd.read_sql_query(query, self.conn, params=params)
-        except Exception as e:
-            print(f"Query error: {e}")
-            return pd.DataFrame()
-
-    def _execute_write(self, query: str, params: tuple = None) -> bool:
-        """Execute a write query (INSERT/UPDATE/DELETE)"""
-        cursor = self.conn.cursor()
-        try:
-            cursor.execute(query, params or ())
-            self.conn.commit()
-            return True
-        except Exception as e:
-            print(f"Write error: {e}")
-            self.conn.rollback()
-            return False
-        finally:
-            cursor.close()
-
-    # ==================== Lifecycle Management ====================
+    # ==================== Position Management ====================
 
     def create_position(
         self,
         strategy_row: pd.Series,
+        positions: Dict,
+        token1: str,
+        token2: str,
+        token3: Optional[str],
+        token1_contract: str,
+        token2_contract: str,
+        token3_contract: Optional[str],
+        protocol_A: str,
+        protocol_B: str,
         deployment_usd: float,
-        liquidation_distance: float,
         is_levered: bool,
-        notes: str = "",
         is_paper_trade: bool = True,
-        user_id: Optional[str] = None
+        user_id: Optional[str] = None,
+        notes: Optional[str] = None,
+        wallet_address: Optional[str] = None,
+        transaction_hash_open: Optional[str] = None,
+        on_chain_position_id: Optional[str] = None
     ) -> str:
         """
-        Create a new paper trading position
+        Create a new position (Phase 1: paper trade, Phase 2: real capital)
 
         Args:
-            strategy_row: Row from RateAnalyzer results containing strategy data
-            deployment_usd: Deployment size in USD
-            liquidation_distance: Liquidation distance threshold
-            is_levered: True if levered (4 legs), False if unlevered (3 legs)
+            strategy_row: Strategy data with timestamp, rates, prices, APRs
+            positions: Position multipliers (L_A, B_A, L_B, B_B)
+            token1: First token symbol
+            token2: Second token symbol
+            token3: Third token symbol (None for unlevered)
+            token1_contract: Token1 contract address
+            token2_contract: Token2 contract address
+            token3_contract: Token3 contract address (None for unlevered)
+            protocol_A: First protocol name
+            protocol_B: Second protocol name
+            deployment_usd: USD amount to deploy
+            is_levered: Whether position is levered (4-leg) or not (3-leg)
+            is_paper_trade: True for Phase 1 (paper), False for Phase 2 (real capital)
+            user_id: Optional user ID for multi-user support (Phase 2)
             notes: Optional user notes
-            is_paper_trade: Always True for Phase 1
-            user_id: Optional user ID (for multi-user support in future)
+            wallet_address: Optional wallet address (Phase 2)
+            transaction_hash_open: Optional transaction hash for opening (Phase 2)
+            on_chain_position_id: Optional on-chain position ID (Phase 2)
 
         Returns:
             position_id: UUID of created position
+
+        Raises:
+            ValueError: If timestamp is missing
+            TypeError: If timestamp is not int
         """
-        # Generate position ID
-        position_id = str(uuid.uuid4())
-
-        # Extract strategy data
-        token1 = strategy_row['token1']
-        token2 = strategy_row['token2']
-        token3 = strategy_row.get('token3')
-        token1_contract = strategy_row.get('token1_contract', '')
-        token2_contract = strategy_row.get('token2_contract', '')
-        token3_contract = strategy_row.get('token3_contract')
-        protocol_A = strategy_row['protocol_A']
-        protocol_B = strategy_row['protocol_B']
-
-        # Entry timestamp (should match the rates_snapshot timestamp being displayed)
-        # Timestamps are already rounded to nearest minute in rates_snapshot
+        # Validate timestamp
         entry_timestamp = strategy_row.get('timestamp')
         if entry_timestamp is None:
             raise ValueError("strategy_row must contain 'timestamp' - cannot default to datetime.now()")
 
-        # Fail loudly if we receive anything other than an integer
         if not isinstance(entry_timestamp, int):
             raise TypeError(
                 f"entry_timestamp must be Unix seconds (int), got {type(entry_timestamp).__name__}. "
-                f"Value: {entry_timestamp}. Convert to seconds using to_seconds() before passing to this function."
+                f"Use to_seconds() to convert."
             )
 
-        # Position multipliers (normalized)
-        L_A = strategy_row.get('L_A', 0) or 0
-        B_A = strategy_row.get('B_A', 0) or 0
-        L_B = strategy_row.get('L_B', 0) or 0
-        B_B = (strategy_row.get('B_B', 0) or 0) if is_levered else 0
+        # Generate position ID
+        position_id = str(uuid.uuid4())
 
-        # Entry rates
+        # Extract multipliers
+        L_A = positions['L_A']
+        B_A = positions['B_A']
+        L_B = positions['L_B']
+        B_B = positions.get('B_B')  # None for unlevered positions
+
+        # Extract entry rates (already in decimal format: 0.0316 = 3.16%)
         entry_lend_rate_1A = strategy_row.get('lend_rate_1A', 0)
         entry_borrow_rate_2A = strategy_row.get('borrow_rate_2A', 0)
         entry_lend_rate_2B = strategy_row.get('lend_rate_2B', 0)
         entry_borrow_rate_3B = strategy_row.get('borrow_rate_3B') if is_levered else None
 
-        # Entry prices (leg-level for Step 6)
-        entry_price_1A = strategy_row.get('price_1A', 0)
-        entry_price_2A = strategy_row.get('price_2A', strategy_row.get('price_2', 0))  # Fallback to price_2
-        entry_price_2B = strategy_row.get('price_2B', strategy_row.get('price_2', 0))  # Fallback to price_2
-        entry_price_3B = strategy_row.get('price_3B') if is_levered else None
+        # Extract entry prices (leg-level)
+        entry_price_1A = strategy_row.get('P1_A', 0)
+        entry_price_2A = strategy_row.get('P2_A', 0)
+        entry_price_2B = strategy_row.get('P2_B', 0)
+        entry_price_3B = strategy_row.get('P3_B') if is_levered else None
 
-        # Entry collateral ratios
+        # Extract entry collateral ratios
         entry_collateral_ratio_1A = strategy_row.get('collateral_ratio_1A', 0)
         entry_collateral_ratio_2B = strategy_row.get('collateral_ratio_2B', 0)
 
-        # Entry APRs (fee-adjusted)
+        # Extract entry strategy APRs (already fee-adjusted)
         entry_net_apr = strategy_row.get('net_apr', 0)
         entry_apr5 = strategy_row.get('apr5', 0)
         entry_apr30 = strategy_row.get('apr30', 0)
         entry_apr90 = strategy_row.get('apr90', 0)
+        entry_liquidation_distance = strategy_row.get('liquidation_distance', 0)
 
-        # Entry liquidity & fees
-        entry_max_size_usd = strategy_row.get('max_size', 0)
-        entry_borrow_fee_2A = strategy_row.get('borrow_fee_2A', 0)
+        # Extract entry liquidity & fees
+        entry_max_size_usd = strategy_row.get('max_size_usd')
+        entry_borrow_fee_2A = strategy_row.get('borrow_fee_2A')
         entry_borrow_fee_3B = strategy_row.get('borrow_fee_3B') if is_levered else None
 
+        # Convert timestamp to datetime string for DB
+        entry_timestamp_str = to_datetime_str(entry_timestamp)
+
         # Insert position
-        ph = self._get_placeholder()
-        query = f"""
-        INSERT INTO positions (
-            position_id, status, strategy_type, is_paper_trade, is_levered, user_id,
-            token1, token2, token3, token1_contract, token2_contract, token3_contract,
-            protocol_A, protocol_B, entry_timestamp, deployment_usd,
-            L_A, B_A, L_B, B_B,
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            INSERT INTO positions (
+                position_id, status, strategy_type,
+                is_paper_trade, is_levered, user_id,
+                token1, token2, token3,
+                token1_contract, token2_contract, token3_contract,
+                protocol_A, protocol_B,
+                entry_timestamp,
+                deployment_usd, L_A, B_A, L_B, B_B,
+                entry_lend_rate_1A, entry_borrow_rate_2A, entry_lend_rate_2B, entry_borrow_rate_3B,
+                entry_price_1A, entry_price_2A, entry_price_2B, entry_price_3B,
+                entry_collateral_ratio_1A, entry_collateral_ratio_2B,
+                entry_net_apr, entry_apr5, entry_apr30, entry_apr90, entry_liquidation_distance,
+                entry_max_size_usd, entry_borrow_fee_2A, entry_borrow_fee_3B,
+                notes, wallet_address, transaction_hash_open, on_chain_position_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            position_id, 'active', 'recursive_lending',
+            is_paper_trade, is_levered, user_id,
+            token1, token2, token3,
+            token1_contract, token2_contract, token3_contract,
+            protocol_A, protocol_B,
+            entry_timestamp_str,
+            deployment_usd, L_A, B_A, L_B, B_B,
             entry_lend_rate_1A, entry_borrow_rate_2A, entry_lend_rate_2B, entry_borrow_rate_3B,
             entry_price_1A, entry_price_2A, entry_price_2B, entry_price_3B,
             entry_collateral_ratio_1A, entry_collateral_ratio_2B,
             entry_net_apr, entry_apr5, entry_apr30, entry_apr90, entry_liquidation_distance,
-            entry_max_size_usd, entry_borrow_fee_2A, entry_borrow_fee_3B, notes
-        ) VALUES (
-            {ph}, {ph}, {ph}, {ph}, {ph}, {ph},
-            {ph}, {ph}, {ph}, {ph}, {ph}, {ph},
-            {ph}, {ph}, {ph}, {ph},
-            {ph}, {ph}, {ph}, {ph},
-            {ph}, {ph}, {ph}, {ph},
-            {ph}, {ph}, {ph}, {ph},
-            {ph}, {ph},
-            {ph}, {ph}, {ph}, {ph}, {ph},
-            {ph}, {ph}, {ph}, {ph}
-        )
-        """
+            entry_max_size_usd, entry_borrow_fee_2A, entry_borrow_fee_3B,
+            notes, wallet_address, transaction_hash_open, on_chain_position_id
+        ))
 
-        # Convert timestamp to datetime string for DB write (boundary conversion)
-        entry_timestamp_str = to_datetime_str(entry_timestamp)
-
-        params = (
-            position_id, 'active', 'recursive_lending', is_paper_trade, is_levered, user_id,
-            token1, token2, token3, token1_contract, token2_contract, token3_contract,
-            protocol_A, protocol_B, entry_timestamp_str, deployment_usd,
-            L_A, B_A, L_B, B_B,
-            entry_lend_rate_1A, entry_borrow_rate_2A, entry_lend_rate_2B, entry_borrow_rate_3B,
-            entry_price_1A, entry_price_2A, entry_price_2B, entry_price_3B,
-            entry_collateral_ratio_1A, entry_collateral_ratio_2B,
-            entry_net_apr, entry_apr5, entry_apr30, entry_apr90, liquidation_distance,
-            entry_max_size_usd, entry_borrow_fee_2A, entry_borrow_fee_3B, notes
-        )
-
-        if not self._execute_write(query, params):
-            raise Exception("Failed to create position")
-
-        # Create initial snapshot
-        self.create_snapshot(position_id, snapshot_timestamp=entry_timestamp)
-
-        print(f"✅ Created paper position: {position_id}")
-        print(f"   {token1} → {token2} → {token3 if is_levered else 'N/A'}")
-        print(f"   {protocol_A} ↔ {protocol_B}")
-        print(f"   Deployment: ${deployment_usd:,.2f}")
-        print(f"   Entry APR: {entry_net_apr * 100:.2f}%")
-        print(f"   Levered: {is_levered}")
+        self.conn.commit()
 
         return position_id
 
@@ -212,20 +173,23 @@ class PositionService:
         self,
         position_id: str,
         close_timestamp: int,
-        reason: str = 'manual',
-        notes: str = ""
-    ) -> bool:
+        close_reason: str,
+        close_notes: Optional[str] = None,
+        transaction_hash_close: Optional[str] = None
+    ) -> None:
         """
-        Close a position
+        Close an active position
 
         Args:
-            position_id: Position UUID
-            close_timestamp: Unix timestamp in seconds when position is closed (must be provided)
-            reason: Closure reason ('manual', 'liquidated', 'take_profit', etc.)
-            notes: Optional closure notes
+            position_id: UUID of position to close
+            close_timestamp: Unix timestamp when position was closed (int)
+            close_reason: Reason for closing (user, liquidation, rebalance, etc.)
+            close_notes: Optional notes about closure
+            transaction_hash_close: Optional transaction hash for closing (Phase 2)
 
-        Returns:
-            bool: True if successful
+        Raises:
+            ValueError: If timestamp is missing
+            TypeError: If timestamp is not int
         """
         if close_timestamp is None:
             raise ValueError("close_timestamp is required - cannot default to datetime.now()")
@@ -233,753 +197,281 @@ class PositionService:
         if not isinstance(close_timestamp, int):
             raise TypeError(
                 f"close_timestamp must be Unix seconds (int), got {type(close_timestamp).__name__}. "
-                f"Value: {close_timestamp}"
+                f"Use to_seconds() to convert."
             )
 
-        # Convert to datetime string for DB write
+        # Convert to datetime string for DB
         close_timestamp_str = to_datetime_str(close_timestamp)
 
-        # Update position status
-        ph = self._get_placeholder()
-        query = f"""
-        UPDATE positions
-        SET status = {ph}, close_timestamp = {ph}, close_reason = {ph}, close_notes = {ph}, updated_at = {ph}
-        WHERE position_id = {ph}
+        # Update position
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            UPDATE positions
+            SET status = 'closed',
+                close_timestamp = ?,
+                close_reason = ?,
+                close_notes = ?,
+                transaction_hash_close = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE position_id = ?
+        """, (close_timestamp_str, close_reason, close_notes, transaction_hash_close, position_id))
+
+        self.conn.commit()
+
+    def get_active_positions(self) -> pd.DataFrame:
+        """Get all active positions"""
+        query = """
+        SELECT *
+        FROM positions
+        WHERE status = 'active'
+        ORDER BY entry_timestamp DESC
         """
+        positions = pd.read_sql_query(query, self.conn)
 
-        params = ('closed', close_timestamp_str, reason, notes, close_timestamp_str, position_id)
+        # Convert timestamps to Unix seconds
+        if not positions.empty and 'entry_timestamp' in positions.columns:
+            positions['entry_timestamp'] = positions['entry_timestamp'].apply(to_seconds)
 
-        if not self._execute_write(query, params):
-            return False
+        return positions
 
-        # Create final snapshot
-        self.create_snapshot(position_id, snapshot_timestamp=close_timestamp)
-
-        print(f"✅ Closed position: {position_id}")
-        print(f"   Reason: {reason}")
-
-        return True
-
-    # ==================== Price Helper Functions (Step 6) ====================
-
-    def get_pnl_price(
-        self,
-        token: str,
-        protocol: str,
-        timestamp: Optional[int] = None,
-        token_contract: Optional[str] = None
-    ) -> float:
+    def get_position_by_id(self, position_id: str) -> Optional[pd.Series]:
+        """Get position by ID"""
+        query = """
+        SELECT *
+        FROM positions
+        WHERE position_id = ?
         """
-        Get price for PnL calculation purposes.
+        result = pd.read_sql_query(query, self.conn, params=(position_id,))
 
-        Phase 1: Returns protocol-reported price from rates_snapshot
-        Phase 2: Can be extended to query AMM (Cetus) or oracle (Pyth, CoinGecko)
+        if result.empty:
+            return None
 
-        Args:
-            token: Token symbol (e.g., 'SUI', 'USDC')
-            protocol: Protocol name (e.g., 'navi', 'suilend', 'alphafi')
-            timestamp: Unix timestamp in seconds (None = latest snapshot)
-            token_contract: Optional token contract address (more reliable than symbol)
+        position = result.iloc[0]
 
-        Returns:
-            float: Price in USD
+        # Convert timestamps to Unix seconds
+        position['entry_timestamp'] = to_seconds(position['entry_timestamp'])
+        if pd.notna(position.get('close_timestamp')):
+            position['close_timestamp'] = to_seconds(position['close_timestamp'])
 
-        Design notes:
-            - Centralizes price source logic for easy upgrade
-            - Can add fallback chain: AMM -> Oracle -> Protocol
-            - Can add price staleness checks
-            - Can add multiple AMM averaging (TWAP, etc.)
-        """
-        ph = self._get_placeholder()
-
-        if timestamp:
-            # Convert integer timestamp to datetime string for DB query
-            timestamp_str = to_datetime_str(timestamp)
-
-            if token_contract:
-                query = f"""
-                    SELECT price_usd
-                    FROM rates_snapshot
-                    WHERE token_contract = {ph} AND protocol = {ph} AND timestamp = {ph}
-                    LIMIT 1
-                """
-                params = (token_contract, protocol, timestamp_str)
-            else:
-                query = f"""
-                    SELECT price_usd
-                    FROM rates_snapshot
-                    WHERE token = {ph} AND protocol = {ph} AND timestamp = {ph}
-                    LIMIT 1
-                """
-                params = (token, protocol, timestamp_str)
-        else:
-            if token_contract:
-                query = f"""
-                    SELECT price_usd
-                    FROM rates_snapshot
-                    WHERE token_contract = {ph} AND protocol = {ph}
-                    ORDER BY timestamp DESC
-                    LIMIT 1
-                """
-                params = (token_contract, protocol)
-            else:
-                query = f"""
-                    SELECT price_usd
-                    FROM rates_snapshot
-                    WHERE token = {ph} AND protocol = {ph}
-                    ORDER BY timestamp DESC
-                    LIMIT 1
-                """
-                params = (token, protocol)
-
-        result = self._execute_query(query, params)
-
-        if not result.empty:
-            return float(result.iloc[0]['price_usd'])
-        else:
-            raise ValueError(f"No price found for {token} on {protocol} at {timestamp or 'latest'}")
-
-    def get_leg_price_for_pnl(
-        self,
-        position: pd.Series,
-        leg: str,
-        timestamp: Optional[int] = None
-    ) -> float:
-        """
-        Get price for a specific position leg for PnL calculation.
-
-        Args:
-            position: Position record with token/protocol info
-            leg: Leg identifier ('1A', '2A', '2B', '3B')
-            timestamp: Unix timestamp in seconds (uses latest if None)
-
-        Returns:
-            float: Price in USD for that leg
-
-        Usage:
-            price_1A = get_leg_price_for_pnl(position, '1A', latest_snapshot['snapshot_timestamp'])
-        """
-        leg_config = {
-            '1A': ('token1', 'token1_contract', 'protocol_A'),
-            '2A': ('token2', 'token2_contract', 'protocol_A'),
-            '2B': ('token2', 'token2_contract', 'protocol_B'),
-            '3B': ('token3', 'token3_contract', 'protocol_B'),
-        }
-
-        if leg not in leg_config:
-            raise ValueError(f"Invalid leg: {leg}")
-
-        token_field, contract_field, protocol_field = leg_config[leg]
-        token = position[token_field]
-        token_contract = position.get(contract_field)
-        protocol = position[protocol_field]
-
-        return self.get_pnl_price(token, protocol, timestamp, token_contract)
+        return position
 
     # ==================== Valuation & PnL ====================
 
     def calculate_position_value(
         self,
         position: pd.Series,
-        latest_snapshot: Optional[pd.Series] = None
+        live_timestamp: int
     ) -> Dict:
         """
-        Calculate current position value and PnL breakdown with leg-level price impacts (Step 6)
+        Calculate current position value and PnL breakdown.
 
-        This uses forward-looking calculation: each snapshot's APR applies to
-        the period AFTER that snapshot until the next snapshot.
+        Queries rates_snapshot directly for all historical rates and calculates:
+        - LE(T): Total lend earnings
+        - BC(T): Total borrow costs
+        - FEES: One-time upfront fees
+        - NET$$$: LE(T) - BC(T) - FEES
+        - current_value: deployment_usd + NET$$$
 
-        For active positions, the latest snapshot's rates apply to the period
-        from latest snapshot to "now" (current calculation time).
+        Uses forward-looking calculation: each timestamp's rates apply to
+        the period [timestamp, next_timestamp).
 
         Args:
             position: Position record from database
-            latest_snapshot: Optional latest snapshot (will query if not provided)
+            live_timestamp: Dashboard selected timestamp in Unix seconds (int)
 
         Returns:
-            Dict with PnL breakdown:
-                - total_value: Current total value
-                - total_pnl: Total PnL
-                - pnl_base_apr: Earnings from base APR (before fees)
-                - pnl_reward_apr: Earnings from reward APR
-                - pnl_price_leg1: PnL from Leg 1 (Protocol A Lend, Token1)
-                - pnl_price_leg2: PnL from Leg 2 (Protocol A Borrow, Token2)
-                - pnl_price_leg3: PnL from Leg 3 (Protocol B Lend, Token2)
-                - pnl_price_leg4: PnL from Leg 4 (Protocol B Borrow, Token3, NULL if unlevered)
-                - pnl_fees: Fee costs (negative)
-                - net_token2_hedge: Net Token2 price impact (leg2 + leg3, for hedge validation)
+            Dict with:
+                - current_value: deployment + net_earnings
+                - lend_earnings: LE(T) in $$$
+                - borrow_costs: BC(T) in $$$
+                - fees: Upfront fees in $$$
+                - net_earnings: NET$$$ = LE(T) - BC(T) - FEES
+                - holding_days: Actual holding period in days
+                - periods_count: Number of time periods
         """
-        # Get all snapshots for this position
-        snapshots = self.get_position_snapshots(position['position_id'])
+        # Input validation
+        if not isinstance(live_timestamp, int):
+            raise TypeError(f"live_timestamp must be int (Unix seconds), got {type(live_timestamp).__name__}")
 
-        if snapshots.empty:
-            return {
-                'total_value': position['deployment_usd'],
-                'total_pnl': 0,
-                'pnl_base_apr': 0,
-                'pnl_reward_apr': 0,
-                'pnl_price_leg1': 0,
-                'pnl_price_leg2': 0,
-                'pnl_price_leg3': 0,
-                'pnl_price_leg4': 0,
-                'pnl_fees': 0,
-                'net_token2_hedge': 0
-            }
+        if live_timestamp < position['entry_timestamp']:
+            raise ValueError("live_timestamp cannot be before entry_timestamp")
 
         # Extract position parameters
         deployment = position['deployment_usd']
         L_A = position['L_A']
         B_A = position['B_A']
         L_B = position['L_B']
-        B_B = position.get('B_B', 0) or 0
-        is_levered = position['is_levered']
-        is_active = position['status'] == 'active'
-
-        # Calculate Base APR PnL (forward-looking)
-        pnl_base_apr = 0
-        loop_end = len(snapshots) if is_active else len(snapshots) - 1
-
-        for i in range(loop_end):
-            current_snap = snapshots.iloc[i]
-
-            # For active positions, last iteration uses the latest_snapshot timestamp as end time
-            if is_active and i == len(snapshots) - 1:
-                if latest_snapshot is None:
-                    raise ValueError("latest_snapshot is required for active position PnL calculation - cannot use datetime.now()")
-                # Use the latest snapshot timestamp (which was just created) as the end time
-                current_time = latest_snapshot['snapshot_timestamp']
-                time_delta = (current_time - current_snap['snapshot_timestamp']).total_seconds()
-            else:
-                next_snap = snapshots.iloc[i + 1]
-                time_delta = (next_snap['snapshot_timestamp'] - current_snap['snapshot_timestamp']).total_seconds()
-
-            time_years = time_delta / (365 * 86400)
-
-            # Forward-looking base rates from current snapshot
-            base_lend_1A = current_snap['lend_base_apr_1A'] or 0
-            base_borrow_2A = current_snap['borrow_base_apr_2A'] or 0
-            base_lend_2B = current_snap['lend_base_apr_2B'] or 0
-            base_borrow_3B = (current_snap['borrow_base_apr_3B'] or 0) if is_levered else 0
-
-            # Calculate base earnings for this period (BEFORE fees)
-            earn_A = deployment * L_A * base_lend_1A * time_years
-            earn_B = deployment * L_B * base_lend_2B * time_years
-            cost_A = deployment * B_A * base_borrow_2A * time_years
-            cost_B = deployment * B_B * base_borrow_3B * time_years if is_levered else 0
-
-            period_base = earn_A + earn_B - cost_A - cost_B
-            pnl_base_apr += period_base
-
-        # Calculate Reward APR PnL (forward-looking)
-        pnl_reward_apr = 0
-        for i in range(loop_end):
-            current_snap = snapshots.iloc[i]
-
-            # For active positions, last iteration uses the latest_snapshot timestamp as end time
-            if is_active and i == len(snapshots) - 1:
-                if latest_snapshot is None:
-                    raise ValueError("latest_snapshot is required for active position PnL calculation - cannot use datetime.now()")
-                # Use the latest snapshot timestamp (which was just created) as the end time
-                current_time = latest_snapshot['snapshot_timestamp']
-                time_delta = (current_time - current_snap['snapshot_timestamp']).total_seconds()
-            else:
-                next_snap = snapshots.iloc[i + 1]
-                time_delta = (next_snap['snapshot_timestamp'] - current_snap['snapshot_timestamp']).total_seconds()
-
-            time_years = time_delta / (365 * 86400)
-
-            # Forward-looking reward rates from current snapshot
-            reward_lend_1A = current_snap['lend_reward_apr_1A'] or 0
-            reward_borrow_2A = current_snap['borrow_reward_apr_2A'] or 0
-            reward_lend_2B = current_snap['lend_reward_apr_2B'] or 0
-            reward_borrow_3B = (current_snap['borrow_reward_apr_3B'] or 0) if is_levered else 0
-
-            # Calculate reward earnings for this period
-            reward_A = deployment * L_A * reward_lend_1A * time_years
-            reward_B_borrow = deployment * B_A * reward_borrow_2A * time_years
-            reward_B_lend = deployment * L_B * reward_lend_2B * time_years
-            reward_C = deployment * B_B * reward_borrow_3B * time_years if is_levered else 0
-
-            period_reward = reward_A + reward_B_borrow + reward_B_lend + reward_C
-            pnl_reward_apr += period_reward
-
-        # Calculate Price Impact PnL (leg-level for Step 6)
-        # Use latest snapshot (for active) or final snapshot (for closed)
-        if latest_snapshot is None:
-            latest_snapshot = snapshots.iloc[-1]
-
-        # Get latest prices for each leg
-        try:
-            latest_price_1A = float(latest_snapshot['price_1A']) if pd.notna(latest_snapshot.get('price_1A')) else position['entry_price_1A']
-            latest_price_2A = float(latest_snapshot['price_2A']) if pd.notna(latest_snapshot.get('price_2A')) else position['entry_price_2A']
-            latest_price_2B = float(latest_snapshot['price_2B']) if pd.notna(latest_snapshot.get('price_2B')) else position['entry_price_2B']
-            latest_price_3B = float(latest_snapshot['price_3B']) if pd.notna(latest_snapshot.get('price_3B')) and is_levered else (position.get('entry_price_3B', 0) or 0)
-        except (KeyError, TypeError):
-            # Fallback to entry prices if snapshot doesn't have leg-level prices
-            latest_price_1A = position['entry_price_1A']
-            latest_price_2A = position.get('entry_price_2A', position['entry_price_1A'])
-            latest_price_2B = position.get('entry_price_2B', position.get('entry_price_2A', position['entry_price_1A']))
-            latest_price_3B = position.get('entry_price_3B', 0) or 0 if is_levered else 0
-
-        # Leg 1: Protocol A Lend (Token1 exposure = +L_A)
-        leg1_exposure_usd = deployment * L_A
-        price_change_leg1 = (latest_price_1A - position['entry_price_1A']) / position['entry_price_1A'] if position['entry_price_1A'] > 0 else 0
-        pnl_price_leg1 = leg1_exposure_usd * price_change_leg1
-
-        # Leg 2: Protocol A Borrow (Token2 exposure = -B_A, short)
-        leg2_exposure_usd = -deployment * B_A
-        entry_price_2A = position.get('entry_price_2A', position['entry_price_1A'])  # Fallback for old data
-        price_change_leg2 = (latest_price_2A - entry_price_2A) / entry_price_2A if entry_price_2A > 0 else 0
-        pnl_price_leg2 = leg2_exposure_usd * price_change_leg2
-
-        # Leg 3: Protocol B Lend (Token2 exposure = +L_B)
-        leg3_exposure_usd = deployment * L_B
-        entry_price_2B = position.get('entry_price_2B', entry_price_2A)  # Fallback for old data
-        price_change_leg3 = (latest_price_2B - entry_price_2B) / entry_price_2B if entry_price_2B > 0 else 0
-        pnl_price_leg3 = leg3_exposure_usd * price_change_leg3
-
-        # Leg 4: Protocol B Borrow (Token3 exposure = -B_B, short, NULL if unlevered)
-        if is_levered and B_B > 0:
-            leg4_exposure_usd = -deployment * B_B
-            entry_price_3B = position.get('entry_price_3B', 0) or 0
-            price_change_leg4 = (latest_price_3B - entry_price_3B) / entry_price_3B if entry_price_3B > 0 else 0
-            pnl_price_leg4 = leg4_exposure_usd * price_change_leg4
-        else:
-            pnl_price_leg4 = 0
-
-        # Calculate Fee Costs (one-time upfront)
-        fee_cost_2A = deployment * B_A * (position.get('entry_borrow_fee_2A', 0) or 0)
-        fee_cost_3B = (deployment * B_B * (position.get('entry_borrow_fee_3B', 0) or 0)) if is_levered else 0
-        pnl_fees = -(fee_cost_2A + fee_cost_3B)
-
-        # Net Token2 Hedge (for validation)
-        net_token2_hedge = pnl_price_leg2 + pnl_price_leg3
-
-        # Total PnL
-        total_pnl = pnl_base_apr + pnl_reward_apr + pnl_price_leg1 + pnl_price_leg2 + pnl_price_leg3 + pnl_price_leg4 + pnl_fees
-        total_value = deployment + total_pnl
-
-        return {
-            'total_value': total_value,
-            'total_pnl': total_pnl,
-            'pnl_base_apr': pnl_base_apr,
-            'pnl_reward_apr': pnl_reward_apr,
-            'pnl_price_leg1': pnl_price_leg1,
-            'pnl_price_leg2': pnl_price_leg2,
-            'pnl_price_leg3': pnl_price_leg3,
-            'pnl_price_leg4': pnl_price_leg4,
-            'pnl_fees': pnl_fees,
-            'net_token2_hedge': net_token2_hedge
-        }
-
-    def calculate_liquidation_levels(
-        self,
-        position: pd.Series,
-        current_prices: Dict[str, float],
-        current_collateral_ratios: Dict[Tuple[str, str], float],
-        protocol_risk_data: Optional[Dict] = None
-    ) -> Dict:
-        """
-        Calculate liquidation risk metrics (Steps 7 & 8)
-
-        Args:
-            position: Position record
-            current_prices: Current token prices
-            current_collateral_ratios: Current collateral ratios {(token, protocol): ratio}
-            protocol_risk_data: Optional protocol-sourced risk data (Phase 2)
-
-        Returns:
-            Dict with risk metrics including:
-                - health_factor_1A_calc, health_factor_2B_calc
-                - ltv_1A_calc, ltv_2B_calc
-                - distance_to_liq_1A_calc, distance_to_liq_2B_calc
-                - liquidation_price_1A_calc, liquidation_price_2B_calc
-                - collateral_ratio_change_1A, collateral_ratio_change_2B
-                - collateral_warning
-        """
-        deployment = position['deployment_usd']
-        L_A = position['L_A']
-        B_A = position['B_A']
-        L_B = position['L_B']
-        B_B = position.get('B_B', 0) or 0
-
-        # Protocol A: Lend Token1, Borrow Token2
-        price_1A = current_prices.get(position['token1']) or position.get('entry_price_1A') or 0
-        price_2A_fallback = position.get('entry_price_2A') or position.get('entry_price_1A') or 0
-        price_2A = current_prices.get(position['token2']) or price_2A_fallback
-
-        collateral_1A_usd = deployment * L_A * price_1A
-        borrow_2A_usd = deployment * B_A * price_2A
-
-        health_factor_1A = collateral_1A_usd / borrow_2A_usd if borrow_2A_usd > 0 else float('inf')
-        ltv_1A = borrow_2A_usd / collateral_1A_usd if collateral_1A_usd > 0 else 0
-
-        # Get collateral ratio thresholds
-        liq_threshold_1A = current_collateral_ratios.get((position['token1'], position['protocol_A']), position['entry_collateral_ratio_1A'])
-        max_ltv_1A = 1 / liq_threshold_1A if liq_threshold_1A > 0 else 0  # Max LTV before liquidation
-
-        # Distance to liquidation = % buffer remaining
-        distance_to_liq_1A = (max_ltv_1A - ltv_1A) / max_ltv_1A if max_ltv_1A > 0 else float('inf')
-
-        # Liquidation price: Token1 price at which LTV hits threshold
-        # At liquidation: (L_A * liq_price_1A) / (B_A * price_2A) = liq_threshold_1A
-        # Solving for liq_price_1A:
-        # price_2A already calculated above
-        liquidation_price_1A = (liq_threshold_1A * borrow_2A_usd) / (deployment * L_A) if L_A > 0 else 0
-
-        # Collateral ratio drift from entry (Step 8)
-        entry_ratio_1A = position['entry_collateral_ratio_1A']
-        current_ratio_1A = current_collateral_ratios.get((position['token1'], position['protocol_A']), entry_ratio_1A)
-        ratio_change_1A = (current_ratio_1A - entry_ratio_1A) / entry_ratio_1A if entry_ratio_1A > 0 else 0
-
-        # Protocol B: Lend Token2, Borrow Token3 (if levered)
-        if position['is_levered'] and B_B > 0:
-            price_2B_fallback = position.get('entry_price_2B') or position.get('entry_price_2A') or position.get('entry_price_1A') or 0
-            price_2B = current_prices.get(position['token2']) or price_2B_fallback
-            price_3B = current_prices.get(position['token3']) or position.get('entry_price_3B') or 0
-
-            collateral_2B_usd = deployment * L_B * price_2B
-            borrow_3B_usd = deployment * B_B * price_3B
-
-            health_factor_2B = collateral_2B_usd / borrow_3B_usd if borrow_3B_usd > 0 else float('inf')
-            ltv_2B = borrow_3B_usd / collateral_2B_usd if collateral_2B_usd > 0 else 0
-
-            liq_threshold_2B = current_collateral_ratios.get((position['token2'], position['protocol_B']), position['entry_collateral_ratio_2B'])
-            max_ltv_2B = 1 / liq_threshold_2B if liq_threshold_2B > 0 else 0
-
-            distance_to_liq_2B = (max_ltv_2B - ltv_2B) / max_ltv_2B if max_ltv_2B > 0 else float('inf')
-
-            # Liquidation price: Token2 price at which LTV hits threshold
-            liquidation_price_2B = (liq_threshold_2B * borrow_3B_usd) / (deployment * L_B) if L_B > 0 else 0
-
-            entry_ratio_2B = position['entry_collateral_ratio_2B']
-            current_ratio_2B = current_collateral_ratios.get((position['token2'], position['protocol_B']), entry_ratio_2B)
-            ratio_change_2B = (current_ratio_2B - entry_ratio_2B) / entry_ratio_2B if entry_ratio_2B > 0 else 0
-        else:
-            # Unlevered position has no Protocol B borrow
-            health_factor_2B = float('inf')
-            ltv_2B = 0
-            distance_to_liq_2B = 1.0  # 100% safe (no borrow)
-            liquidation_price_2B = 0
-            ratio_change_2B = 0
-
-        # Step 8: Collateral warning if >5% change from entry
-        collateral_warning = abs(ratio_change_1A) > 0.05 or abs(ratio_change_2B) > 0.05
-
-        return {
-            'health_factor_1A_calc': health_factor_1A,
-            'health_factor_2B_calc': health_factor_2B,
-            'distance_to_liq_1A_calc': distance_to_liq_1A,
-            'distance_to_liq_2B_calc': distance_to_liq_2B,
-            'ltv_1A_calc': ltv_1A,
-            'ltv_2B_calc': ltv_2B,
-            'liquidation_price_1A_calc': liquidation_price_1A,
-            'liquidation_price_2B_calc': liquidation_price_2B,
-            'collateral_ratio_change_1A': ratio_change_1A,
-            'collateral_ratio_change_2B': ratio_change_2B,
-            'collateral_warning': collateral_warning
-        }
-
-    # ==================== Query Methods ====================
-
-    def get_active_positions(self, user_id: Optional[str] = None) -> pd.DataFrame:
-        """Get all active positions (optionally filtered by user)
-
-        Returns:
-            DataFrame with timestamp columns converted to Unix seconds (int)
-        """
-        from utils.time_helpers import to_seconds
-
-        ph = self._get_placeholder()
-        if user_id is not None:
-            query = f"SELECT * FROM positions WHERE status = {ph} AND user_id = {ph} ORDER BY entry_timestamp DESC"
-            params = ('active', user_id)
-        else:
-            query = f"SELECT * FROM positions WHERE status = {ph} ORDER BY entry_timestamp DESC"
-            params = ('active',)
-
-        df = self._execute_query(query, params)
-
-        # Convert timestamp columns to Unix seconds immediately after DB fetch
-        if not df.empty:
-            if 'entry_timestamp' in df.columns:
-                df['entry_timestamp'] = df['entry_timestamp'].apply(to_seconds)
-            if 'close_timestamp' in df.columns:
-                df['close_timestamp'] = df['close_timestamp'].apply(lambda x: to_seconds(x) if pd.notna(x) else None)
-
-        return df
-
-    def get_position_by_id(self, position_id: str) -> Optional[pd.Series]:
-        """Get position by ID"""
-        ph = self._get_placeholder()
-        query = f"SELECT * FROM positions WHERE position_id = {ph}"
-        df = self._execute_query(query, (position_id,))
-        return df.iloc[0] if not df.empty else None
-
-    def get_position_snapshots(self, position_id: str) -> pd.DataFrame:
-        """Get all snapshots for a position, ordered by timestamp"""
-        ph = self._get_placeholder()
-        query = f"SELECT * FROM position_snapshots WHERE position_id = {ph} ORDER BY snapshot_timestamp ASC"
-        return self._execute_query(query, (position_id,))
-
-
-    # ==================== Snapshot Management ====================
-
-    def create_snapshot(
-        self,
-        position_id: str,
-        snapshot_timestamp: Optional[int] = None
-    ) -> str:
-        """
-        Create a snapshot for a position
-
-        Args:
-            position_id: Position UUID
-            snapshot_timestamp: Unix timestamp in seconds (required - cannot default)
-
-        Returns:
-            snapshot_id: UUID of created snapshot
-        """
-        # Get position
-        position = self.get_position_by_id(position_id)
-        if position is None:
-            raise Exception(f"Position not found: {position_id}")
-
-        # Snapshot timestamp must be provided explicitly
-        if snapshot_timestamp is None:
-            raise ValueError("snapshot_timestamp is required - cannot default to datetime.now()")
-
-        if not isinstance(snapshot_timestamp, int):
-            raise TypeError(
-                f"snapshot_timestamp must be Unix seconds (int), got {type(snapshot_timestamp).__name__}"
-            )
-
-        # Generate snapshot ID
-        snapshot_id = str(uuid.uuid4())
-
-        # Fetch current market data from rates_snapshot at this timestamp (Step 6)
-        # Fetch leg-level prices using price helper functions
-        try:
-            price_1A = self.get_leg_price_for_pnl(position, '1A', snapshot_timestamp)
-            price_2A = self.get_leg_price_for_pnl(position, '2A', snapshot_timestamp)
-            price_2B = self.get_leg_price_for_pnl(position, '2B', snapshot_timestamp)
-            price_3B = self.get_leg_price_for_pnl(position, '3B', snapshot_timestamp) if position['is_levered'] else None
-        except ValueError as e:
-            # Fallback to entry prices if rates_snapshot doesn't have data
-            print(f"Warning: Could not fetch prices for snapshot, using entry prices: {e}")
-            price_1A = position['entry_price_1A']
-            price_2A = position.get('entry_price_2A', position['entry_price_1A'])
-            price_2B = position.get('entry_price_2B', position.get('entry_price_2A', position['entry_price_1A']))
-            price_3B = position.get('entry_price_3B') if position['is_levered'] else None
-
-        # Fetch current rates from rates_snapshot
-        # TODO: Query rates_snapshot for actual rates at snapshot_timestamp
-        # For now, use entry rates as placeholder
-        current_rates = {
-            'lend_base_apr_1A': position['entry_lend_rate_1A'],
-            'lend_reward_apr_1A': 0,
-            'borrow_base_apr_2A': position['entry_borrow_rate_2A'],
-            'borrow_reward_apr_2A': 0,
-            'lend_base_apr_2B': position['entry_lend_rate_2B'],
-            'lend_reward_apr_2B': 0,
-            'borrow_base_apr_3B': position.get('entry_borrow_rate_3B'),
-            'borrow_reward_apr_3B': 0
-        }
-
-        # Fetch current collateral ratios
-        # TODO: Query rates_snapshot for actual collateral ratios at snapshot_timestamp
-        current_collateral_ratios = {
-            (position['token1'], position['protocol_A']): position['entry_collateral_ratio_1A'],
-            (position['token2'], position['protocol_B']): position['entry_collateral_ratio_2B']
-        }
-
-        # Build snapshot record to pass to calculate_position_value
-        temp_snapshot = pd.Series({
-            'price_1A': price_1A,
-            'price_2A': price_2A,
-            'price_2B': price_2B,
-            'price_3B': price_3B,
-            'snapshot_timestamp': snapshot_timestamp,
-            'lend_base_apr_1A': current_rates['lend_base_apr_1A'],
-            'lend_reward_apr_1A': current_rates['lend_reward_apr_1A'],
-            'borrow_base_apr_2A': current_rates['borrow_base_apr_2A'],
-            'borrow_reward_apr_2A': current_rates['borrow_reward_apr_2A'],
-            'lend_base_apr_2B': current_rates['lend_base_apr_2B'],
-            'lend_reward_apr_2B': current_rates['lend_reward_apr_2B'],
-            'borrow_base_apr_3B': current_rates['borrow_base_apr_3B'],
-            'borrow_reward_apr_3B': current_rates['borrow_reward_apr_3B']
-        })
-
-        # Calculate PnL (with leg-level breakdown)
-        pnl = self.calculate_position_value(position, temp_snapshot)
-
-        # Calculate risk metrics
-        current_prices_dict = {
-            position['token1']: price_1A,
-            position['token2']: price_2A,  # Using protocol A price for risk calc
-            position['token3']: price_3B if position['is_levered'] else 0
-        }
-        risk = self.calculate_liquidation_levels(position, current_prices_dict, current_collateral_ratios)
-
-        # Insert snapshot (with leg-level prices, PnL, and risk metrics - Steps 6, 7, 8)
-        # NOTE: Database schema uses different column names than schema.sql:
-        # - current_price_1A (not price_1A)
-        # - current_price_2 (not price_2A/price_2B - uses Protocol A price)
-        # - current_price_3B (not price_3B)
-        # - pnl_price_token1/2/3 (not pnl_price_leg1/2/3/4)
-        ph = self._get_placeholder()
-        query = f"""
-        INSERT INTO position_snapshots (
-            snapshot_id, position_id, snapshot_timestamp,
-            lend_base_apr_1A, lend_reward_apr_1A, borrow_base_apr_2A, borrow_reward_apr_2A,
-            lend_base_apr_2B, lend_reward_apr_2B, borrow_base_apr_3B, borrow_reward_apr_3B,
-            current_price_1A, current_price_2, current_price_3B,
-            current_collateral_ratio_1A, current_collateral_ratio_2B,
-            total_pnl, pnl_base_apr, pnl_reward_apr,
-            pnl_price_token1, pnl_price_token2, pnl_price_token3, pnl_fees,
-            health_factor_1A_calc, health_factor_2B_calc,
-            distance_to_liq_1A_calc, distance_to_liq_2B_calc,
-            collateral_ratio_change_1A, collateral_ratio_change_2B, collateral_warning,
-            risk_data_source
-        ) VALUES (
-            {ph}, {ph}, {ph},
-            {ph}, {ph}, {ph}, {ph},
-            {ph}, {ph}, {ph}, {ph},
-            {ph}, {ph}, {ph},
-            {ph}, {ph},
-            {ph}, {ph}, {ph},
-            {ph}, {ph}, {ph}, {ph},
-            {ph}, {ph},
-            {ph}, {ph},
-            {ph}, {ph}, {ph},
-            {ph}
-        )
-        """
-
-        # Convert timestamp to datetime string for DB write (boundary conversion)
-        snapshot_timestamp_str = to_datetime_str(snapshot_timestamp)
-
-        params = (
-            snapshot_id, position_id, snapshot_timestamp_str,
-            current_rates['lend_base_apr_1A'], current_rates['lend_reward_apr_1A'],
-            current_rates['borrow_base_apr_2A'], current_rates['borrow_reward_apr_2A'],
-            current_rates['lend_base_apr_2B'], current_rates['lend_reward_apr_2B'],
-            current_rates['borrow_base_apr_3B'], current_rates['borrow_reward_apr_3B'],
-            price_1A, price_2A, price_3B,  # current_price_1A, current_price_2, current_price_3B
-            current_collateral_ratios.get((position['token1'], position['protocol_A'])),
-            current_collateral_ratios.get((position['token2'], position['protocol_B'])),
-            pnl['total_pnl'], pnl['pnl_base_apr'], pnl['pnl_reward_apr'],
-            pnl['pnl_price_leg1'], pnl['pnl_price_leg2'], pnl['pnl_price_leg3'], pnl['pnl_fees'],
-            risk['health_factor_1A_calc'], risk['health_factor_2B_calc'],
-            risk['distance_to_liq_1A_calc'], risk['distance_to_liq_2B_calc'],
-            risk['collateral_ratio_change_1A'], risk['collateral_ratio_change_2B'], risk['collateral_warning'],
-            'calculated'
-        )
-
-        if not self._execute_write(query, params):
-            raise Exception("Failed to create snapshot")
-
-        return snapshot_id
-
-    def create_snapshots_for_all_positions(
-        self,
-        user_id: Optional[str] = None,
-        snapshot_timestamp: Optional[datetime] = None
-    ) -> Dict:
-        """
-        Create snapshots for all active positions
-
-        Args:
-            user_id: Optional user filter (None = all users, for multi-user support later)
-            snapshot_timestamp: Optional timestamp (None = use latest rates_snapshot)
-
-        Returns:
-            dict: {
-                'success_count': int,
-                'error_count': int,
-                'snapshot_ids': list[str],
-                'errors': list[dict]  # {position_id, error_message}
+        B_B = position['B_B'] if position['is_levered'] else 0
+        entry_fee_2A = position.get('entry_borrow_fee_2A') or 0
+        entry_fee_3B = (position.get('entry_borrow_fee_3B') or 0) if position['is_levered'] else 0
+
+        # Position legs
+        token1 = position['token1']
+        token2 = position['token2']
+        token3 = position['token3'] if position['is_levered'] else None
+        protocol_A = position['protocol_A']
+        protocol_B = position['protocol_B']
+
+        # Calculate holding period
+        entry_ts = position['entry_timestamp']
+        total_seconds = live_timestamp - entry_ts
+        holding_days = total_seconds / 86400
+
+        if total_seconds == 0:
+            return {
+                'current_value': deployment,
+                'lend_earnings': 0,
+                'borrow_costs': 0,
+                'fees': 0,
+                'net_earnings': 0,
+                'holding_days': 0,
+                'periods_count': 0
             }
-        """
-        active_positions = self.get_active_positions(user_id=user_id)
 
-        results = {
-            'success_count': 0,
-            'error_count': 0,
-            'snapshot_ids': [],
-            'errors': []
+        # Query all unique timestamps from rates_snapshot
+        entry_str = to_datetime_str(entry_ts)
+        live_str = to_datetime_str(live_timestamp)
+
+        query_timestamps = """
+        SELECT DISTINCT timestamp
+        FROM rates_snapshot
+        WHERE timestamp >= ? AND timestamp <= ?
+        ORDER BY timestamp ASC
+        """
+        timestamps_df = pd.read_sql_query(query_timestamps, self.conn, params=(entry_str, live_str))
+
+        if timestamps_df.empty:
+            raise ValueError(f"No rate data found between {entry_str} and {live_str}")
+
+        # For each timestamp, get rates for all 4 legs
+        rates_data = []
+        for ts_str in timestamps_df['timestamp']:
+            # Build query for this timestamp's rates
+            if position['is_levered']:
+                leg_query = """
+                SELECT protocol, token, lend_base_apr, lend_reward_apr,
+                       borrow_base_apr, borrow_reward_apr
+                FROM rates_snapshot
+                WHERE timestamp = ?
+                  AND ((protocol = ? AND token = ?) OR
+                       (protocol = ? AND token = ?) OR
+                       (protocol = ? AND token = ?) OR
+                       (protocol = ? AND token = ?))
+                """
+                params = (ts_str,
+                         protocol_A, token1,
+                         protocol_A, token2,
+                         protocol_B, token2,
+                         protocol_B, token3)
+            else:
+                leg_query = """
+                SELECT protocol, token, lend_base_apr, lend_reward_apr,
+                       borrow_base_apr, borrow_reward_apr
+                FROM rates_snapshot
+                WHERE timestamp = ?
+                  AND ((protocol = ? AND token = ?) OR
+                       (protocol = ? AND token = ?) OR
+                       (protocol = ? AND token = ?))
+                """
+                params = (ts_str,
+                         protocol_A, token1,
+                         protocol_A, token2,
+                         protocol_B, token2)
+
+            leg_rates = pd.read_sql_query(leg_query, self.conn, params=params)
+
+            rates_data.append({
+                'timestamp': to_seconds(ts_str),
+                'rates': leg_rates
+            })
+
+        # Helper to get rate
+        def get_rate(df, protocol, token, rate_type):
+            """Get total rate (base + reward) for a protocol/token/type"""
+            row = df[(df['protocol'] == protocol) & (df['token'] == token)]
+            if row.empty:
+                return 0
+            base = row[f'{rate_type}_base_apr'].iloc[0] or 0
+            reward = row[f'{rate_type}_reward_apr'].iloc[0] or 0
+            return base + reward
+
+        # Calculate LE(T) - Total Lend Earnings
+        lend_earnings = 0
+        periods_count = 0
+
+        for i in range(len(rates_data) - 1):
+            current = rates_data[i]
+            next_data = rates_data[i + 1]
+
+            # Time delta in years
+            time_delta_seconds = next_data['timestamp'] - current['timestamp']
+            time_years = time_delta_seconds / (365 * 86400)
+
+            # Get forward-looking rates from current timestamp
+            current_rates = current['rates']
+            lend_rate_1A = get_rate(current_rates, protocol_A, token1, 'lend')
+            lend_rate_2B = get_rate(current_rates, protocol_B, token2, 'lend')
+
+            # Lend earnings for this period
+            period_lend = deployment * (L_A * lend_rate_1A + L_B * lend_rate_2B) * time_years
+            lend_earnings += period_lend
+            periods_count += 1
+
+        # Calculate BC(T) - Total Borrow Costs
+        borrow_costs = 0
+
+        for i in range(len(rates_data) - 1):
+            current = rates_data[i]
+            next_data = rates_data[i + 1]
+
+            time_delta_seconds = next_data['timestamp'] - current['timestamp']
+            time_years = time_delta_seconds / (365 * 86400)
+
+            current_rates = current['rates']
+            borrow_rate_2A = get_rate(current_rates, protocol_A, token2, 'borrow')
+            borrow_rate_3B = get_rate(current_rates, protocol_B, token3, 'borrow') if position['is_levered'] else 0
+
+            # Borrow costs for this period
+            period_borrow = deployment * (B_A * borrow_rate_2A + B_B * borrow_rate_3B) * time_years
+            borrow_costs += period_borrow
+
+        # Calculate FEES - One-Time Upfront Fees
+        fees = deployment * (B_A * entry_fee_2A + B_B * entry_fee_3B)
+
+        # Calculate NET$$$ and Current Value
+        net_earnings = lend_earnings - borrow_costs - fees
+        current_value = deployment + net_earnings
+
+        return {
+            'current_value': current_value,
+            'lend_earnings': lend_earnings,
+            'borrow_costs': borrow_costs,
+            'fees': fees,
+            'net_earnings': net_earnings,
+            'holding_days': holding_days,
+            'periods_count': periods_count
         }
 
-        for _, position in active_positions.iterrows():
-            try:
-                snapshot_id = self.create_snapshot(
-                    position['position_id'],
-                    snapshot_timestamp=snapshot_timestamp
-                )
-                results['snapshot_ids'].append(snapshot_id)
-                results['success_count'] += 1
-            except Exception as e:
-                results['errors'].append({
-                    'position_id': position['position_id'],
-                    'error_message': str(e)
-                })
-                results['error_count'] += 1
-
-        return results
-
-    def backfill_snapshots(
-        self,
-        position_id: str,
-        end_time: datetime,
-        frequency: str = 'hourly',
-        start_time: Optional[datetime] = None
-    ) -> int:
+    def calculate_realized_apr(self, position: pd.Series, live_timestamp: int) -> float:
         """
-        Backfill snapshots for a position
+        Calculate realized APR = (NET$$$ / T × 365) / deployment_usd
+
+        Simply calls calculate_position_value() and annualizes the result.
 
         Args:
-            position_id: Position UUID
-            end_time: End time for backfill (required - use close_timestamp or current snapshot time)
-            frequency: 'hourly' or 'daily'
-            start_time: Start time (defaults to position entry_timestamp)
+            position: Position record from database
+            live_timestamp: Dashboard selected timestamp in Unix seconds (int)
 
         Returns:
-            int: Number of snapshots created
+            Realized APR as decimal (e.g., 0.05 = 5%)
         """
-        if end_time is None:
-            raise ValueError("end_time is required for backfill - cannot default to datetime.now()")
+        pv_result = self.calculate_position_value(position, live_timestamp)
 
-        # Get position
-        position = self.get_position_by_id(position_id)
-        if position is None:
-            raise Exception(f"Position not found: {position_id}")
+        if pv_result['holding_days'] == 0:
+            return 0
 
-        # Determine time range
-        if start_time is None:
-            start_time = position['entry_timestamp']
+        # ANNUAL_NET_EARNINGS = NET$$$ / T × 365
+        annual_net_earnings = pv_result['net_earnings'] / pv_result['holding_days'] * 365
 
-        # Generate timestamps
-        delta = timedelta(hours=1) if frequency == 'hourly' else timedelta(days=1)
-        timestamps = []
-        current = start_time
-        while current <= end_time:
-            timestamps.append(current)
-            current += delta
-
-        # Create snapshots
-        count = 0
-        for ts in timestamps:
-            # Check if snapshot already exists
-            existing = self._execute_query(
-                f"SELECT snapshot_id FROM position_snapshots WHERE position_id = {self._get_placeholder()} AND snapshot_timestamp = {self._get_placeholder()}",
-                (position_id, ts)
-            )
-            if existing.empty:
-                try:
-                    self.create_snapshot(position_id, snapshot_timestamp=ts)
-                    count += 1
-                except Exception as e:
-                    print(f"Failed to create snapshot at {ts}: {e}")
-
-        print(f"✅ Backfilled {count} snapshots for position {position_id}")
-        return count
+        # Realized APR = ANNUAL_NET_EARNINGS / deployment_usd
+        return annual_net_earnings / position['deployment_usd']

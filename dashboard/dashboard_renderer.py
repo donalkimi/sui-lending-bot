@@ -151,14 +151,36 @@ def render_deployment_form(mode: str):
                 # Convert strategy to dict (already has timestamp from all_results)
                 strategy_dict = strategy.to_dict() if isinstance(strategy, pd.Series) else strategy.copy()
 
-                # Create position
+                # Get position multipliers from strategy history calculation
+                _, L_A, B_A, L_B, B_B = get_strategy_history(
+                    strategy_row=strategy,
+                    liquidation_distance=liquidation_distance
+                )
+
+                # Build positions dict
+                positions = {
+                    'L_A': L_A,
+                    'B_A': B_A,
+                    'L_B': L_B,
+                    'B_B': B_B
+                }
+
+                # Create position with all required parameters
                 position_id = service.create_position(
                     strategy_row=pd.Series(strategy_dict),
+                    positions=positions,
+                    token1=strategy['token1'],
+                    token2=strategy['token2'],
+                    token3=strategy.get('token3'),
+                    token1_contract=strategy['token1_contract'],
+                    token2_contract=strategy['token2_contract'],
+                    token3_contract=strategy.get('token3_contract'),
+                    protocol_A=strategy['protocol_A'],
+                    protocol_B=strategy['protocol_B'],
                     deployment_usd=deployment_usd,
-                    liquidation_distance=liquidation_distance,
                     is_levered=is_levered,
-                    notes=notes,
-                    is_paper_trade=True
+                    is_paper_trade=True,
+                    notes=notes
                 )
 
                 conn.close()
@@ -649,9 +671,9 @@ def render_positions_table_tab():
         latest_timestamp_str = cursor.fetchone()[0]
         latest_timestamp = to_seconds(latest_timestamp_str)  # Convert to Unix timestamp
 
-        # Query all rates at latest timestamp
+        # Query all rates and prices at latest timestamp
         rates_query = """
-        SELECT protocol, token, lend_total_apr, borrow_total_apr, borrow_fee
+        SELECT protocol, token, lend_total_apr, borrow_total_apr, borrow_fee, price_usd
         FROM rates_snapshot
         WHERE timestamp = ?
         """
@@ -673,9 +695,44 @@ def render_positions_table_tab():
                 return 0.0
             return float(row['borrow_fee'].iloc[0]) if pd.notna(row['borrow_fee'].iloc[0]) else 0.0
 
-        # Build display table
-        display_data = []
+        # Helper function to get price
+        def get_price(token, protocol):
+            """Get current price for token/protocol, return 0 if not found"""
+            row = rates_df[(rates_df['token'] == token) & (rates_df['protocol'] == protocol)]
+            if row.empty:
+                return 0.0
+            return float(row['price_usd'].iloc[0]) if pd.notna(row['price_usd'].iloc[0]) else 0.0
 
+        # Helper function to calculate token amount precision
+        def get_token_precision(price: float, target_usd: float = 10.0) -> int:
+            """
+            Calculate decimal places needed to show at least target_usd worth of precision.
+
+            Args:
+                price: Token price in USD
+                target_usd: Target USD value for precision (default $10)
+
+            Returns:
+                Number of decimal places to display (minimum 3)
+
+            Examples:
+                - BTC @ $100,000 → 4 decimals (0.0001 BTC = $10)
+                - ETH @ $3,000 → 3 decimals (0.001 ETH = $3)
+                - SUI @ $1 → 3 decimals (minimum)
+                - DEEP @ $0.01 → 3 decimals (1.000 DEEP = $0.01)
+            """
+            import math
+
+            if price <= 0:
+                return 3  # Default fallback (minimum 3)
+
+            # Calculate: decimal_places = ceil(-log10(price / target_usd))
+            decimal_places = math.ceil(-math.log10(price / target_usd))
+
+            # Clamp between 3 and 8 (minimum 3 decimals, maximum 8)
+            return max(3, min(8, decimal_places))
+
+        # Render expandable rows (Stages 1-4)
         for _, position in active_positions.iterrows():
             # Build token flow string
             if position['is_levered']:
@@ -711,34 +768,120 @@ def render_positions_table_tab():
             # Calculate NET APR (in decimal)
             current_net_apr_decimal = gross_apr - fee_cost
 
-            # Add row to display table with debug columns
-            display_data.append({
-                'Entry Time': to_datetime_str(position['entry_timestamp']),
-                'Token Flow': token_flow,
-                'Protocols': protocol_pair,
-                'Entry APR': f"{position['entry_net_apr'] * 100:.2f}%",
-                'Current APR': f"{current_net_apr_decimal * 100:.2f}%",
-                'Current Timestamp': to_datetime_str(latest_timestamp),
-                # Entry weights
-                'Entry L_A': f"{position['L_A']:.4f}",
-                'Entry B_A': f"{position['B_A']:.4f}",
-                'Entry L_B': f"{position['L_B']:.4f}",
-                'Entry B_B': f"{position['B_B']:.4f}",
-                # Entry rates (stored as decimals in DB)
-                'Entry Lend1A': f"{position['entry_lend_rate_1A'] * 100:.2f}%",
-                'Entry Borrow2A': f"{position['entry_borrow_rate_2A'] * 100:.2f}%",
-                'Entry Lend2B': f"{position['entry_lend_rate_2B'] * 100:.2f}%",
-                'Entry Borrow3B': f"{position['entry_borrow_rate_3B'] * 100:.2f}%" if position['is_levered'] else "N/A",
-                # Current rates
-                'Live Lend1A': f"{lend_1A * 100:.2f}%",
-                'Live Borrow2A': f"{borrow_2A * 100:.2f}%",
-                'Live Lend2B': f"{lend_2B * 100:.2f}%",
-                'Live Borrow3B': f"{borrow_3B * 100:.2f}%" if position['is_levered'] else "N/A",
-            })
+            # Calculate position value and realized APR
+            pv_result = service.calculate_position_value(position, latest_timestamp)
+            realized_apr = service.calculate_realized_apr(position, latest_timestamp)
 
-        # Create DataFrame and display
-        positions_df = pd.DataFrame(display_data)
-        st.dataframe(positions_df, width='stretch', hide_index=True)
+            # STAGE 1: Build summary title for expander
+            title = f"▶ {to_datetime_str(position['entry_timestamp'])} | {token_flow} | {protocol_pair} | Entry {position['entry_net_apr'] * 100:.2f}% | Current {current_net_apr_decimal * 100:.2f}% | Realized {realized_apr * 100:.2f}% | Value ${pv_result['current_value']:.2f}"
+
+            # STAGE 2-3: Build detail table inside expander
+            with st.expander(title, expanded=False):
+                # Summary table (1 row with key metrics)
+                summary_data = [{
+                    'Entry Time': to_datetime_str(position['entry_timestamp']),
+                    'Token Flow': token_flow,
+                    'Protocols': protocol_pair,
+                    'Start Capital': f"${position['deployment_usd']:,.2f}",
+                    'Entry APR': f"{position['entry_net_apr'] * 100:.2f}%",
+                    'Current APR': f"{current_net_apr_decimal * 100:.2f}%",
+                    'Realized APR': f"{realized_apr * 100:.2f}%",
+                    'Current Value': f"${pv_result['current_value']:,.2f}",
+                    'Entry Liq Distance': f"{position['entry_liquidation_distance'] * 100:.2f}%",
+                }]
+                summary_df = pd.DataFrame(summary_data)
+                st.dataframe(summary_df, width='stretch', hide_index=True)
+
+                # Add spacing
+                st.markdown("---")
+
+                # Detail table (4 legs breakdown)
+                detail_data = []
+
+                # Calculate entry token amounts (Stage 3) with zero-division protection
+                entry_token_amount_1A = (position['L_A'] * position['deployment_usd']) / position['entry_price_1A'] if position['entry_price_1A'] > 0 else 0
+                entry_token_amount_2A = (position['B_A'] * position['deployment_usd']) / position['entry_price_2A'] if position['entry_price_2A'] > 0 else 0
+                entry_token_amount_2B = (position['L_B'] * position['deployment_usd']) / position['entry_price_2B'] if position['entry_price_2B'] > 0 else 0
+                entry_token_amount_3B = (position['B_B'] * position['deployment_usd']) / position['entry_price_3B'] if position['is_levered'] and position['entry_price_3B'] > 0 else 0
+
+                # STAGE 4: Get live prices for all tokens
+                live_price_1A = get_price(position['token1'], position['protocol_A'])
+                live_price_2A = get_price(position['token2'], position['protocol_A'])
+                live_price_2B = get_price(position['token2'], position['protocol_B'])
+                live_price_3B = get_price(position['token3'], position['protocol_B']) if position['is_levered'] else 0
+
+                # STAGE 4: Calculate current token amounts (price-rebalanced to maintain USD values)
+                current_token_amount_1A = (position['L_A'] * position['deployment_usd']) / live_price_1A if live_price_1A > 0 else 0
+                current_token_amount_2A = (position['B_A'] * position['deployment_usd']) / live_price_2A if live_price_2A > 0 else 0
+                current_token_amount_2B = (position['L_B'] * position['deployment_usd']) / live_price_2B if live_price_2B > 0 else 0
+                current_token_amount_3B = (position['B_B'] * position['deployment_usd']) / live_price_3B if position['is_levered'] and live_price_3B > 0 else 0
+
+                # Calculate dynamic precision for token amounts (based on live prices)
+                precision_1A = get_token_precision(live_price_1A)
+                precision_2A = get_token_precision(live_price_2A)
+                precision_2B = get_token_precision(live_price_2B)
+                precision_3B = get_token_precision(live_price_3B) if position['is_levered'] else 2
+
+                # Row 1: Protocol A - Lend token1
+                detail_data.append({
+                    'Protocol': position['protocol_A'],
+                    'Token': position['token1'],
+                    'Action': 'Lend',
+                    'Weight': f"{position['L_A']:.4f}",
+                    'Entry Rate': f"{position['entry_lend_rate_1A'] * 100:.2f}%",
+                    'Entry Token Amount': f"{entry_token_amount_1A:,.{precision_1A}f}",
+                    'Current Token Amount': f"{current_token_amount_1A:,.{precision_1A}f}",
+                    'Entry Price': f"${position['entry_price_1A']:.4f}",
+                    'Live Price': f"${live_price_1A:.4f}",
+                    'Live Rate': f"{lend_1A * 100:.2f}%",
+                })
+
+                # Row 2: Protocol A - Borrow token2
+                detail_data.append({
+                    'Protocol': position['protocol_A'],
+                    'Token': position['token2'],
+                    'Action': 'Borrow',
+                    'Weight': f"{position['B_A']:.4f}",
+                    'Entry Rate': f"{position['entry_borrow_rate_2A'] * 100:.2f}%",
+                    'Entry Token Amount': f"{entry_token_amount_2A:,.{precision_2A}f}",
+                    'Current Token Amount': f"{current_token_amount_2A:,.{precision_2A}f}",
+                    'Entry Price': f"${position['entry_price_2A']:.4f}",
+                    'Live Price': f"${live_price_2A:.4f}",
+                    'Live Rate': f"{borrow_2A * 100:.2f}%",
+                })
+
+                # Row 3: Protocol B - Lend token2
+                detail_data.append({
+                    'Protocol': position['protocol_B'],
+                    'Token': position['token2'],
+                    'Action': 'Lend',
+                    'Weight': f"{position['L_B']:.4f}",
+                    'Entry Rate': f"{position['entry_lend_rate_2B'] * 100:.2f}%",
+                    'Entry Token Amount': f"{entry_token_amount_2B:,.{precision_2B}f}",
+                    'Current Token Amount': f"{current_token_amount_2B:,.{precision_2B}f}",
+                    'Entry Price': f"${position['entry_price_2B']:.4f}",
+                    'Live Price': f"${live_price_2B:.4f}",
+                    'Live Rate': f"{lend_2B * 100:.2f}%",
+                })
+
+                # Row 4: Protocol B - Borrow token3 (if levered)
+                if position['is_levered']:
+                    detail_data.append({
+                        'Protocol': position['protocol_B'],
+                        'Token': position['token3'],
+                        'Action': 'Borrow',
+                        'Weight': f"{position['B_B']:.4f}",
+                        'Entry Rate': f"{position['entry_borrow_rate_3B'] * 100:.2f}%",
+                        'Entry Token Amount': f"{entry_token_amount_3B:,.{precision_3B}f}",
+                        'Current Token Amount': f"{current_token_amount_3B:,.{precision_3B}f}",
+                        'Entry Price': f"${position['entry_price_3B']:.4f}",
+                        'Live Price': f"${live_price_3B:.4f}",
+                        'Live Rate': f"{borrow_3B * 100:.2f}%",
+                    })
+
+                # Display detail table
+                detail_df = pd.DataFrame(detail_data)
+                st.dataframe(detail_df, width='stretch', hide_index=True)
 
         conn.close()
 

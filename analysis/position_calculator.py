@@ -374,6 +374,8 @@ class PositionCalculator:
                 'borrow_rate_2A': borrow_rate_token2_A,  # As decimal
                 'lend_rate_2B': lend_rate_token2_B,  # As decimal
                 'borrow_rate_3B': borrow_rate_token3_B,  # As decimal
+                'collateral_ratio_1A': collateral_ratio_token1_A,
+                'collateral_ratio_2B': collateral_ratio_token2_B,
                 'P1_A': price_token1_A,
                 'P2_A': price_token2_A,
                 'P2_B': price_token2_B,

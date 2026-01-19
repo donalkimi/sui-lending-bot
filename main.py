@@ -9,17 +9,10 @@ def main():
     # Get current time
     current_time = datetime.now()
 
-    # Create position snapshots only on the hour (Step 5 enhancement)
-    create_snapshots = (current_time.minute == 0)
-
-    if create_snapshots:
-        print("⏰ On the hour - will create position snapshots")
-
     # Run full refresh pipeline
     result = refresh_pipeline(
         timestamp=current_time,
         save_snapshots=True,
-        create_position_snapshots=create_snapshots,
     )
 
     # -------------------------
