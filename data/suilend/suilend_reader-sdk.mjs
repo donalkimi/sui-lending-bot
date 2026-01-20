@@ -5,10 +5,11 @@ import { parseReserve } from "@suilend/sdk/parsers/reserve";
 import { normalizeStructTag } from "@mysten/sui/utils";
 import BigNumber from "bignumber.js";
 import fs from "fs";
+import { execSync } from "child_process";
 
 const LENDING_MARKET_ID = "0x84030d26d85eaa7035084a057f2f11f701b7e2e4eda87551becbc7c97505ece1";
 const LENDING_MARKET_TYPE = "0xf95b06141ed4a174f239417323bde3f209b972f5930d8521ea38a52aff3a6ddf::suilend::MAIN_POOL";
-const RPC_URL = "https://rpc.mainnet.sui.io";
+const RPC_URL = process.env.SUI_RPC_URL || "https://rpc.mainnet.sui.io";
 const MS_PER_YEAR = 365 * 24 * 60 * 60 * 1000;
 const DEBUG = process.env.SUILEND_DEBUG === "1";
 
@@ -65,14 +66,39 @@ async function main() {
     );
   }
 
-  // Step 2: Fetch metadata
-  const coinMetadataMap = {};
-  for (const coinType of allCoinTypes) {
-    try {
-      const metadata = await suiClient.getCoinMetadata({ coinType });
-      if (metadata) coinMetadataMap[coinType] = metadata;
-    } catch (err) {
-      console.error(`Failed to get metadata for ${coinType}:`, err.message);
+  // Step 2: Fetch metadata from token_registry database (no RPC calls!)
+  const coinTypesArray = Array.from(allCoinTypes);
+  const coinTypesJson = JSON.stringify(coinTypesArray);
+
+  let coinMetadataMap = {};
+  try {
+    // Call Python helper to query database
+    // Get the directory where this script lives
+    const scriptDir = new URL('.', import.meta.url).pathname;
+    const pythonScript = `${scriptDir}get_token_metadata.py`;
+
+    const result = execSync(`python3 "${pythonScript}" '${coinTypesJson}'`, {
+      encoding: 'utf8'
+    });
+    coinMetadataMap = JSON.parse(result);
+
+    if (DEBUG) {
+      console.error(`Loaded metadata for ${Object.keys(coinMetadataMap).length} tokens from database`);
+    }
+  } catch (err) {
+    console.error(`Failed to load metadata from database: ${err.message}`);
+    console.error(`Falling back to extracting symbols from coin types`);
+
+    // Fallback: extract symbol from coin type string
+    for (const coinType of allCoinTypes) {
+      const parts = coinType.split("::");
+      const symbol = parts[parts.length - 1];
+      coinMetadataMap[coinType] = {
+        symbol: symbol,
+        name: symbol,
+        iconUrl: null,
+        description: null
+      };
     }
   }
 

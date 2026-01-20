@@ -174,6 +174,7 @@ CREATE TABLE IF NOT EXISTS positions (
     entry_apr5 DECIMAL(10, 6) NOT NULL,
     entry_apr30 DECIMAL(10, 6) NOT NULL,
     entry_apr90 DECIMAL(10, 6) NOT NULL,
+    entry_days_to_breakeven DECIMAL(10, 2),  -- NULL for backwards compatibility
     entry_liquidation_distance DECIMAL(10, 6) NOT NULL,
 
     -- Entry Liquidity & Fees

@@ -121,6 +121,7 @@ class PositionService:
         entry_apr5 = strategy_row.get('apr5', 0)
         entry_apr30 = strategy_row.get('apr30', 0)
         entry_apr90 = strategy_row.get('apr90', 0)
+        entry_days_to_breakeven = strategy_row.get('days_to_breakeven')
         entry_liquidation_distance = strategy_row.get('liquidation_distance', 0)
 
         # Extract entry liquidity & fees
@@ -145,7 +146,7 @@ class PositionService:
                 entry_lend_rate_1A, entry_borrow_rate_2A, entry_lend_rate_2B, entry_borrow_rate_3B,
                 entry_price_1A, entry_price_2A, entry_price_2B, entry_price_3B,
                 entry_collateral_ratio_1A, entry_collateral_ratio_2B,
-                entry_net_apr, entry_apr5, entry_apr30, entry_apr90, entry_liquidation_distance,
+                entry_net_apr, entry_apr5, entry_apr30, entry_apr90, entry_days_to_breakeven, entry_liquidation_distance,
                 entry_max_size_usd, entry_borrow_fee_2A, entry_borrow_fee_3B,
                 notes, wallet_address, transaction_hash_open, on_chain_position_id
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -160,7 +161,7 @@ class PositionService:
             entry_lend_rate_1A, entry_borrow_rate_2A, entry_lend_rate_2B, entry_borrow_rate_3B,
             entry_price_1A, entry_price_2A, entry_price_2B, entry_price_3B,
             entry_collateral_ratio_1A, entry_collateral_ratio_2B,
-            entry_net_apr, entry_apr5, entry_apr30, entry_apr90, entry_liquidation_distance,
+            entry_net_apr, entry_apr5, entry_apr30, entry_apr90, entry_days_to_breakeven, entry_liquidation_distance,
             entry_max_size_usd, entry_borrow_fee_2A, entry_borrow_fee_3B,
             notes, wallet_address, transaction_hash_open, on_chain_position_id
         ))

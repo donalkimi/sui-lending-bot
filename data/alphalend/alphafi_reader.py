@@ -6,11 +6,18 @@ from typing import Tuple, List, Dict, Any, Optional
 
 import pandas as pd
 
+# Import centralized RPC URL from settings
+import sys
+from pathlib import Path
+project_root = Path(__file__).parent.parent.parent
+sys.path.insert(0, str(project_root))
+from config.settings import SUI_RPC_URL
+
 
 @dataclass
 class AlphaFiReaderConfig:
     node_script_path: str  # e.g. "data/alphalend/alphalend_reader-sdk.mjs" or absolute path
-    rpc_url: str = "https://rpc.mainnet.sui.io"
+    rpc_url: str = SUI_RPC_URL
     network: str = "mainnet"
 
 
@@ -89,7 +96,7 @@ class AlphaFiReader:
 
             borrow_base_apr = borrow_interest_pct / 100.0
             borrow_reward_apr = borrow_rewards_pct / 100.0
-            borrow_apr = borrow_base_apr + borrow_reward_apr
+            borrow_apr = borrow_base_apr - borrow_reward_apr
 
             borrow_rows.append({
                 "Token": token,

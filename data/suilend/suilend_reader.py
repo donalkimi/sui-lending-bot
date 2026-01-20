@@ -6,11 +6,18 @@ from typing import Tuple, List, Dict, Any, Optional
 
 import pandas as pd
 
+# Import centralized RPC URL from settings
+import sys
+from pathlib import Path
+project_root = Path(__file__).parent.parent.parent
+sys.path.insert(0, str(project_root))
+from config.settings import SUI_RPC_URL
+
 
 @dataclass
 class SuilendReaderConfig:
     node_script_path: str  # e.g. "data/suilend_reader-sdk.mjs"
-    rpc_url: str = "https://rpc.mainnet.sui.io"
+    rpc_url: str = SUI_RPC_URL
 
 
 class SuilendReader:

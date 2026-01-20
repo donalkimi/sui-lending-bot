@@ -2,6 +2,8 @@
 Configuration settings for the Sui Lending Bot
 """
 
+# RPC Configuration
+SUI_RPC_URL = "https://side-flashy-isle.sui-mainnet.quiknode.pro/6acae20a62b8a6842e8d407b4f6d7f98372dc8bb/"
 
 # Strategy Parameters
 DEFAULT_LIQUIDATION_DISTANCE = 0.20  # 315 default safety buffer

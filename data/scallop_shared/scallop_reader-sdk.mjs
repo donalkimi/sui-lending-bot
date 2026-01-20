@@ -174,7 +174,7 @@ async function main() {
         lend_apr_total: (lendBaseDecimal + lendRewardDecimal).toString(),
         borrow_apr_base: borrowBaseDecimal.toString(),
         borrow_apr_reward: borrowRewardDecimal.toString(),
-        borrow_apr_total: (borrowBaseDecimal + borrowRewardDecimal).toString(),
+        borrow_apr_total: (borrowBaseDecimal - borrowRewardDecimal).toString(),
         total_supplied: totalSupplied.toString(),
         total_borrowed: totalBorrowed.toString(),
         utilisation: utilization.toString(),

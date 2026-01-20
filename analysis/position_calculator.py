@@ -202,9 +202,59 @@ class PositionCalculator:
 
         return net_apr - fee_impact
 
+    def calculate_days_to_breakeven(
+        self,
+        gross_apr: float,
+        B_A: float,
+        B_B: float,
+        borrow_fee_2A: float,
+        borrow_fee_3B: float
+    ) -> float:
+        """
+        Calculate days until upfront borrow fees are recovered by gross APR
+
+        Breakeven occurs when:
+            gross_apr = (total_fees × 365) / days
+
+        Solving for days:
+            days = (total_fees × 365) / gross_apr
+
+        Args:
+            gross_apr: Gross APR before fees (decimal, e.g., 0.05 for 5%)
+            B_A: Borrow multiplier from Protocol A
+            B_B: Borrow multiplier from Protocol B
+            borrow_fee_2A: Borrow fee for token2 from Protocol A (decimal, e.g., 0.0030)
+            borrow_fee_3B: Borrow fee for token3 from Protocol B (decimal, e.g., 0.0030)
+
+        Returns:
+            Days to breakeven as float. Returns special values:
+            - 0.0 if fees are zero (instant breakeven)
+            - float('inf') if gross_apr <= 0 (never breaks even)
+
+        Edge Cases:
+            - Zero fees: Returns 0.0 (instant breakeven)
+            - Negative gross_apr: Returns float('inf') (never profitable)
+            - Zero gross_apr: Returns float('inf') (never breaks even)
+        """
+        # Total upfront fees (decimal)
+        total_fees = B_A * borrow_fee_2A + B_B * borrow_fee_3B
+
+        # Edge case 1: No fees means instant breakeven
+        if total_fees == 0:
+            return 0.0
+
+        # Edge case 2: Non-positive gross APR means never breaks even
+        if gross_apr <= 0:
+            return float('inf')
+
+        # Calculate breakeven days
+        days_to_breakeven = total_fees / (gross_apr/365)
+
+        return days_to_breakeven
+
     def calculate_fee_adjusted_aprs(
         self,
-        net_apr: float,
+        gross_apr: float,
         positions: Dict,
         borrow_fee_2A: float,
         borrow_fee_3B: float
@@ -213,7 +263,7 @@ class PositionCalculator:
         Calculate fee-adjusted APR metrics for multiple time horizons
 
         Args:
-            net_apr: Base APR without fees (decimal)
+            gross_apr: Base APR before fees (decimal)
             positions: Dict with L_A, B_A, L_B, B_B
             borrow_fee_2A: Borrow fee for token2 from Protocol A (decimal, e.g., 0.0030)
             borrow_fee_3B: Borrow fee for token3 from Protocol B (decimal, e.g., 0.0030)
@@ -228,18 +278,28 @@ class PositionCalculator:
         total_fee_cost = B_A * borrow_fee_2A + B_B * borrow_fee_3B
 
         # APR(net) = APR - annualized fees (equivalent to 365-day APR)
-        apr_net = net_apr - total_fee_cost
+        apr_net = gross_apr - total_fee_cost
 
         # Time-adjusted APRs using helper function
-        apr5 = self.calculate_apr_for_days(net_apr, B_A, B_B, borrow_fee_2A, borrow_fee_3B, 5)
-        apr30 = self.calculate_apr_for_days(net_apr, B_A, B_B, borrow_fee_2A, borrow_fee_3B, 30)
-        apr90 = self.calculate_apr_for_days(net_apr, B_A, B_B, borrow_fee_2A, borrow_fee_3B, 90)
+        apr5 = self.calculate_apr_for_days(gross_apr, B_A, B_B, borrow_fee_2A, borrow_fee_3B, 5)
+        apr30 = self.calculate_apr_for_days(gross_apr, B_A, B_B, borrow_fee_2A, borrow_fee_3B, 30)
+        apr90 = self.calculate_apr_for_days(gross_apr, B_A, B_B, borrow_fee_2A, borrow_fee_3B, 90)
+
+        # Calculate days to breakeven
+        days_to_breakeven = self.calculate_days_to_breakeven(
+            gross_apr,
+            B_A,
+            B_B,
+            borrow_fee_2A,
+            borrow_fee_3B
+        )
 
         return {
             'apr_net': apr_net,
             'apr5': apr5,
             'apr30': apr30,
-            'apr90': apr90
+            'apr90': apr90,
+            'days_to_breakeven': days_to_breakeven
         }
 
     def analyze_strategy(
@@ -365,6 +425,7 @@ class PositionCalculator:
                 'apr5': fee_adjusted_aprs['apr5'],  # As decimal
                 'apr30': fee_adjusted_aprs['apr30'],  # As decimal
                 'apr90': fee_adjusted_aprs['apr90'],  # As decimal
+                'days_to_breakeven': fee_adjusted_aprs['days_to_breakeven'],  # As float (days)
                 'liquidation_distance': positions['liquidation_distance'],  # As decimal
                 'L_A': positions['L_A'],
                 'B_A': positions['B_A'],

@@ -5,12 +5,20 @@ from dataclasses import dataclass
 from typing import Tuple, List, Dict, Any, Optional
 
 import pandas as pd
+import requests
+
+# Import centralized RPC URL from settings
+import sys
+from pathlib import Path
+project_root = Path(__file__).parent.parent.parent
+sys.path.insert(0, str(project_root))
+from config.settings import SUI_RPC_URL
 
 
 @dataclass
 class ScallopReaderConfig:
     node_script_path: str  # e.g. "data/scallop_shared/scallop_reader-sdk.mjs"
-    rpc_url: str = "https://rpc.mainnet.sui.io"
+    rpc_url: str = SUI_RPC_URL
     debug: bool = False  # Set to True to see raw SDK output
 
 
@@ -37,6 +45,15 @@ class ScallopBaseReader:
     # ---------- internals ----------
 
     def _get_all_markets(self) -> List[Dict[str, Any]]:
+        """Fetch market data with SDK-first, API-fallback strategy"""
+        try:
+            return self._get_markets_from_sdk()
+        except Exception as sdk_error:
+            print(f"\t\tSDK failed: {sdk_error}")
+            print(f"\t\tTrying API fallback...")
+            return self._get_markets_from_api()
+
+    def _get_markets_from_sdk(self) -> List[Dict[str, Any]]:
         """Call Node.js SDK wrapper and parse JSON output"""
         env = os.environ.copy()
         env["SUI_RPC_URL"] = self.config.rpc_url
@@ -77,6 +94,75 @@ class ScallopBaseReader:
             raise RuntimeError(f"Unexpected Scallop JSON shape: {type(data)}")
 
         return data
+
+    def _get_markets_from_api(self) -> List[Dict[str, Any]]:
+        """Fetch market data from Scallop REST API as fallback"""
+        base_url = "https://sdk.api.scallop.io"
+
+        # 1. Get pools
+        pools_resp = requests.get(f"{base_url}/api/market/pools", timeout=30).json()
+        pools = {p["coinName"]: p for p in pools_resp["pools"]}
+
+        # 2. Get collaterals
+        collaterals_resp = requests.get(f"{base_url}/api/market/collaterals", timeout=30).json()
+        collaterals = {c["coinName"]: c for c in collaterals_resp["collaterals"]}
+
+        # 3. For each pool, get borrow incentives
+        markets = []
+        for coin_name, pool in pools.items():
+            coin_type = pool["coinType"]
+
+            # Get borrow rewards for this coin
+            borrow_reward_apr = 0
+            try:
+                incentive_resp = requests.get(
+                    f"{base_url}/api/borrowIncentivePool/{coin_type}",
+                    timeout=10
+                ).json()
+
+                # Sum all reward APRs
+                for reward in incentive_resp["borrowIncentivePool"]["rewards"]:
+                    borrow_reward_apr += reward["rewardApr"]
+            except Exception:
+                pass  # No borrow rewards for this coin
+
+            # Supply rewards = 0 (ignore per user request)
+            supply_reward_apr = 0
+
+            # Get collateral data
+            collateral = collaterals.get(coin_name, {})
+
+            # Calculate APRs (matching SDK logic)
+            supply_base_apr = pool["supplyApr"]
+            supply_total_apr = supply_base_apr + supply_reward_apr
+            borrow_base_apr = pool["borrowApr"]
+            borrow_total_apr = borrow_base_apr - borrow_reward_apr  # Rewards reduce cost
+
+            # Calculate available amount
+            available_coin = pool["supplyCoin"] - pool["borrowCoin"]
+            available_usd = available_coin * pool["coinPrice"]
+
+            # Build market object (matching SDK output format)
+            markets.append({
+                "token_symbol": coin_name.upper(),
+                "token_contract": coin_type,
+                "price": str(pool["coinPrice"]),
+                "lend_apr_base": str(supply_base_apr),
+                "lend_apr_reward": str(supply_reward_apr),
+                "lend_apr_total": str(supply_total_apr),
+                "borrow_apr_base": str(borrow_base_apr),
+                "borrow_apr_reward": str(borrow_reward_apr),
+                "borrow_apr_total": str(borrow_total_apr),
+                "total_supplied": str(pool["supplyCoin"]),
+                "total_borrowed": str(pool["borrowCoin"]),
+                "utilisation": str(pool["utilizationRate"]),
+                "available_amount_usd": str(available_usd),
+                "collateralization_factor": str(collateral.get("collateralFactor", 0)),
+                "liquidation_threshold": str(collateral.get("liquidationFactor", 0)),
+                "borrow_fee": str(pool["borrowFee"]),
+            })
+
+        return markets
 
     def _transform_to_dataframes(
         self, markets: List[Dict[str, Any]]

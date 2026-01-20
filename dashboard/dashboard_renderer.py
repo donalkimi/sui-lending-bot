@@ -18,6 +18,35 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import settings
 from config.stablecoins import STABLECOIN_CONTRACTS, STABLECOIN_SYMBOLS
 from dashboard.data_loaders import DataLoader
+
+
+def format_days_to_breakeven(days: float) -> str:
+    """
+    Format days to breakeven for display
+
+    Args:
+        days: Days to breakeven (can be float('inf'), 0, or positive number)
+
+    Returns:
+        Formatted string for display
+    """
+    if days is None:
+        return "N/A"
+
+    # Handle infinity (never breaks even)
+    if days == float('inf') or days > 99999:
+        return "Never"
+
+    # Handle zero fees (instant breakeven)
+    if days == 0:
+        return "0.0"
+
+    # Handle very large values
+    if days > 999:
+        return ">999"
+
+    # Normal case: display with 1 decimal place
+    return f"{days:.1f}"
 from dashboard.dashboard_utils import (
     format_usd_abbreviated,
     get_apr_value,
@@ -243,6 +272,7 @@ def display_apr_table(strategy_row: Union[pd.Series, Dict[str, Any]], deployment
     apr90_levered = strategy_row.get('apr90', apr_base)
     apr30_levered = strategy_row.get('apr30', apr_base)
     apr5_levered = strategy_row.get('apr5', apr_base)
+    days_to_breakeven_levered = strategy_row.get('days_to_breakeven', float('inf'))
 
     # Extract unlevered APR values
     unlevered_base = strategy_row.get('unlevered_apr', apr_base)
@@ -250,6 +280,7 @@ def display_apr_table(strategy_row: Union[pd.Series, Dict[str, Any]], deployment
     apr90_unlevered = unlevered_base
     apr30_unlevered = unlevered_base
     apr5_unlevered = unlevered_base
+    days_to_breakeven_unlevered = 0.0  # Unlevered has no fees, instant breakeven
 
     # Build row names with emojis at the start
     row_name_levered = f"🔄 Loop"
@@ -261,7 +292,9 @@ def display_apr_table(strategy_row: Union[pd.Series, Dict[str, Any]], deployment
         'APR(net)': [f"{apr_net_levered * 100:.2f}%", f"{apr_net_unlevered * 100:.2f}%"],
         'APR5': [f"{apr5_levered * 100:.2f}%", f"{apr5_unlevered * 100:.2f}%"],
         'APR30': [f"{apr30_levered * 100:.2f}%", f"{apr30_unlevered * 100:.2f}%"],
-        'APR90': [f"{apr90_levered * 100:.2f}%", f"{apr90_unlevered * 100:.2f}%"]
+        'APR90': [f"{apr90_levered * 100:.2f}%", f"{apr90_unlevered * 100:.2f}%"],
+        'Days': [format_days_to_breakeven(days_to_breakeven_levered),
+                 format_days_to_breakeven(days_to_breakeven_unlevered)]
     }
 
     apr_df = pd.DataFrame(apr_table_data)
