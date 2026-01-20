@@ -1,0 +1,207 @@
+import json
+import os
+import subprocess
+from dataclasses import dataclass
+from typing import Tuple, List, Dict, Any, Optional
+
+import pandas as pd
+
+
+@dataclass
+class ScallopReaderConfig:
+    node_script_path: str  # e.g. "data/scallop_shared/scallop_reader-sdk.mjs"
+    rpc_url: str = "https://rpc.mainnet.sui.io"
+    debug: bool = False  # Set to True to see raw SDK output
+
+
+class ScallopBaseReader:
+    """
+    Base reader for Scallop protocol data.
+    Wraps the Scallop JS SDK via Node script and returns DataFrames.
+
+    All APR fields are returned as DECIMAL rates (e.g. 0.0316 = 3.16% APR).
+    APRs come pre-converted from the JS SDK (already divided by 100).
+    No further conversion needed (unlike Suilend which divides again).
+    """
+
+    def __init__(self, config: ScallopReaderConfig):
+        self.config = config
+
+    # ---------- public API ----------
+
+    def get_all_data(self) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+        """Fetch market data and return lend, borrow, collateral DataFrames"""
+        markets = self._get_all_markets()
+        return self._transform_to_dataframes(markets)
+
+    # ---------- internals ----------
+
+    def _get_all_markets(self) -> List[Dict[str, Any]]:
+        """Call Node.js SDK wrapper and parse JSON output"""
+        env = os.environ.copy()
+        env["SUI_RPC_URL"] = self.config.rpc_url
+
+        # Enable debug mode if requested
+        if self.config.debug:
+            env["SCALLOP_DEBUG"] = "1"
+
+        res = subprocess.run(
+            ["node", self.config.node_script_path],
+            capture_output=True,
+            text=True,
+            env=env,
+            check=False,
+        )
+
+        if res.returncode != 0:
+            raise RuntimeError(
+                f"Scallop node script failed:\n{res.stderr}\nSTDOUT:\n{res.stdout}"
+            )
+
+        # Print debug output (stderr) if debug mode is on
+        if self.config.debug and res.stderr:
+            print("\n" + "="*80)
+            print("DEBUG OUTPUT FROM NODE.JS SDK:")
+            print("="*80)
+            print(res.stderr)
+            print("="*80 + "\n")
+
+        try:
+            data = json.loads(res.stdout)
+        except json.JSONDecodeError:
+            raise RuntimeError(
+                f"Node did not return valid JSON. Raw stdout:\n{res.stdout}"
+            )
+
+        if not isinstance(data, list):
+            raise RuntimeError(f"Unexpected Scallop JSON shape: {type(data)}")
+
+        return data
+
+    def _transform_to_dataframes(
+        self, markets: List[Dict[str, Any]]
+    ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+        """Transform market data into 3 DataFrames"""
+        lend_rows: List[Dict[str, Any]] = []
+        borrow_rows: List[Dict[str, Any]] = []
+        collateral_rows: List[Dict[str, Any]] = []
+
+        for m in markets:
+            token = m.get("token_symbol")
+            coin_type = m.get("token_contract")
+
+            if not token or not coin_type:
+                continue
+
+            # Parse fields (APRs are already decimals from JS)
+            price = self._to_float(m.get("price"))
+            lend_base = self._to_float(m.get("lend_apr_base"))
+            lend_reward = self._to_float(m.get("lend_apr_reward"))
+            lend_total = self._to_float(m.get("lend_apr_total"))
+
+            borrow_base = self._to_float(m.get("borrow_apr_base"))
+            borrow_reward = self._to_float(m.get("borrow_apr_reward"))
+            borrow_total = self._to_float(m.get("borrow_apr_total"))
+
+            total_supplied = self._to_float(m.get("total_supplied"))
+            total_borrowed = self._to_float(m.get("total_borrowed"))
+            utilization = self._to_float(m.get("utilisation"))
+            available_amount_usd = self._to_float(m.get("available_amount_usd"))
+
+            # Parse collateral data (already decimals from JS)
+            collateralization_factor = self._to_float(
+                m.get("collateralization_factor")
+            )
+            liquidation_threshold = self._to_float(m.get("liquidation_threshold"))
+
+            # Parse fee data (already decimal from JS)
+            borrow_fee = self._to_float(m.get("borrow_fee"))
+
+            # Lend data
+            lend_rows.append(
+                {
+                    "Token": token,
+                    "Supply_base_apr": lend_base,
+                    "Supply_reward_apr": lend_reward,
+                    "Supply_apr": lend_total,
+                    "Price": price,
+                    "Total_supply": total_supplied,
+                    "Utilization": utilization,
+                    "Available_borrow_usd": available_amount_usd,
+                    "Borrow_fee": borrow_fee,
+                    "Token_coin_type": coin_type,
+                }
+            )
+
+            # Borrow data
+            borrow_rows.append(
+                {
+                    "Token": token,
+                    "Borrow_base_apr": borrow_base,
+                    "Borrow_reward_apr": borrow_reward,
+                    "Borrow_apr": borrow_total,
+                    "Price": price,
+                    "Total_borrow": total_borrowed,
+                    "Utilization": utilization,
+                    "Borrow_fee": borrow_fee,
+                    "Token_coin_type": coin_type,
+                }
+            )
+
+            # Collateral data
+            collateral_rows.append(
+                {
+                    "Token": token,
+                    "Collateralization_factor": collateralization_factor,
+                    "Liquidation_threshold": liquidation_threshold,
+                    "Token_coin_type": coin_type,
+                }
+            )
+
+        npools = len(lend_rows)
+        print(f"\t\tfound {npools} Scallop lending pools")
+
+        lend_df = pd.DataFrame(lend_rows)
+        borrow_df = pd.DataFrame(borrow_rows)
+        collateral_df = pd.DataFrame(collateral_rows)
+
+        return lend_df, borrow_df, collateral_df
+
+    @staticmethod
+    def _to_float(x: Any) -> Optional[float]:
+        """Safely convert to float"""
+        if x is None:
+            return None
+        try:
+            return float(x)
+        except Exception:
+            return None
+
+
+# Example usage
+if __name__ == "__main__":
+    config = ScallopReaderConfig(
+        node_script_path="data/scallop_shared/scallop_reader-sdk.mjs",
+        debug=True  # Set to True to see raw SDK output
+    )
+    reader = ScallopBaseReader(config)
+
+    lend_df, borrow_df, collateral_df = reader.get_all_data()
+
+    print("\n" + "=" * 80)
+    print("LENDING RATES (including rewards):")
+    print("=" * 80)
+    with pd.option_context("display.max_rows", None, "display.max_columns", None):
+        print(lend_df)
+
+    print("\n" + "=" * 80)
+    print("BORROW RATES:")
+    print("=" * 80)
+    with pd.option_context("display.max_rows", None, "display.max_columns", None):
+        print(borrow_df)
+
+    print("\n" + "=" * 80)
+    print("COLLATERAL RATIOS (LTV):")
+    print("=" * 80)
+    with pd.option_context("display.max_rows", None, "display.max_columns", None):
+        print(collateral_df)

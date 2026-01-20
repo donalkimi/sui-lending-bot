@@ -1,0 +1,9 @@
+{
+  "name": "scallop-reader-shared",
+  "version": "1.0.0",
+  "type": "module",
+  "dependencies": {
+    "@mysten/sui": "^1.45.0",
+    "@scallop-io/sui-scallop-sdk": "latest"
+  }
+}
