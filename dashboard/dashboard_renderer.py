@@ -350,6 +350,11 @@ def display_strategy_details(strategy_row: Union[pd.Series, Dict[str, Any]], use
     protocol_A = strategy_row['protocol_A']
     protocol_B = strategy_row['protocol_B']
 
+    # Contract addresses
+    token1_contract = strategy_row.get('token1_contract', '')
+    token2_contract = strategy_row.get('token2_contract', '')
+    token3_contract = strategy_row.get('token3_contract', '')
+
     # USD values
     L_A = strategy_row['L_A']
     B_A = strategy_row['B_A']
@@ -395,14 +400,21 @@ def display_strategy_details(strategy_row: Union[pd.Series, Dict[str, Any]], use
     if liquidity_details:
         liquidity_constraints_message = "💵 **Liquidity Constraints:**\n" + "\n".join(liquidity_details)
 
+    # Helper to format contract address (show first 6 and last 4 chars)
+    def format_contract(contract: str) -> str:
+        if not contract or len(contract) < 12:
+            return contract
+        return f"{contract[:6]}...{contract[-4:]}"
+
     # Build the table data
     table_data = [
         # Row 1: Protocol A, token1, Lend
         {
             'Protocol': protocol_A,
             'Token': token1,
+            'Contract': format_contract(token1_contract),
             'Action': 'Lend',
-            'Rate': f"{lend_rate_1A:.2f}%",
+            'Rate': f"{lend_rate_1A * 100:.2f}%",
             'Weight': f"{L_A:.2f}",
             'Token Amount': f"{(L_A * deployment_usd) / P1_A:.2f}",
             'Price': f"${P1_A:.4f}",
@@ -413,8 +425,9 @@ def display_strategy_details(strategy_row: Union[pd.Series, Dict[str, Any]], use
         {
             'Protocol': protocol_A,
             'Token': token2,
+            'Contract': format_contract(token2_contract),
             'Action': 'Borrow',
-            'Rate': f"{borrow_rate_2A:.2f}%",
+            'Rate': f"{borrow_rate_2A * 100:.2f}%",
             'Weight': f"{B_A:.2f}",
             'Token Amount': f"{(B_A * deployment_usd) / P2_A:.2f}",
             'Price': f"${P2_A:.4f}",
@@ -425,8 +438,9 @@ def display_strategy_details(strategy_row: Union[pd.Series, Dict[str, Any]], use
         {
             'Protocol': protocol_B,
             'Token': token2,
+            'Contract': format_contract(token2_contract),
             'Action': 'Lend',
-            'Rate': f"{lend_rate_2B:.2f}%",
+            'Rate': f"{lend_rate_2B * 100:.2f}%",
             'Weight': f"{L_B:.2f}",
             'Token Amount': f"{(L_B * deployment_usd) / P2_B:.2f}",
             'Price': f"${P2_B:.4f}",
@@ -440,8 +454,9 @@ def display_strategy_details(strategy_row: Union[pd.Series, Dict[str, Any]], use
         table_data.append({
             'Protocol': protocol_B,
             'Token': token3,
+            'Contract': format_contract(token3_contract),
             'Action': 'Borrow',
-            'Rate': f"{borrow_rate_3B:.2f}%",
+            'Rate': f"{borrow_rate_3B * 100:.2f}%",
             'Weight': f"{B_B:.2f}",
             'Token Amount': f"{(B_B * deployment_usd) / P3_B:.2f}",
             'Price': f"${P3_B:.4f}",
@@ -601,20 +616,44 @@ def render_rate_tables_tab(lend_rates: pd.DataFrame, borrow_rates: pd.DataFrame,
     Args:
         lend_rates, borrow_rates, etc.: DataFrames from data loader
     """
+    # Helper to format contract address (show first 6 and last 4 chars)
+    def format_contract(contract: str) -> str:
+        if not contract or len(contract) < 12:
+            return contract
+        return f"{contract[:6]}...{contract[-4:]}"
+
     st.header("📈 Current Rates")
 
     col1, col2 = st.columns(2)
 
     col1.subheader("💵 Lending Rates")
-    lend_display = lend_rates.drop(columns=['Contract']) if 'Contract' in lend_rates.columns else lend_rates
+    lend_display = lend_rates.copy()
+    if 'Contract' in lend_display.columns:
+        # Format contract addresses to be more readable
+        lend_display['Contract'] = lend_display['Contract'].apply(format_contract)
+        # Reorder columns to put Contract after Token
+        cols = ['Token', 'Contract'] + [c for c in lend_display.columns if c not in ['Token', 'Contract']]
+        lend_display = lend_display[cols]
     col1.dataframe(lend_display, width='stretch', hide_index=True)
 
     col2.subheader("💸 Borrow Rates")
-    borrow_display = borrow_rates.drop(columns=['Contract']) if 'Contract' in borrow_rates.columns else borrow_rates
+    borrow_display = borrow_rates.copy()
+    if 'Contract' in borrow_display.columns:
+        # Format contract addresses to be more readable
+        borrow_display['Contract'] = borrow_display['Contract'].apply(format_contract)
+        # Reorder columns to put Contract after Token
+        cols = ['Token', 'Contract'] + [c for c in borrow_display.columns if c not in ['Token', 'Contract']]
+        borrow_display = borrow_display[cols]
     col2.dataframe(borrow_display, width='stretch', hide_index=True)
 
     st.subheader("🔒 Collateral Ratios")
-    collateral_display = collateral_ratios.drop(columns=['Contract']) if 'Contract' in collateral_ratios.columns else collateral_ratios
+    collateral_display = collateral_ratios.copy()
+    if 'Contract' in collateral_display.columns:
+        # Format contract addresses to be more readable
+        collateral_display['Contract'] = collateral_display['Contract'].apply(format_contract)
+        # Reorder columns to put Contract after Token
+        cols = ['Token', 'Contract'] + [c for c in collateral_display.columns if c not in ['Token', 'Contract']]
+        collateral_display = collateral_display[cols]
     st.dataframe(collateral_display, width='stretch', hide_index=True)
 
     st.subheader("💰 Prices")

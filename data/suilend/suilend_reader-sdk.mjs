@@ -4,11 +4,13 @@ import { SuilendClient, getTotalAprPercent, Side, getFilteredRewards } from "@su
 import { parseReserve } from "@suilend/sdk/parsers/reserve";
 import { normalizeStructTag } from "@mysten/sui/utils";
 import BigNumber from "bignumber.js";
+import fs from "fs";
 
 const LENDING_MARKET_ID = "0x84030d26d85eaa7035084a057f2f11f701b7e2e4eda87551becbc7c97505ece1";
 const LENDING_MARKET_TYPE = "0xf95b06141ed4a174f239417323bde3f209b972f5930d8521ea38a52aff3a6ddf::suilend::MAIN_POOL";
 const RPC_URL = "https://rpc.mainnet.sui.io";
 const MS_PER_YEAR = 365 * 24 * 60 * 60 * 1000;
+const DEBUG = process.env.SUILEND_DEBUG === "1";
 
 async function main() {
   const suiClient = new SuiClient({ url: RPC_URL });
@@ -21,10 +23,36 @@ async function main() {
 
   const reserves = suilendClient.lendingMarket.reserves;
 
+  // DEBUG: Write each reserve object to file BEFORE parsing (only if DEBUG=1)
+  if (DEBUG) {
+    const debugOutput = [];
+    debugOutput.push("=== DEBUG: Raw reserves from Suilend SDK ===");
+    debugOutput.push(`Total reserves count: ${reserves.length}\n`);
+
+    reserves.forEach((reserve, idx) => {
+      const coinType = normalizeStructTag(reserve.coinType.name);
+      debugOutput.push(`\n--- Reserve ${idx + 1}: ${coinType} ---`);
+      debugOutput.push(JSON.stringify(reserve, null, 2));
+    });
+
+    debugOutput.push("\n=== END DEBUG ===");
+
+    // Write to file
+    fs.writeFileSync('suilend_reserves_debug.json', debugOutput.join('\n'), 'utf8');
+    console.error("Debug output written to suilend_reserves_debug.json");
+  }
+
   // Step 1: Collect all unique coin types (reserves + rewards)
   const allCoinTypes = new Set();
   for (const reserve of reserves) {
+    // Filter out isolated markets
     if (reserve.config?.element?.isolated) continue;
+
+    // Filter out deprecated markets (both limits are zero)
+    const depositLimit = Number(reserve.config?.element?.depositLimit || 0);
+    const borrowLimit = Number(reserve.config?.element?.borrowLimit || 0);
+    if (depositLimit === 0 && borrowLimit === 0) continue;
+
     allCoinTypes.add(normalizeStructTag(reserve.coinType.name));
 
     // deposit rewards
@@ -48,8 +76,19 @@ async function main() {
     }
   }
 
-  // Step 3: Parse reserves
+  // Step 3: Parse reserves (filter out isolated and deprecated)
   const parsedReserves = reserves
+    .filter(r => {
+      // Filter out isolated markets
+      if (r.config?.element?.isolated) return false;
+
+      // Filter out deprecated markets (both limits are zero)
+      const depositLimit = Number(r.config?.element?.depositLimit || 0);
+      const borrowLimit = Number(r.config?.element?.borrowLimit || 0);
+      if (depositLimit === 0 && borrowLimit === 0) return false;
+
+      return true;
+    })
     .map(r => {
       const coinType = normalizeStructTag(r.coinType.name);
       return coinMetadataMap[coinType] ? parseReserve(r, coinMetadataMap) : null;

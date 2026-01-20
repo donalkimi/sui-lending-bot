@@ -3,7 +3,7 @@
   "version": "1.2.0",
   "description": "Cross-protocol yield optimization bot for Sui DeFi lending markets",
   "scripts": {
-    "install-sdks-separately": "cd data/alphalend && npm install && cd ../suilend && npm install"
+    "install-sdks-separately": "cd data/alphalend && npm install && cd ../suilend && npm install && cd ../scallop_shared && npm install"
   },
   "author": "Donal Moore / Alkimi",
   "private": true,

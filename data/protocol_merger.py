@@ -10,6 +10,8 @@ from typing import Tuple, Set
 from data.navi.navi_reader import NaviReader
 from data.alphalend.alphafi_reader import AlphaFiReader, AlphaFiReaderConfig
 from data.suilend.suilend_reader import SuilendReader, SuilendReaderConfig
+from data.scallop_lend.scallop_lend_reader import ScallopLendReader, ScallopReaderConfig
+from data.scallop_borrow.scallop_borrow_reader import ScallopBorrowReader
 
 # Import stablecoin configuration
 try:
@@ -77,6 +79,22 @@ def fetch_protocol_data(protocol_name: str) -> Tuple[pd.DataFrame, pd.DataFrame,
             reader = SuilendReader(config)
             return reader.get_all_data()
 
+        elif protocol_name == "ScallopLend":
+            print("\t\tgetting ScallopLend rates:")
+            config = ScallopReaderConfig(
+                node_script_path="data/scallop_shared/scallop_reader-sdk.mjs"
+            )
+            reader = ScallopLendReader(config)
+            return reader.get_all_data()
+
+        elif protocol_name == "ScallopBorrow":
+            print("\t\tgetting ScallopBorrow rates:")
+            config = ScallopReaderConfig(
+                node_script_path="data/scallop_shared/scallop_reader-sdk.mjs"
+            )
+            reader = ScallopBorrowReader(config)
+            return reader.get_all_data()
+
         else:
             raise ValueError(f"Unknown protocol: {protocol_name}")
 
@@ -139,7 +157,7 @@ def merge_protocol_data(stablecoin_contracts: Set[str] = None) -> Tuple[
     # Normalize all stablecoin contracts for matching
     stablecoin_contracts = {normalize_coin_type(c) for c in stablecoin_contracts}
     
-    protocols = ["Navi", "AlphaFi", "Suilend"]
+    protocols = ["Navi", "AlphaFi", "Suilend", "ScallopLend", "ScallopBorrow"]
     protocol_data = {}
     
     # Fetch all protocol data
