@@ -79,14 +79,17 @@ def refresh_pipeline(
 
 
     notifier = SlackNotifier()
+    print("[FETCH] Starting protocol data fetch...")
     lend_rates, borrow_rates, collateral_ratios, prices, lend_rewards, borrow_rewards, available_borrow, borrow_fees = merge_protocol_data(
         stablecoin_contracts=stablecoin_contracts
     )
+    print("[FETCH] Protocol data fetch complete")
 
     # Persist snapshot early, so even if analysis fails you still capture the raw state.
     token_summary = {"seen": 0, "inserted": 0, "updated": 0, "total": 0}  # Default if not saving
     
     if save_snapshots:
+        print("[DB] Saving snapshot to database...")
         tracker = RateTracker(
             use_cloud=getattr(settings, "USE_CLOUD_DB", False),
             db_path=getattr(settings, "SQLITE_PATH", "data/lending_rates.db"),
@@ -112,6 +115,7 @@ def refresh_pipeline(
             tokens_df=tokens_df,
             timestamp=ts,
         )
+        print("[DB] Snapshot saved successfully")
 
     # Initialize strategy results (always, regardless of save_snapshots)
     protocol_A: Optional[str] = None
@@ -120,6 +124,7 @@ def refresh_pipeline(
 
     # Run analysis (always, regardless of save_snapshots)
     try:
+        print("[ANALYSIS] Running rate analysis...")
         analyzer = RateAnalyzer(
             lend_rates=lend_rates,
             borrow_rates=borrow_rates,
@@ -134,6 +139,7 @@ def refresh_pipeline(
         )
 
         protocol_A, protocol_B, all_results = analyzer.find_best_protocol_pair()
+        print(f"[ANALYSIS] Analysis complete - Best pair: {protocol_A} + {protocol_B}")
 
         # Slack: notify once per run (if enabled)
         if send_slack_notifications:

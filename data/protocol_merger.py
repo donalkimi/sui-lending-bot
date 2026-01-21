@@ -99,7 +99,8 @@ def fetch_protocol_data(protocol_name: str) -> Tuple[pd.DataFrame, pd.DataFrame,
             raise ValueError(f"Unknown protocol: {protocol_name}")
 
     except Exception as e:
-        print(f"\t\t⚠️  WARNING: Failed to fetch {protocol_name} data: {e}")
+        print(f"\t\t⚠️  ERROR ({type(e).__name__}): Failed to fetch {protocol_name} data: {e}")
+        print(f"\t\t   Error type: {type(e).__name__}")
         print(f"\t\t   Continuing with other protocols...")
         # Return empty DataFrames to allow pipeline to continue
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()

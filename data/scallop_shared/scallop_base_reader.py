@@ -1,6 +1,7 @@
 import json
 import os
 import subprocess
+import time
 from dataclasses import dataclass
 from typing import Tuple, List, Dict, Any, Optional
 
@@ -55,6 +56,9 @@ class ScallopBaseReader:
 
     def _get_markets_from_sdk(self) -> List[Dict[str, Any]]:
         """Call Node.js SDK wrapper and parse JSON output"""
+        print(f"\t\t[SDK] Starting Scallop SDK call via Node.js...")
+        start_time = time.time()
+
         env = os.environ.copy()
         env["SUI_RPC_URL"] = self.config.rpc_url
 
@@ -69,6 +73,16 @@ class ScallopBaseReader:
             env=env,
             check=False,
         )
+
+        elapsed = time.time() - start_time
+        print(f"\t\t[SDK] Scallop SDK call completed in {elapsed:.2f} seconds")
+
+        # ALWAYS show timing logs from stderr (not just in debug mode)
+        if res.stderr:
+            # Print only lines that start with [SDK-JS] for timing visibility
+            for line in res.stderr.splitlines():
+                if line.strip().startswith("[SDK-JS]") or line.strip().startswith("Warning:"):
+                    print(f"\t\t{line}")
 
         if res.returncode != 0:
             raise RuntimeError(

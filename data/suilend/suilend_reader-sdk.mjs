@@ -1,6 +1,6 @@
 // suilend_reader-sdk.mjs
 import { SuiClient } from "@mysten/sui/client";
-import { SuilendClient, getTotalAprPercent, Side, getFilteredRewards } from "@suilend/sdk";
+import { SuilendClient, Side, getFilteredRewards, formatRewards, getDedupedAprRewards } from "@suilend/sdk";
 import { parseReserve } from "@suilend/sdk/parsers/reserve";
 import { normalizeStructTag } from "@mysten/sui/utils";
 import BigNumber from "bignumber.js";
@@ -11,18 +11,28 @@ const LENDING_MARKET_ID = "0x84030d26d85eaa7035084a057f2f11f701b7e2e4eda87551bec
 const LENDING_MARKET_TYPE = "0xf95b06141ed4a174f239417323bde3f209b972f5930d8521ea38a52aff3a6ddf::suilend::MAIN_POOL";
 const RPC_URL = process.env.SUI_RPC_URL || "https://rpc.mainnet.sui.io";
 const MS_PER_YEAR = 365 * 24 * 60 * 60 * 1000;
-const DEBUG = process.env.SUILEND_DEBUG === "1";
+const DEBUG = true; // Temporarily enable to check DEEP decimals
+const MAX_RETRIES = 1;  // Only retry once
+const RETRY_DELAY_MS = 2000;
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
 
 async function main() {
-  const suiClient = new SuiClient({ url: RPC_URL });
-  const suilendClient = await SuilendClient.initialize(
-    LENDING_MARKET_ID,
-    LENDING_MARKET_TYPE,
-    suiClient,
-    false
-  );
+  for (let attempt = 1; attempt <= MAX_RETRIES + 1; attempt++) {
+    try {
+      console.error(`[Suilend] Fetching market data (attempt ${attempt}/${MAX_RETRIES + 1})`);
 
-  const reserves = suilendClient.lendingMarket.reserves;
+      const suiClient = new SuiClient({ url: RPC_URL });
+      const suilendClient = await SuilendClient.initialize(
+        LENDING_MARKET_ID,
+        LENDING_MARKET_TYPE,
+        suiClient,
+        false
+      );
+
+      const reserves = suilendClient.lendingMarket.reserves;
 
   // DEBUG: Write each reserve object to file BEFORE parsing (only if DEBUG=1)
   if (DEBUG) {
@@ -35,7 +45,6 @@ async function main() {
       debugOutput.push(`\n--- Reserve ${idx + 1}: ${coinType} ---`);
       debugOutput.push(JSON.stringify(reserve, null, 2));
     });
-
     debugOutput.push("\n=== END DEBUG ===");
 
     // Write to file
@@ -90,12 +99,15 @@ async function main() {
     console.error(`Falling back to extracting symbols from coin types`);
 
     // Fallback: extract symbol from coin type string
+    // NOTE: We default to 9 decimals (standard for most Sui tokens including SUI, SPRING_SUI, etc.)
+    // This is critical for formatRewards() to calculate APRs correctly
     for (const coinType of allCoinTypes) {
       const parts = coinType.split("::");
       const symbol = parts[parts.length - 1];
       coinMetadataMap[coinType] = {
         symbol: symbol,
         name: symbol,
+        decimals: 9,  // Default to 9 decimals for Sui tokens
         iconUrl: null,
         description: null
       };
@@ -121,79 +133,86 @@ async function main() {
     })
     .filter(Boolean);
 
-  // Step 4: Price map
+  // Step 4: Price map and reserve map
   const priceMap = {};
-  parsedReserves.forEach(r => (priceMap[r.coinType] = r.price));
+  const parsedReserveMap = {};
+  parsedReserves.forEach(r => {
+    priceMap[r.coinType] = r.price;
+    parsedReserveMap[r.coinType] = r;
+  });
+  // DEBUG: Check SPRING_SUI metadata
+  if (DEBUG) {
+    const springSuiType = '0x83556891f4a0f233ce7b05cfe7f957d4020492a34f5405b2cb9377d060bef4bf::spring_sui::SPRING_SUI';
+    console.error('\n=== CHECKING SPRING_SUI METADATA ===');
+    console.error('SPRING_SUI in coinMetadataMap?', springSuiType in coinMetadataMap);
+    if (springSuiType in coinMetadataMap) {
+      console.error('SPRING_SUI metadata:', coinMetadataMap[springSuiType]);
+    }
+    console.error('SPRING_SUI in priceMap?', springSuiType in priceMap);
+    if (springSuiType in priceMap) {
+      console.error('SPRING_SUI price:', priceMap[springSuiType] ? priceMap[springSuiType].toString() : 'undefined');
+    }
+  }
 
-  // Helpers for reward APR calculation
-  const getDepositShareUsd = (reserve, share) =>
-    share.div(10 ** reserve.mintDecimals).times(reserve.cTokenExchangeRate).times(reserve.price);
+  // Step 5: Use SDK's formatRewards to get all rewards with correct APR calculations
+  const rewardMap = formatRewards(parsedReserveMap, coinMetadataMap, priceMap);
 
-  const getBorrowShareUsd = (reserve, share) =>
-    share.div(10 ** reserve.mintDecimals).times(reserve.cumulativeBorrowRate).times(reserve.price);
+  // Step 6: Build output with APRs
 
-  const formatRewardsForReserve = (reserve, side) => {
-    const nowMs = Date.now();
-    const poolRewardManager = side === Side.DEPOSIT
-      ? reserve.depositsPoolRewardManager
-      : reserve.borrowsPoolRewardManager;
-
-    return poolRewardManager.poolRewards.map(poolReward => {
-      const isActive = nowMs >= poolReward.startTimeMs && nowMs < poolReward.endTimeMs;
-      const rewardPrice = priceMap[poolReward.coinType];
-
-      const aprPercent = rewardPrice
-        ? new BigNumber(poolRewardManager.totalShares.toString()).eq(0)
-          ? new BigNumber(0)
-          : poolReward.totalRewards
-              .times(rewardPrice)
-              .times(new BigNumber(MS_PER_YEAR).div(poolReward.endTimeMs - poolReward.startTimeMs))
-              .div(
-                side === Side.DEPOSIT
-                  ? getDepositShareUsd(reserve, new BigNumber(poolRewardManager.totalShares.toString()))
-                  : getBorrowShareUsd(reserve, new BigNumber(poolRewardManager.totalShares.toString()))
-              )
-              .times(100)
-        : new BigNumber(0);
-
-      return {
-        stats: {
-          id: poolReward.id,
-          isActive,
-          rewardIndex: poolReward.rewardIndex,
-          reserve,
-          rewardCoinType: poolReward.coinType,
-          mintDecimals: poolReward.mintDecimals,
-          symbol: poolReward.symbol,
-          aprPercent,
-          side
-        },
-        obligationClaims: {}
-      };
-    });
-  };
-
-  // Step 5: Build output with APRs
-    
   const output = parsedReserves.map(reserve => {
-    const depositRewards = formatRewardsForReserve(reserve, Side.DEPOSIT);
-    const borrowRewards = formatRewardsForReserve(reserve, Side.BORROW);
+    // Get rewards from the rewardMap
+    const reserveRewards = rewardMap[reserve.coinType];
+    const depositRewards = reserveRewards ? reserveRewards[Side.DEPOSIT] : [];
+    const borrowRewards = reserveRewards ? reserveRewards[Side.BORROW] : [];
 
     const filteredDepositRewards = getFilteredRewards(depositRewards);
     const filteredBorrowRewards = getFilteredRewards(borrowRewards);
 
+    // Use getDedupedAprRewards to get only rewards with VALID aprPercent (not NaN)
+    const dedupedDepositRewards = getDedupedAprRewards(filteredDepositRewards);
+    const dedupedBorrowRewards = getDedupedAprRewards(filteredBorrowRewards);
+
+    // DEBUG: Log deduped rewards for AUSD and DEEP
+    if ((reserve.token.symbol === 'AUSD' || reserve.token.symbol === 'DEEP') && DEBUG) {
+      console.error(`\n=== DEDUPED REWARDS for ${reserve.token.symbol} (valid APR only) ===`);
+      console.error('Filtered count:', filteredDepositRewards.length);
+      console.error('Deduped count (valid APR):', dedupedDepositRewards.length);
+      dedupedDepositRewards.forEach((reward, i) => {
+        console.error(`\nValid Reward ${i}:`);
+        console.error('  symbol:', reward.stats.symbol);
+        console.error('  rewardCoinType:', reward.stats.rewardCoinType);
+        console.error('  mintDecimals:', reward.stats.mintDecimals);
+        console.error('  aprPercent:', reward.stats.aprPercent.toString());
+        console.error('  price:', reward.stats.price ? reward.stats.price.toString() : 'undefined');
+        // Check what's in coinMetadataMap for this reward token
+        const rewardMeta = coinMetadataMap[reward.stats.rewardCoinType];
+        if (rewardMeta) {
+          console.error('  coinMetadataMap decimals:', rewardMeta.decimals);
+        }
+      });
+    }
+
+    // Calculate reward APRs by summing up valid rewards
     const lendBase = reserve.depositAprPercent;
-    const lendTotal = getTotalAprPercent(Side.DEPOSIT, reserve.depositAprPercent, filteredDepositRewards);
-    const lendReward = lendTotal.minus(lendBase);
+    const lendReward = dedupedDepositRewards.reduce(
+      (sum, reward) => sum.plus(reward.stats.aprPercent),
+      new BigNumber(0)
+    );
+    const lendTotal = lendBase.plus(lendReward);
 
     const borrowBase = reserve.borrowAprPercent;
-    const borrowTotal = getTotalAprPercent(Side.BORROW, reserve.borrowAprPercent, filteredBorrowRewards);
-    const borrowReward = borrowBase.minus(borrowTotal);
+    const borrowReward = dedupedBorrowRewards.reduce(
+      (sum, reward) => sum.plus(reward.stats.aprPercent),
+      new BigNumber(0)
+    );
+    // For borrow, rewards reduce the cost
+    const borrowTotal = borrowBase.minus(borrowReward);
 
     return {
       reserve_id: reserve.id,
       token_symbol: reserve.token.symbol,
       token_contract: reserve.coinType,
+      token_decimals: reserve.token.decimals,  // Add decimals to verify DEEP has 6, not 9
       price: reserve.price.toFixed(6),
       lend_apr_base: lendBase.toFixed(3),
       lend_apr_total: lendTotal.toFixed(3),
@@ -211,7 +230,30 @@ async function main() {
       available_amount_usd: reserve.availableAmountUsd.toFixed(2)
     };
   });
-  console.log(JSON.stringify(output, null, 2));
+
+      // Success - return after logging
+      console.log(JSON.stringify(output, null, 2));
+      return;
+
+    } catch (err) {
+      const isRateLimitOrUnavailable =
+        err.status === 503 || err.status === 429 ||
+        err.message?.includes('503') || err.message?.includes('429') ||
+        err.message?.includes('WebSocket') ||
+        err.message?.includes('Stream is closed');
+
+      const isLastAttempt = attempt === MAX_RETRIES + 1;
+
+      if (isRateLimitOrUnavailable && !isLastAttempt) {
+        console.error(`[Suilend] Fetch failed (${err.message}). Retrying in ${RETRY_DELAY_MS}ms...`);
+        await sleep(RETRY_DELAY_MS);
+        continue;
+      }
+
+      console.error(`[Suilend] Fetch failed after ${attempt} attempt(s)`);
+      throw err;
+    }
+  }
 }
 
 main().catch(err => {

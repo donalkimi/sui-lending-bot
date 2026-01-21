@@ -34,12 +34,12 @@ class RateTracker:
         
         if self.use_cloud:
             self.db_type = 'postgresql'
-            print(f"📊 RateTracker: Using PostgreSQL (Supabase)")
+            print(f"[DB] RateTracker: Using PostgreSQL (Supabase)")
         else:
             self.db_type = 'sqlite'
             # Ensure data directory exists
             Path(db_path).parent.mkdir(exist_ok=True)
-            print(f"📊 RateTracker: Using SQLite ({db_path})")
+            print(f"[DB] RateTracker: Using SQLite ({db_path})")
     
     def _get_connection(self):
         """Get database connection based on configuration"""
@@ -82,7 +82,8 @@ class RateTracker:
             # Save rates_snapshot
             rows_saved = self._save_rates_snapshot(
                 conn, timestamp, lend_rates, borrow_rates,
-                collateral_ratios, prices, available_borrow, borrow_fees
+                collateral_ratios, prices, lend_rewards, borrow_rewards,
+                available_borrow, borrow_fees
             )
             
             # Save reward_token_prices (if data available)
@@ -96,7 +97,7 @@ class RateTracker:
             # Commit
             conn.commit()
 
-            print(f"✅ Saved snapshot: {rows_saved} rate rows, {reward_rows} reward price rows")
+            print(f"[OK] Saved snapshot: {rows_saved} rate rows, {reward_rows} reward price rows")
             print(f"   Timestamp: {timestamp.strftime('%Y-%m-%d %H:%M:%S UTC')}")
 
             # Validate snapshot quality
@@ -104,7 +105,7 @@ class RateTracker:
 
         except Exception as e:
             conn.rollback()
-            print(f"❌ Error saving snapshot: {e}")
+            print(f"[ERROR] Error saving snapshot: {e}")
             raise
         finally:
             conn.close()
@@ -117,6 +118,8 @@ class RateTracker:
         borrow_rates: pd.DataFrame,
         collateral_ratios: pd.DataFrame,
         prices: Optional[pd.DataFrame],
+        lend_rewards: Optional[pd.DataFrame] = None,
+        borrow_rewards: Optional[pd.DataFrame] = None,
         available_borrow: Optional[pd.DataFrame] = None,
         borrow_fees: Optional[pd.DataFrame] = None
     ) -> int:
@@ -139,19 +142,33 @@ class RateTracker:
             price_row = prices[prices['Contract'] == token_contract].iloc[0] if prices is not None and not prices.empty else None
             available_borrow_row = available_borrow[available_borrow['Contract'] == token_contract].iloc[0] if available_borrow is not None and not available_borrow.empty else None
             borrow_fee_row = borrow_fees[borrow_fees['Contract'] == token_contract].iloc[0] if borrow_fees is not None and not borrow_fees.empty else None
-            
+            lend_reward_row = lend_rewards[lend_rewards['Contract'] == token_contract].iloc[0] if lend_rewards is not None and not lend_rewards.empty else None
+            borrow_reward_row = borrow_rewards[borrow_rewards['Contract'] == token_contract].iloc[0] if borrow_rewards is not None and not borrow_rewards.empty else None
+
             # For each protocol
             for protocol in protocols:
-                # Get rates
-                lend_base_apr = lend_row.get(protocol) if pd.notna(lend_row.get(protocol)) else None
-                borrow_base_apr = borrow_row.get(protocol) if borrow_row is not None and pd.notna(borrow_row.get(protocol)) else None
+                # Get total APRs (already calculated correctly by protocol readers)
+                # Note: lend_rates contains Supply_apr (total), borrow_rates contains Borrow_apr (total)
+                lend_total_apr = lend_row.get(protocol) if pd.notna(lend_row.get(protocol)) else None
+                borrow_total_apr = borrow_row.get(protocol) if borrow_row is not None and pd.notna(borrow_row.get(protocol)) else None
+
                 collateral_ratio = collateral_row.get(protocol) if collateral_row is not None and pd.notna(collateral_row.get(protocol)) else None
                 price_usd = price_row.get(protocol) if price_row is not None and pd.notna(price_row.get(protocol)) else None
                 available_borrow_usd = available_borrow_row.get(protocol) if available_borrow_row is not None and pd.notna(available_borrow_row.get(protocol)) else None
                 borrow_fee = borrow_fee_row.get(protocol) if borrow_fee_row is not None and pd.notna(borrow_fee_row.get(protocol)) else None
-                
+
+                # Get reward APRs (for separate storage)
+                lend_reward_apr = lend_reward_row.get(protocol) if lend_reward_row is not None and pd.notna(lend_reward_row.get(protocol)) else 0.0
+                borrow_reward_apr = borrow_reward_row.get(protocol) if borrow_reward_row is not None and pd.notna(borrow_reward_row.get(protocol)) else 0.0
+
+                # Calculate base APRs from total and reward (reverse calculation)
+                # For lending: base = total - reward (since total = base + reward)
+                # For borrowing: base = total + reward (since total = base - reward)
+                lend_base_apr = (lend_total_apr - lend_reward_apr) if lend_total_apr is not None else None
+                borrow_base_apr = (borrow_total_apr + borrow_reward_apr) if borrow_total_apr is not None else None
+
                 # Skip if no data for this protocol/token combination
-                if lend_base_apr is None and borrow_base_apr is None:
+                if lend_total_apr is None and borrow_total_apr is None:
                     continue
                 
                 rows.append({
@@ -160,11 +177,11 @@ class RateTracker:
                     'token': token,
                     'token_contract': token_contract,
                     'lend_base_apr': lend_base_apr,
-                    'lend_reward_apr': None,  # TODO: Extract from lend_rewards
-                    'lend_total_apr': lend_base_apr,  # For now, same as base
+                    'lend_reward_apr': lend_reward_apr,
+                    'lend_total_apr': lend_total_apr,
                     'borrow_base_apr': borrow_base_apr,
-                    'borrow_reward_apr': None,  # TODO: Extract from borrow_rewards
-                    'borrow_total_apr': borrow_base_apr,  # For now, same as base
+                    'borrow_reward_apr': borrow_reward_apr,
+                    'borrow_total_apr': borrow_total_apr,
                     'collateral_ratio': collateral_ratio,
                     'liquidation_threshold': None,  # TODO: Add if available
                     'price_usd': price_usd,
@@ -493,7 +510,7 @@ class RateTracker:
         # Check if data quality is low
         if rows_saved < MIN_ROW_COUNT or protocol_count <= MIN_PROTOCOL_COUNT:
             warning_msg = (
-                f"⚠️ Low data quality detected:\n"
+                f"[WARNING] Low data quality detected:\n"
                 f"  - Rows saved: {rows_saved} (expected ~47)\n"
                 f"  - Protocols: {protocol_count} (expected 3)\n"
                 f"  - Timestamp: {timestamp.strftime('%Y-%m-%d %H:%M:%S UTC')}"

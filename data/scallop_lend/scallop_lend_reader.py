@@ -11,7 +11,8 @@ class ScallopLendReader(ScallopBaseReader):
     Scallop lending-only protocol reader.
 
     Zeros out collateral factors because Scallop lent assets cannot be used
-    as collateral while earning interest.
+    as collateral while earning interest. Sets borrow rates to NaN since
+    lent assets cannot be borrowed against in this protocol configuration.
     """
 
     def get_all_data(self) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
@@ -21,7 +22,12 @@ class ScallopLendReader(ScallopBaseReader):
         coll_df["Collateralization_factor"] = 0.0
         coll_df["Liquidation_threshold"] = 0.0
 
-        print("\t\t(ScallopLend: collateral factors set to 0)")
+        # Set borrow APRs to NaN (lent assets cannot be borrowed)
+        borrow_df["Borrow_base_apr"] = float('nan')
+        borrow_df["Borrow_reward_apr"] = float('nan')
+        borrow_df["Borrow_apr"] = float('nan')
+
+        print("\t\t(ScallopLend: collateral factors set to 0, borrow APRs set to NaN)")
         return lend_df, borrow_df, coll_df
 
 
@@ -47,6 +53,12 @@ if __name__ == "__main__":
         print(collateral_df)
 
     print("\n" + "=" * 80)
+    print("SCALLOP LEND - BORROW RATES (should be NaN):")
+    print("=" * 80)
+    with pd.option_context("display.max_rows", None, "display.max_columns", None):
+        print(borrow_df)
+
+    print("\n" + "=" * 80)
     print("VERIFICATION:")
     print("=" * 80)
     print(
@@ -55,3 +67,6 @@ if __name__ == "__main__":
     print(
         f"Unique liquidation thresholds: {collateral_df['Liquidation_threshold'].unique()}"
     )
+    print(f"All borrow APRs are NaN: {borrow_df['Borrow_apr'].isna().all()}")
+    print(f"All borrow base APRs are NaN: {borrow_df['Borrow_base_apr'].isna().all()}")
+    print(f"All borrow reward APRs are NaN: {borrow_df['Borrow_reward_apr'].isna().all()}")
