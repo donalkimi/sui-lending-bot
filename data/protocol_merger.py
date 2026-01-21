@@ -280,15 +280,46 @@ def merge_protocol_data(stablecoin_contracts: Set[str] = None) -> Tuple[
     
     # Filter: Remove tokens that are only in one protocol (unless they're stablecoins)
     # Matching by CONTRACT ADDRESS (not symbol) for accuracy
+    print(f"\n[FILTER] Token universe before filter: {len(lend_df)} tokens")
+
     tokens_to_keep = []
-    
+
     for idx, row in lend_df.iterrows():
         contract = normalize_coin_type(row['Contract'])
-        protocol_count = sum([pd.notna(row[protocol]) for protocol in protocols])
-        
-        # Keep if: stablecoin (by contract) OR in 2+ protocols
-        if contract in stablecoin_contracts or protocol_count >= 2:
+
+        # Count unique protocols, treating ScallopLend + ScallopBorrow as one (Scallop)
+        has_navi = pd.notna(row.get('Navi'))
+        has_alphafi = pd.notna(row.get('AlphaFi'))
+        has_suilend = pd.notna(row.get('Suilend'))
+        # Count Scallop as present if EITHER ScallopLend OR ScallopBorrow has data
+        has_scallop = pd.notna(row.get('ScallopLend')) or pd.notna(row.get('ScallopBorrow'))
+
+        lending_protocol_count = sum([has_navi, has_alphafi, has_suilend, has_scallop])
+
+        # Keep if: stablecoin OR has lending rates in 2+ unique protocols
+        if contract in stablecoin_contracts or lending_protocol_count >= 2:
             tokens_to_keep.append(idx)
+
+    print(f"[FILTER] Tokens kept: {len(tokens_to_keep)} tokens")
+    print(f"[FILTER] Tokens removed: {len(lend_df) - len(tokens_to_keep)} tokens ({((len(lend_df) - len(tokens_to_keep)) / len(lend_df) * 100):.1f}%)")
+
+    # Show breakdown by protocol count (for debugging)
+    protocol_counts = {}
+    for idx, row in lend_df.iterrows():
+        contract = normalize_coin_type(row['Contract'])
+        # Count unique protocols (Scallop = ScallopLend OR ScallopBorrow)
+        has_navi = pd.notna(row.get('Navi'))
+        has_alphafi = pd.notna(row.get('AlphaFi'))
+        has_suilend = pd.notna(row.get('Suilend'))
+        has_scallop = pd.notna(row.get('ScallopLend')) or pd.notna(row.get('ScallopBorrow'))
+        count = sum([has_navi, has_alphafi, has_suilend, has_scallop])
+        is_stable = contract in stablecoin_contracts
+        key = f"{count} protocols" + (" (stablecoin)" if is_stable else "")
+        protocol_counts[key] = protocol_counts.get(key, 0) + 1
+
+    print(f"[FILTER] Breakdown by protocol count (treating Scallop as 1 protocol):")
+    for key in sorted(protocol_counts.keys(), key=lambda x: int(x.split()[0])):
+        print(f"  {key}: {protocol_counts[key]} tokens")
     
     # Filter all dataframes
     lend_df = lend_df.loc[tokens_to_keep].reset_index(drop=True)

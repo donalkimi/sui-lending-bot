@@ -54,6 +54,10 @@ async function main() {
 
   // Print JSON for Python to read
   console.log(JSON.stringify(markets));
+
+  // Allow event loop to drain WebSocket close frames before terminating
+  console.error(`[AlphaFi] Waiting for WebSocket connections to close gracefully...`);
+  await new Promise(resolve => setTimeout(resolve, 100));
 }
 
 // Run

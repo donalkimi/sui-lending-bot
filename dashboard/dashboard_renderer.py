@@ -1169,7 +1169,7 @@ def render_sidebar_filters(display_results: pd.DataFrame):
 
     protocol_filter = st.multiselect(
         "Filter by Protocol",
-        options=['Navi','AlphaFi','Suilend'],
+        options=['Navi', 'AlphaFi', 'Suilend', 'ScallopLend', 'ScallopBorrow'],
         default=[]
     )
 

@@ -63,6 +63,9 @@ async function main() {
     const borrowLimit = Number(reserve.config?.element?.borrowLimit || 0);
     if (depositLimit === 0 && borrowLimit === 0) continue;
 
+    // Filter out LST tokens (borrowLimit = 0, typically ecosystem LSTs like OSHI_SUI, SPRING_SUI, etc.)
+    if (borrowLimit === 0) continue;
+
     allCoinTypes.add(normalizeStructTag(reserve.coinType.name));
 
     // deposit rewards
@@ -80,41 +83,70 @@ async function main() {
   const coinTypesJson = JSON.stringify(coinTypesArray);
 
   let coinMetadataMap = {};
+  let missingDecimalsTokens = [];
+
   try {
     // Call Python helper to query database
-    // Get the directory where this script lives
-    const scriptDir = new URL('.', import.meta.url).pathname;
+    // Get the directory where this script lives (handle Windows paths)
+    let scriptDir = new URL('.', import.meta.url).pathname;
+    // Fix Windows path (remove leading slash and fix drive letter)
+    if (process.platform === 'win32' && scriptDir.startsWith('/')) {
+      scriptDir = scriptDir.slice(1);
+    }
     const pythonScript = `${scriptDir}get_token_metadata.py`;
 
-    const result = execSync(`python3 "${pythonScript}" '${coinTypesJson}'`, {
+    // Escape JSON for shell (different escaping for Windows vs Unix)
+    const escapedJson = process.platform === 'win32'
+      ? coinTypesJson.replace(/"/g, '\\"')
+      : coinTypesJson;
+
+    const cmd = process.platform === 'win32'
+      ? `python3 "${pythonScript}" "${escapedJson}"`
+      : `python3 "${pythonScript}" '${coinTypesJson}'`;
+
+    const result = execSync(cmd, {
       encoding: 'utf8'
     });
-    coinMetadataMap = JSON.parse(result);
+    const dbResult = JSON.parse(result);
+
+    // Extract metadata and missing decimals list
+    coinMetadataMap = dbResult.metadata || {};
+    missingDecimalsTokens = dbResult.missing_decimals || [];
 
     if (DEBUG) {
       console.error(`Loaded metadata for ${Object.keys(coinMetadataMap).length} tokens from database`);
+      if (missingDecimalsTokens.length > 0) {
+        console.error(`WARNING: ${missingDecimalsTokens.length} tokens missing decimals`);
+      }
+    }
+
+    // FAIL LOUDLY: If any tokens are missing decimals, write to file and notify user
+    if (missingDecimalsTokens.length > 0) {
+      const errorFile = 'tokens_missing_decimals_error.json';
+      fs.writeFileSync(errorFile, JSON.stringify({
+        timestamp: new Date().toISOString(),
+        error: 'Tokens found in Suilend with NULL or missing decimals in token_registry',
+        instructions: 'Run: python3 utils/fetch_token_decimals.py --all',
+        tokens: missingDecimalsTokens
+      }, null, 2), 'utf8');
+
+      console.error(`\n${'='.repeat(80)}`);
+      console.error(`[ERROR] ${missingDecimalsTokens.length} tokens are missing decimals!`);
+      console.error(`[ERROR] These tokens cannot be processed without decimals.`);
+      console.error(`[ERROR] Details written to: ${errorFile}`);
+      console.error(`[FIX] Run: python3 utils/fetch_token_decimals.py --all`);
+      console.error(`${'='.repeat(80)}\n`);
+
+      // Exit with error - we refuse to process without decimals
+      process.exit(1);
     }
   } catch (err) {
     console.error(`Failed to load metadata from database: ${err.message}`);
-    console.error(`Falling back to extracting symbols from coin types`);
-
-    // Fallback: extract symbol from coin type string
-    // NOTE: We default to 9 decimals (standard for most Sui tokens including SUI, SPRING_SUI, etc.)
-    // This is critical for formatRewards() to calculate APRs correctly
-    for (const coinType of allCoinTypes) {
-      const parts = coinType.split("::");
-      const symbol = parts[parts.length - 1];
-      coinMetadataMap[coinType] = {
-        symbol: symbol,
-        name: symbol,
-        decimals: 9,  // Default to 9 decimals for Sui tokens
-        iconUrl: null,
-        description: null
-      };
-    }
+    console.error(`This is a fatal error - cannot proceed without decimals from token_registry`);
+    process.exit(1);
   }
 
-  // Step 3: Parse reserves (filter out isolated and deprecated)
+  // Step 3: Parse reserves (filter out isolated, deprecated, and LSTs)
   const parsedReserves = reserves
     .filter(r => {
       // Filter out isolated markets
@@ -124,6 +156,9 @@ async function main() {
       const depositLimit = Number(r.config?.element?.depositLimit || 0);
       const borrowLimit = Number(r.config?.element?.borrowLimit || 0);
       if (depositLimit === 0 && borrowLimit === 0) return false;
+
+      // Filter out LST tokens (borrowLimit = 0)
+      if (borrowLimit === 0) return false;
 
       return true;
     })
@@ -212,7 +247,6 @@ async function main() {
       reserve_id: reserve.id,
       token_symbol: reserve.token.symbol,
       token_contract: reserve.coinType,
-      token_decimals: reserve.token.decimals,  // Add decimals to verify DEEP has 6, not 9
       price: reserve.price.toFixed(6),
       lend_apr_base: lendBase.toFixed(3),
       lend_apr_total: lendTotal.toFixed(3),
@@ -231,8 +265,12 @@ async function main() {
     };
   });
 
-      // Success - return after logging
+      // Success - output data and wait for graceful cleanup
       console.log(JSON.stringify(output, null, 2));
+
+      // Allow event loop to drain WebSocket close frames before terminating
+      console.error(`[Suilend] Waiting for WebSocket connections to close gracefully...`);
+      await new Promise(resolve => setTimeout(resolve, 100));
       return;
 
     } catch (err) {

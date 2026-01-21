@@ -139,13 +139,17 @@ class AlphaFiReader:
         env["SUI_RPC_URL"] = self.config.rpc_url
         env["ALPHAFI_NETWORK"] = self.config.network
 
-        res = subprocess.run(
-            ["node", self.config.node_script_path],
-            capture_output=True,
-            text=True,
-            env=env,
-            check=False,
-        )
+        try:
+            res = subprocess.run(
+                ["node", self.config.node_script_path],
+                capture_output=True,
+                text=True,
+                env=env,
+                check=False,
+                timeout=60,  # 60 second timeout to prevent indefinite hangs
+            )
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(f"AlphaFi node script timed out after 60 seconds (RPC may be unresponsive)")
 
         if res.returncode != 0:
             raise RuntimeError(f"AlphaFi node script failed:\n{res.stderr}\nSTDOUT:\n{res.stdout}")

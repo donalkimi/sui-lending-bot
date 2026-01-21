@@ -212,10 +212,13 @@ async function main() {
 // Run
 const scriptStartTime = Date.now();
 main()
-  .then(() => {
+  .then(async () => {
     console.error(`[SDK-JS] main() completed successfully (total elapsed: ${Date.now() - scriptStartTime}ms)`);
-    console.error(`[SDK-JS] Forcing process exit...`);
-    process.exit(0);  // Force immediate exit - don't wait for connections to close
+    console.error(`[SDK-JS] Waiting for WebSocket connections to close gracefully...`);
+    // Allow event loop to drain WebSocket close frames before terminating
+    await new Promise(resolve => setTimeout(resolve, 100));
+    console.error(`[SDK-JS] Exiting...`);
+    process.exit(0);
   })
   .catch((err) => {
     console.error("Scallop reader failed:", err.message || err);

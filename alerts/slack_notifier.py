@@ -132,14 +132,14 @@ class SlackNotifier:
             )
             
             if response.status_code == 200:
-                print(f"✓ Slack notification sent")
+                print(f"[OK] Slack notification sent")
                 return True
             else:
-                print(f"✗ Slack notification failed: {response.status_code} - {response.text}")
+                print(f"[ERROR] Slack notification failed: {response.status_code} - {response.text}")
                 return False
-                
+
         except Exception as e:
-            print(f"✗ Error sending Slack notification: {e}")
+            print(f"[ERROR] Error sending Slack notification: {e}")
             return False
     
     def alert_high_apr(self, strategy: Dict) -> bool:

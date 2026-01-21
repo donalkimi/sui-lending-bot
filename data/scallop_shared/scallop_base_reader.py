@@ -66,13 +66,17 @@ class ScallopBaseReader:
         if self.config.debug:
             env["SCALLOP_DEBUG"] = "1"
 
-        res = subprocess.run(
-            ["node", self.config.node_script_path],
-            capture_output=True,
-            text=True,
-            env=env,
-            check=False,
-        )
+        try:
+            res = subprocess.run(
+                ["node", self.config.node_script_path],
+                capture_output=True,
+                text=True,
+                env=env,
+                check=False,
+                timeout=60,  # 60 second timeout to prevent indefinite hangs
+            )
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(f"Scallop node script timed out after 60 seconds (RPC may be unresponsive)")
 
         elapsed = time.time() - start_time
         print(f"\t\t[SDK] Scallop SDK call completed in {elapsed:.2f} seconds")

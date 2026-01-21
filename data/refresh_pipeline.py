@@ -61,7 +61,7 @@ def refresh_pipeline(
     """Run one full refresh: fetch -> merge -> (optional) save -> analyze.
 
     Args:
-        timestamp: Optional timestamp for the refresh (default: now)
+        timestamp: Optional timestamp for the refresh
         stablecoin_contracts: Contract addresses for stablecoins
         liquidation_distance: Liquidation distance setting for analysis
         save_snapshots: Whether to save snapshots to database
@@ -155,7 +155,7 @@ def refresh_pipeline(
 
     except Exception as e:
         error_msg = f"Error during analysis: {str(e)}"
-        print(f"✗ {error_msg}")
+        print(f"[ERROR] {error_msg}")
         if send_slack_notifications:
             notifier.alert_error(error_msg)
     return RefreshResult(

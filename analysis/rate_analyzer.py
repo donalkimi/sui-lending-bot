@@ -83,7 +83,7 @@ class RateAnalyzer:
             raise TypeError(f"timestamp must be int (Unix seconds), got {type(timestamp).__name__}")
         self.timestamp = timestamp
         
-        print(f"\n🔧 Initialized Rate Analyzer:")
+        print(f"\n[ANALYZER] Initialized Rate Analyzer:")
         print(f"   Protocols: {len(self.protocols)} ({', '.join(self.protocols)})")
         print(f"   Tokens: {len(self.ALL_TOKENS)} (Stablecoins: {len(self.STABLECOINS)}, High-Yield: {len(self.OTHER_TOKENS)})")
         print(f"   Stablecoins: {', '.join(sorted(self.STABLECOINS))}")
@@ -240,10 +240,10 @@ class RateAnalyzer:
         if tokens is None:
             tokens = self.ALL_TOKENS
         
-        print(f"\n🔍 Analyzing all combinations...")
+        print(f"\n[ANALYZER] Analyzing all combinations...")
         print(f"   Tokens to analyze: {len(tokens)}")
         print(f"   Protocol pairs: {len(self.protocols) * (len(self.protocols) - 1)} (bidirectional)")
-        print(f"   ⚠️  Enforcing: Token1 must be a stablecoin (market neutral requirement)")
+        print(f"   [!] Enforcing: Token1 must be a stablecoin (market neutral requirement)")
         
         results = []
         analyzed = 0
@@ -337,8 +337,8 @@ class RateAnalyzer:
                                 valid += 1
                                 results.append(result)
         
-        print(f"   ✓ Analyzed {analyzed} combinations")
-        print(f"   ✓ {valid} valid strategies found")
+        print(f"   [OK] Analyzed {analyzed} combinations")
+        print(f"   [OK] {valid} valid strategies found")
         
         # Convert to DataFrame and sort by net APR
         if results:
@@ -395,14 +395,14 @@ class RateAnalyzer:
         if has_conversion:
             strategy_type += " (with conversion)"
         
-        print(f"\n🏆 BEST STRATEGY FOUND ({strategy_type}):")
+        print(f"\n[BEST STRATEGY] BEST STRATEGY FOUND ({strategy_type}):")
         print(f"   Protocol A: {best['protocol_A']}")
         print(f"   Protocol B: {best['protocol_B']}")
         print(f"   Token 1 (Start): {best['token1']}")
         print(f"   Token 2 (Middle): {best['token2']}")
         print(f"   Token 3 (Close): {best['token3']}", end="")
         if has_conversion:
-            print(f" → Convert to {best['token1']}")
+            print(f" -> Convert to {best['token1']}")
         else:
             print()  # Just newline
         print(f"   Net APR: {best['net_apr'] * 100:.2f}%")
