@@ -141,6 +141,14 @@ def refresh_pipeline(
         protocol_A, protocol_B, all_results = analyzer.find_best_protocol_pair()
         print(f"[ANALYSIS] Analysis complete - Best pair: {protocol_A} + {protocol_B}")
 
+        # Save analysis to cache (only if save_snapshots is True)
+        if save_snapshots:
+            tracker.save_analysis_cache(
+                timestamp_seconds=current_seconds,
+                liquidation_distance=liquidation_distance,
+                all_results=all_results
+            )
+
         # Slack: notify once per run (if enabled)
         if send_slack_notifications:
             if all_results is None or all_results.empty:

@@ -510,134 +510,116 @@ def display_strategy_details(strategy_row: Union[pd.Series, Dict[str, Any]], use
 # TAB RENDERERS
 # ============================================================================
 
-def render_all_strategies_tab(all_results: pd.DataFrame, mode: str, deployment_usd: float,
-                              liquidation_distance: float, use_unlevered: bool,
-                              timestamp: Optional[int] = None):
+def display_strategies_table(
+    all_results: pd.DataFrame,
+    mode: str = 'unified'
+) -> Optional[Dict]:
     """
-    Render the All Strategies tab
+    Display strategies as sortable data table with clickable rows.
 
     Args:
-        all_results: Filtered results DataFrame
-        mode: 'unified' (kept for compatibility)
-        deployment_usd: Deployment amount
-        liquidation_distance: Liquidation distance setting
-        use_unlevered: Whether to show unlevered APR
-        timestamp: Unix timestamp in seconds (for chart caching)
+        all_results: DataFrame with strategy results
+        mode: Display mode (kept for compatibility)
+
+    Returns:
+        Selected strategy dict or None
     """
-    if not all_results.empty:
-        # Display with expanders
-        for _enum_idx, (idx, row) in enumerate(all_results.iterrows()):
-            # Chart data key - include timestamp to avoid collisions when switching timestamps
-            chart_key = f"chart_{timestamp}_{idx}"
+    import time
+    start_time = time.time()
 
-            # Expander should be open if chart data exists for this strategy
-            is_expanded = chart_key in st.session_state
+    if all_results.empty:
+        st.info("No strategies found matching filters")
+        return None
 
-            # Build expander title with max size and APR
-            max_size = row.get('max_size')
-            if max_size is not None and not pd.isna(max_size):
-                max_size_text = f" | Max Size ${max_size:,.2f}"
-            else:
-                max_size_text = ""
+    # Prepare data for table
+    prep_start = time.time()
+    table_data = []
+    for idx, row in all_results.iterrows():
+        # Get token symbols for display (logic uses contracts)
+        token_pair = f"{row['token1']}/{row['token2']}/{row['token3']}"
 
-            # Build token flow based on leverage toggle
-            if use_unlevered:
-                token_flow = f"{row['token1']} → {row['token2']}"
-            else:
-                token_flow = f"{row['token1']} → {row['token2']} → {row['token3']}"
+        table_data.append({
+            '_idx': idx,  # Hidden index for selection
+            'Token Pair': token_pair,
+            'Protocol A': row['protocol_A'],
+            'Protocol B': row['protocol_B'],
+            'Net APR': row['net_apr'] * 100,  # Convert decimal to percentage
+            'APR 5d': row.get('apr5', 0) * 100,  # APR if exit after 5 days
+            'APR 30d': row.get('apr30', 0) * 100,  # 30-day average
+            'Days to Breakeven': row.get('days_to_breakeven', 0),  # Days to recover fees
+            'Max Size': row.get('max_size', 0),  # Max position size
+        })
 
-            # Get Net APR and APR5 values
-            if use_unlevered:
-                net_apr_value = row.get('unlevered_apr', 0)
-                apr5_value = row.get('unlevered_apr', 0)
-            else:
-                net_apr_value = row.get('apr_net', row['net_apr'])
-                apr5_value = row.get('apr5', row['net_apr'])
+    df = pd.DataFrame(table_data)
+    prep_time = (time.time() - prep_start) * 1000
+    print(f"[{(time.time() - start_time) * 1000:7.1f}ms] [TABLE] Prepared {len(table_data)} rows in {prep_time:.1f}ms")
 
-            # Format APR values with color indicators
-            net_apr_indicator = "🟢" if net_apr_value >= 0 else "🔴"
-            apr5_indicator = "🟢" if apr5_value >= 0 else "🔴"
+    # Display table with sortable columns
+    render_start = time.time()
+    event = st.dataframe(
+        df.drop(columns=['_idx']),  # Hide index column
+        width="stretch",
+        hide_index=True,
+        column_config={
+            "Net APR": st.column_config.NumberColumn(
+                "Net APR",
+                format="%.2f%%",
+                help="Current instantaneous APR after all fees"
+            ),
+            "APR 5d": st.column_config.NumberColumn(
+                "APR 5d",
+                format="%.2f%%",
+                help="Annualized return if you exit after 5 days (includes upfront fees)"
+            ),
+            "APR 30d": st.column_config.NumberColumn(
+                "APR 30d",
+                format="%.2f%%",
+                help="Annualized return if you exit after 30 days (includes upfront fees)"
+            ),
+            "Days to Breakeven": st.column_config.NumberColumn(
+                "Days to Breakeven",
+                format="%.1f days",
+                help="Days until upfront fees are recovered"
+            ),
+            "Max Size": st.column_config.NumberColumn(
+                "Max Size",
+                format="$%,.0f",
+                help="Maximum deployable position size"
+            ),
+        },
+        on_select="rerun",
+        selection_mode="single-row"
+    )
+    render_time = (time.time() - render_start) * 1000
+    total_time = (time.time() - start_time) * 1000
+    print(f"[{total_time:7.1f}ms] [TABLE] Rendered table in {render_time:.1f}ms (total: {total_time:.1f}ms)")
 
-            title = f"▶ {token_flow} | {row['protocol_A']} ↔ {row['protocol_B']}{max_size_text} | {net_apr_indicator} Net APR {net_apr_value * 100:.2f}% | {apr5_indicator} 5day APR {apr5_value * 100:.2f}%"
+    # Check if user selected a row
+    if event.selection and event.selection.rows:
+        selected_idx = df.iloc[event.selection.rows[0]]['_idx']
+        print(f"[TABLE] Row selected: {selected_idx}")
+        return all_results.loc[selected_idx].to_dict()
 
-            with st.expander(title, expanded=is_expanded):
-                # 1. Display APR comparison table at the top with deploy buttons
-                fee_caption, warning_message = display_apr_table(
-                    row, deployment_usd, liquidation_distance, idx, mode, timestamp
-                )
-
-                # 2. Display strategy details table right after
-                max_size_msg, liquidity_msg = display_strategy_details(row, use_unlevered, deployment_usd)
-
-                # 3. Button to load historical chart
-                if st.button("📈 Load Historical Chart", key=f"btn_{mode}_{idx}"):
-                    with st.spinner("Loading historical data..."):
-                        history_df, L_A, B_A, L_B, B_B = get_strategy_history(
-                            strategy_row=row.to_dict(),
-                            liquidation_distance=liquidation_distance
-                        )
-
-                        # Store in session state
-                        st.session_state[chart_key] = {
-                            'history_df': history_df,
-                            'L_A': L_A,
-                            'B_A': B_A,
-                            'L_B': L_B,
-                            'B_B': B_B
-                        }
-
-                    # Force rerun to show chart
-                    st.rerun()
-
-                # Display chart if loaded
-                if chart_key in st.session_state:
-                    chart_data = st.session_state[chart_key]
-                    history_df = chart_data['history_df']
-
-                    if history_df is not None and not history_df.empty:
-                        st.subheader("📈 Historical Performance")
-
-                        # Create and display chart
-                        fig = create_strategy_history_chart(
-                            df=history_df,
-                            token1=row['token1'],
-                            token2=row['token2'],
-                            token3=row['token3'],
-                            protocol_A=row['protocol_A'],
-                            protocol_B=row['protocol_B'],
-                            liq_dist=liquidation_distance,
-                            L_A=chart_data['L_A'],
-                            B_A=chart_data['B_A'],
-                            L_B=chart_data['L_B'],
-                            B_B=chart_data['B_B']
-                        )
-                        st.plotly_chart(fig, width='stretch')
-
-                        # Summary metrics
-                        col1, col2, col3, col4 = st.columns(4)
-                        col1.metric("Current Net APR", f"{get_apr_value(row, use_unlevered) * 100:.2f}%")
-                        col2.metric("Avg Net APR", f"{history_df['net_apr'].mean() * 100:.2f}%")
-                        col3.metric("Max Net APR", f"{history_df['net_apr'].max() * 100:.2f}%")
-                        col4.metric("Min Net APR", f"{history_df['net_apr'].min() * 100:.2f}%")
-
-                        st.markdown("---")
-                    else:
-                        st.info("📊 No historical data available yet. Run main.py to build up history.")
-
-                # 4. Display warnings/info at the end
-                st.caption(fee_caption)
-                if warning_message:
-                    st.warning(warning_message)
-
-                # 5. Display liquidity info at the very end
-                if max_size_msg:
-                    st.success(max_size_msg)
-                if liquidity_msg:
-                    st.info(liquidity_msg)
-    else:
-        st.warning("⚠️ No strategies found with current filters")
+    return None
 
 
+@st.dialog("Strategy Details")
+def show_placeholder_modal(strategy: Dict):
+    """
+    Placeholder modal for strategy details.
+    Will be replaced with full implementation in Phase 3.
+
+    Args:
+        strategy: Strategy dictionary with all details
+    """
+    st.markdown("### 🚧 This is a placeholder")
+    st.info("Full strategy details modal will be implemented in Phase 3")
+
+    # Show basic strategy info
+    st.markdown(f"**Selected Strategy:** {strategy['token1']}/{strategy['token2']}/{strategy['token3']}")
+    st.markdown(f"**Protocols:** {strategy['protocol_A']} + {strategy['protocol_B']}")
+    st.markdown(f"**Net APR:** {strategy['net_apr'] * 100:.2f}%")
+    st.markdown(f"**Days to Breakeven:** {strategy.get('days_to_breakeven', 0):.1f} days")
 
 
 def render_rate_tables_tab(lend_rates: pd.DataFrame, borrow_rates: pd.DataFrame,
@@ -1189,6 +1171,10 @@ def render_dashboard(data_loader: DataLoader, mode: str):
         data_loader: DataLoader instance (UnifiedDataLoader)
         mode: 'unified' (kept for backward compatibility, no longer used for branching logic)
     """
+    import time
+    dashboard_start = time.time()
+    print(f"\n[{'0.0':>7}ms] [DASHBOARD] Starting render")
+
     # Custom CSS
     st.markdown("""
     <style>
@@ -1229,13 +1215,19 @@ def render_dashboard(data_loader: DataLoader, mode: str):
         st.caption(f"Last updated: {datetime.now().strftime('%H:%M:%S')}")
 
     # === LOAD DATA ===
+    load_start = time.time()
+    print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] Loading data...")
     with st.spinner("Loading data..."):
         (lend_rates, borrow_rates, collateral_ratios, prices,
          lend_rewards, borrow_rewards, available_borrow, borrow_fees, timestamp) = data_loader.load_data()
 
+    load_time = (time.time() - load_start) * 1000
+    print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] Data loaded in {load_time:.1f}ms")
+
     # IMMEDIATELY convert timestamp to seconds (Unix timestamp)
     # DataLoader may return datetime, pandas.Timestamp, or string - convert to int
     timestamp_seconds = to_seconds(timestamp)
+    print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] Timestamp converted: {timestamp_seconds}")
 
     if lend_rates.empty or borrow_rates.empty or collateral_ratios.empty:
         st.warning("⚠️ No data available. Please check protocol connections.")
@@ -1250,18 +1242,24 @@ def render_dashboard(data_loader: DataLoader, mode: str):
          stablecoin_only, use_unlevered, min_apr, token_filter, protocol_filter) = render_sidebar_filters(empty_df)
 
     # === RUN ANALYSIS WITH SMART CACHING ===
+    analysis_start = time.time()
+    print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] Starting analysis...")
+
     # Initialize analysis cache if not exists
     if 'analysis_cache' not in st.session_state:
         st.session_state.analysis_cache = {}
 
     # Create cache key based on timestamp (seconds) and liquidation distance
     cache_key = f"{timestamp_seconds}_{liquidation_distance}"
+    print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] Cache key: {cache_key}")
 
     # Check if we have cached results for this exact combination
     if cache_key in st.session_state.analysis_cache:
         # Use cached analysis results (instant load)
         protocol_A, protocol_B, all_results = st.session_state.analysis_cache[cache_key]
         st.sidebar.caption("✅ Using cached analysis")
+        analysis_time = (time.time() - analysis_start) * 1000
+        print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] ✅ Cache HIT (session): {len(all_results)} strategies in {analysis_time:.1f}ms")
     elif 'pipeline_analysis_results' in st.session_state:
         # Use analysis results from refresh_pipeline (already computed during refresh)
         protocol_A, protocol_B, all_results = st.session_state.pipeline_analysis_results
@@ -1270,9 +1268,14 @@ def render_dashboard(data_loader: DataLoader, mode: str):
         # Clear pipeline results after using once
         del st.session_state.pipeline_analysis_results
         st.sidebar.caption("⚡ Used fresh analysis from refresh_pipeline")
+        analysis_time = (time.time() - analysis_start) * 1000
+        print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] ⚡ Used pipeline results: {len(all_results)} strategies in {analysis_time:.1f}ms")
     else:
         # Run analysis (expensive operation)
         st.sidebar.caption("⏳ Running strategy analysis...")
+        print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] ❌ Cache MISS - running analysis...")
+
+        analyzer_init_start = time.time()
         analyzer = RateAnalyzer(
             lend_rates=lend_rates,
             borrow_rates=borrow_rates,
@@ -1285,13 +1288,21 @@ def render_dashboard(data_loader: DataLoader, mode: str):
             timestamp=timestamp_seconds,  # Pass Unix seconds (int)
             liquidation_distance=liquidation_distance
         )
+        analyzer_init_time = (time.time() - analyzer_init_start) * 1000
+        print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] RateAnalyzer initialized in {analyzer_init_time:.1f}ms")
 
+        analysis_run_start = time.time()
         protocol_A, protocol_B, all_results = analyzer.find_best_protocol_pair()
+        analysis_run_time = (time.time() - analysis_run_start) * 1000
+        print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] Analysis completed: {len(all_results)} strategies in {analysis_run_time:.1f}ms")
 
         # Cache the results for future use
         st.session_state.analysis_cache[cache_key] = (protocol_A, protocol_B, all_results)
+        analysis_time = (time.time() - analysis_start) * 1000
+        print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] Total analysis time: {analysis_time:.1f}ms")
 
     # Apply filters
+    filter_start = time.time()
     filtered_results = all_results.copy()
 
     if not filtered_results.empty:
@@ -1362,6 +1373,9 @@ def render_dashboard(data_loader: DataLoader, mode: str):
             display_results['protocol_B'].isin(protocol_filter)
         ]
 
+    filter_time = (time.time() - filter_start) * 1000
+    print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] Filtering complete in {filter_time:.1f}ms: {len(display_results)}/{len(all_results)} strategies")
+
     # Update sidebar with strategy count
     with filter_placeholder:
         st.metric("Strategies Found", f"{len(display_results)} / {len(all_results)}")
@@ -1370,6 +1384,9 @@ def render_dashboard(data_loader: DataLoader, mode: str):
     render_deployment_form(mode)
 
     # === TABS ===
+    tabs_start = time.time()
+    print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] Rendering tabs...")
+
     tab1, tab2, tab3, tab4 = st.tabs([
         "📊 All Strategies",
         "📈 Rate Tables",
@@ -1378,21 +1395,42 @@ def render_dashboard(data_loader: DataLoader, mode: str):
     ])
 
     with tab1:
-        render_all_strategies_tab(
-            display_results, mode, deployment_usd, liquidation_distance,
-            use_unlevered, timestamp_seconds  # These render functions need updating to accept seconds
-        )
+        tab1_start = time.time()
+        st.markdown("### Top Lending Strategies")
+        st.markdown("Click column headers to sort. Click checkbox to view details.")
+
+        # Display sortable table
+        selected_strategy = display_strategies_table(display_results, mode=mode)
+
+        # If user clicked a row, show placeholder modal
+        if selected_strategy:
+            show_placeholder_modal(selected_strategy)
+
+        tab1_time = (time.time() - tab1_start) * 1000
+        print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] Tab1 (Strategies) rendered in {tab1_time:.1f}ms")
 
     with tab2:
+        tab2_start = time.time()
         render_rate_tables_tab(
             lend_rates, borrow_rates, collateral_ratios, prices,
             available_borrow, borrow_fees
         )
+        tab2_time = (time.time() - tab2_start) * 1000
+        print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] Tab2 (Rate Tables) rendered in {tab2_time:.1f}ms")
 
     with tab3:
+        tab3_start = time.time()
         render_zero_liquidity_tab(
             zero_liquidity_results, deployment_usd, use_unlevered, mode, timestamp_seconds  # These render functions need updating
         )
+        tab3_time = (time.time() - tab3_start) * 1000
+        print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] Tab3 (Zero Liquidity) rendered in {tab3_time:.1f}ms")
 
     with tab4:
+        tab4_start = time.time()
         render_positions_table_tab()
+        tab4_time = (time.time() - tab4_start) * 1000
+        print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] Tab4 (Positions) rendered in {tab4_time:.1f}ms")
+
+    total_dashboard_time = (time.time() - dashboard_start) * 1000
+    print(f"[{total_dashboard_time:7.1f}ms] [DASHBOARD] ✅ Dashboard render complete (total: {total_dashboard_time:.1f}ms)\n")

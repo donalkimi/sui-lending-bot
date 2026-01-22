@@ -40,6 +40,9 @@ class RateTracker:
             # Ensure data directory exists
             Path(db_path).parent.mkdir(exist_ok=True)
             print(f"[DB] RateTracker: Using SQLite ({db_path})")
+
+        # Create cache tables
+        self._create_cache_tables()
     
     def _get_connection(self):
         """Get database connection based on configuration"""
@@ -573,6 +576,193 @@ class RateTracker:
 
         result = cur.fetchone()
         return int(result[0]) if result else 0
+
+    # ---------------------------------------------------------------------
+    # Cache Management
+    # ---------------------------------------------------------------------
+    def _create_cache_tables(self):
+        """Create cache tables for analysis and chart data"""
+        conn = self._get_connection()
+        try:
+            if self.db_type == 'sqlite':
+                # Create analysis_cache table
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS analysis_cache (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        timestamp_seconds INTEGER NOT NULL,
+                        liquidation_distance REAL NOT NULL,
+                        results_json TEXT NOT NULL,
+                        strategy_count INTEGER,
+                        created_at INTEGER NOT NULL,
+                        UNIQUE(timestamp_seconds, liquidation_distance)
+                    )
+                """)
+
+                # Create chart_cache table
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS chart_cache (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        strategy_hash TEXT NOT NULL,
+                        timestamp_seconds INTEGER NOT NULL,
+                        chart_html TEXT NOT NULL,
+                        created_at INTEGER NOT NULL,
+                        UNIQUE(strategy_hash, timestamp_seconds)
+                    )
+                """)
+
+                # Create indexes
+                conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_analysis_cache_timestamp
+                        ON analysis_cache(timestamp_seconds, liquidation_distance)
+                """)
+
+                conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_chart_cache_strategy
+                        ON chart_cache(strategy_hash, timestamp_seconds)
+                """)
+
+                conn.commit()
+            # PostgreSQL support can be added in future if needed
+        finally:
+            conn.close()
+
+    def save_analysis_cache(
+        self,
+        timestamp_seconds: int,
+        liquidation_distance: float,
+        all_results
+    ) -> None:
+        """
+        Save analysis results to cache.
+
+        Args:
+            timestamp_seconds: Unix timestamp (int)
+            liquidation_distance: Decimal (0.10 = 10%)
+            all_results: DataFrame or list of dicts (from RateAnalyzer.find_best_protocol_pair)
+        """
+        import json
+        import time
+
+        # Convert DataFrame to list of dicts if needed
+        if hasattr(all_results, 'to_dict'):
+            # It's a DataFrame, convert to list of dicts
+            all_results = all_results.to_dict('records')
+
+        results_json = json.dumps(all_results)
+        strategy_count = len(all_results)
+        created_at = int(time.time())
+
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("""
+                INSERT OR REPLACE INTO analysis_cache
+                (timestamp_seconds, liquidation_distance, results_json, strategy_count, created_at)
+                VALUES (?, ?, ?, ?, ?)
+            """, (
+                timestamp_seconds,
+                liquidation_distance,
+                results_json,
+                strategy_count,
+                created_at
+            ))
+
+    def load_analysis_cache(
+        self,
+        timestamp_seconds: int,
+        liquidation_distance: float,
+        start_time: float = None
+    ) -> Optional[pd.DataFrame]:
+        """
+        Load analysis results from cache.
+
+        Returns:
+            DataFrame with all strategies (sorted by net_apr descending) or None if not cached
+        """
+        import json
+        import time
+
+        fetch_start = time.time()
+
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute("""
+                SELECT results_json, strategy_count FROM analysis_cache
+                WHERE timestamp_seconds = ? AND liquidation_distance = ?
+            """, (timestamp_seconds, liquidation_distance))
+
+            row = cursor.fetchone()
+            if not row:
+                if start_time:
+                    elapsed = (time.time() - start_time) * 1000
+                    print(f"[{elapsed:7.1f}ms] [CACHE MISS] No cached analysis for timestamp={timestamp_seconds}, liq_dist={liquidation_distance*100:.0f}%")
+                return None
+
+            results_json, strategy_count = row
+            all_results = json.loads(results_json)
+
+            # Convert list of dicts to DataFrame (matches RateAnalyzer.find_best_protocol_pair return)
+            df = pd.DataFrame(all_results)
+
+            fetch_time = (time.time() - fetch_start) * 1000
+            if start_time:
+                elapsed = (time.time() - start_time) * 1000
+                print(f"[{elapsed:7.1f}ms] [CACHE HIT] Loaded {strategy_count} strategies from DB cache in {fetch_time:.1f}ms")
+            else:
+                print(f"[CACHE HIT] Loaded {strategy_count} strategies from cache ({fetch_time:.1f}ms)")
+
+            return df
+
+    def save_chart_cache(
+        self,
+        strategy_hash: str,
+        timestamp_seconds: int,
+        chart_html: str
+    ) -> None:
+        """Save rendered chart to cache."""
+        import time
+
+        created_at = int(time.time())
+
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("""
+                INSERT OR REPLACE INTO chart_cache
+                (strategy_hash, timestamp_seconds, chart_html, created_at)
+                VALUES (?, ?, ?, ?)
+            """, (strategy_hash, timestamp_seconds, chart_html, created_at))
+
+    def load_chart_cache(
+        self,
+        strategy_hash: str,
+        timestamp_seconds: int
+    ) -> Optional[str]:
+        """Load rendered chart from cache. Returns HTML string or None."""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute("""
+                SELECT chart_html FROM chart_cache
+                WHERE strategy_hash = ? AND timestamp_seconds = ?
+            """, (strategy_hash, timestamp_seconds))
+
+            row = cursor.fetchone()
+            return row[0] if row else None
+
+    @staticmethod
+    def compute_strategy_hash(strategy: dict) -> str:
+        """
+        Compute unique hash for strategy based on tokens and protocols.
+        Uses contract addresses (not symbols) for uniqueness.
+
+        Args:
+            strategy: Strategy dict with token contracts, protocols, and liquidation_distance
+
+        Returns:
+            16-character hash (SHA256 truncated)
+        """
+        import hashlib
+
+        # Use contract addresses for hashing
+        key = f"{strategy['token1_contract']}_{strategy['token2_contract']}_{strategy['token3_contract']}"
+        key += f"_{strategy['protocol_A']}_{strategy['protocol_B']}"
+        key += f"_{strategy.get('liquidation_distance', 0.10)}"
+
+        return hashlib.sha256(key.encode()).hexdigest()[:16]
 
 
 
