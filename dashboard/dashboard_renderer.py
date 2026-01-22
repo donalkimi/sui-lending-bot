@@ -12,12 +12,14 @@ from datetime import datetime, timedelta
 from typing import Tuple, Optional, Union, Any, Dict
 import sys
 import os
+import time
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import settings
 from config.stablecoins import STABLECOIN_CONTRACTS, STABLECOIN_SYMBOLS
 from dashboard.data_loaders import DataLoader
+from data.rate_tracker import RateTracker
 
 
 def format_days_to_breakeven(days: float) -> str:
@@ -49,7 +51,6 @@ def format_days_to_breakeven(days: float) -> str:
     return f"{days:.1f}"
 from dashboard.dashboard_utils import (
     format_usd_abbreviated,
-    get_apr_value,
     get_db_connection,
     get_strategy_history,
     create_strategy_history_chart
@@ -63,192 +64,11 @@ from utils.time_helpers import to_seconds, to_datetime_str
 # COMPONENT RENDERERS
 # ============================================================================
 
-def render_deployment_form(mode: str):
-    """
-    Render the deployment confirmation form in a modal-like container
-    Uses session state: pending_deployment, show_deploy_form
-
-    Args:
-        mode: 'live' or 'historical'
-    """
-    if not st.session_state.get('show_deploy_form', False):
-        return
-
-    deployment_data = st.session_state.get('pending_deployment')
-    if not deployment_data:
-        st.session_state.show_deploy_form = False
-        return
-
-    strategy = deployment_data['strategy_row']
-    is_levered = deployment_data['is_levered']
-    deployment_usd = deployment_data['deployment_usd']
-    liquidation_distance = deployment_data['liquidation_distance']
-
-    # Display in a prominent container
-    st.markdown("---")
-    st.markdown("## 📄 PAPER TRADE - Position Deployment Confirmation")
-
-    # Strategy summary
-    st.markdown("### Strategy Details")
-    col1, col2, col3 = st.columns(3)
-
-    token_flow = f"{strategy['token1']} → {strategy['token2']}"
-    if is_levered:
-        token_flow += f" → {strategy['token3']}"
-
-    col1.metric("Token Flow", token_flow)
-    col2.metric("Protocols", f"{strategy['protocol_A']} ↔ {strategy['protocol_B']}")
-    col3.metric("Type", "🔄 Loop" if is_levered else "▶️ No-Loop")
-
-    # APR comparison
-    st.markdown("### APR Projection")
-    apr_data = {
-        'Timeframe': ['Net APR', 'APR5', 'APR30', 'APR90'],
-        'Value': [
-            f"{strategy.get('apr_net' if is_levered else 'unlevered_apr', strategy['net_apr']) * 100:.2f}%",
-            f"{strategy.get('apr5', strategy['net_apr']) * 100:.2f}%",
-            f"{strategy.get('apr30', strategy['net_apr']) * 100:.2f}%",
-            f"{strategy.get('apr90', strategy['net_apr']) * 100:.2f}%"
-        ]
-    }
-    st.table(pd.DataFrame(apr_data))
-
-    # Token breakdown table
-    st.markdown("### Token Breakdown")
-    use_unlevered = not is_levered
-    max_size_msg, liquidity_msg = display_strategy_details(strategy, use_unlevered, deployment_usd)
-
-    # Historical chart
-    st.markdown("### Historical Performance")
-    with st.spinner("Loading historical chart..."):
-        history_df, L_A, B_A, L_B, B_B = get_strategy_history(
-            strategy_row=strategy,
-            liquidation_distance=liquidation_distance
-        )
-
-    if history_df is not None and not history_df.empty:
-        fig = create_strategy_history_chart(
-            df=history_df,
-            token1=strategy['token1'],
-            token2=strategy['token2'],
-            token3=strategy['token3'],
-            protocol_A=strategy['protocol_A'],
-            protocol_B=strategy['protocol_B'],
-            liq_dist=liquidation_distance,
-            L_A=L_A, B_A=B_A, L_B=L_B, B_B=B_B
-        )
-
-        # Add horizontal line for current net APR
-        current_apr = strategy.get('apr_net' if is_levered else 'unlevered_apr', strategy['net_apr'])
-        fig.add_hline(
-            y=current_apr * 100,  # Chart expects percentage
-            line_dash="dash",
-            line_color="orange",
-            line_width=2,
-            annotation_text=f"Current: {current_apr * 100:.2f}%",
-            annotation_position="right"
-        )
-
-        st.plotly_chart(fig, width="stretch")
-    else:
-        st.info("📊 No historical data available for this strategy")
-
-    # Position parameters
-    st.markdown("### Position Parameters")
-    col1, col2 = st.columns(2)
-    col1.metric("Deployment Size", f"${deployment_usd:,.2f}", help="Hypothetical amount - no real capital deployed")
-    col2.metric("Liquidation Distance", f"{liquidation_distance*100:.0f}%", help="Safety buffer from liquidation threshold")
-
-    # Optional notes
-    notes = st.text_area("Notes (optional)", placeholder="Add any notes about this paper position...", key="deploy_notes")
-
-    # Action buttons
-    col1, col2, col3 = st.columns([1, 1, 2])
-
-    with col1:
-        if st.button("✅ Confirm Deploy", type="primary", width="stretch"):
-            try:
-                # Connect to database
-                conn = get_db_connection()
-                service = PositionService(conn)
-
-                # Use timestamp from strategy_row (when data was captured)
-                entry_timestamp = strategy.get('timestamp')
-                if entry_timestamp is None:
-                    raise ValueError("Strategy must have timestamp - cannot default to datetime.now()")
-
-                # Convert strategy to dict (already has timestamp from all_results)
-                strategy_dict = strategy.to_dict() if isinstance(strategy, pd.Series) else strategy.copy()
-
-                # Get position multipliers from strategy history calculation
-                _, L_A, B_A, L_B, B_B = get_strategy_history(
-                    strategy_row=strategy,
-                    liquidation_distance=liquidation_distance
-                )
-
-                # Build positions dict
-                positions = {
-                    'L_A': L_A,
-                    'B_A': B_A,
-                    'L_B': L_B,
-                    'B_B': B_B
-                }
-
-                # Create position with all required parameters
-                position_id = service.create_position(
-                    strategy_row=pd.Series(strategy_dict),
-                    positions=positions,
-                    token1=strategy['token1'],
-                    token2=strategy['token2'],
-                    token3=strategy.get('token3'),
-                    token1_contract=strategy['token1_contract'],
-                    token2_contract=strategy['token2_contract'],
-                    token3_contract=strategy.get('token3_contract'),
-                    protocol_A=strategy['protocol_A'],
-                    protocol_B=strategy['protocol_B'],
-                    deployment_usd=deployment_usd,
-                    is_levered=is_levered,
-                    is_paper_trade=True,
-                    notes=notes
-                )
-
-                conn.close()
-
-                # Clear form and show success
-                st.session_state.show_deploy_form = False
-                st.session_state.pending_deployment = None
-                st.success(f"✅ Paper position created: {position_id}")
-                st.info("📊 View your position in the Positions tab")
-                # Skip data reload and analysis after deployment confirmation
-                st.session_state.skip_data_reload = True
-                st.rerun()
-
-            except Exception as e:
-                import traceback
-                print(f"❌ Position deployment failed:")
-                print(f"Error: {e}")
-                print(f"Strategy timestamp type: {type(strategy.get('timestamp'))}")
-                print(f"Strategy timestamp value: {strategy.get('timestamp')}")
-                traceback.print_exc()
-                st.error(f"❌ Failed to create position: {e}")
-
-    with col2:
-        if st.button("❌ Cancel", width="stretch"):
-            st.session_state.show_deploy_form = False
-            st.session_state.pending_deployment = None
-            # Skip data reload and analysis when canceling
-            st.session_state.skip_data_reload = True
-            st.rerun()
-
-    st.markdown("---")
-
-
 def display_apr_table(strategy_row: Union[pd.Series, Dict[str, Any]], deployment_usd: float,
                      liquidation_distance: float, strategy_idx: int, mode: str,
                      timestamp: Optional[int] = None) -> Tuple[str, Optional[str]]:
     """
-    Display compact APR comparison table with both levered and unlevered strategies
-    with integrated deploy buttons
+    Display compact APR table for levered strategy with integrated deploy button
 
     Args:
         strategy_row: A row from the all_results DataFrame (as a dict or Series)
@@ -274,27 +94,13 @@ def display_apr_table(strategy_row: Union[pd.Series, Dict[str, Any]], deployment
     apr5_levered = strategy_row.get('apr5', apr_base)
     days_to_breakeven_levered = strategy_row.get('days_to_breakeven', float('inf'))
 
-    # Extract unlevered APR values
-    unlevered_base = strategy_row.get('unlevered_apr', apr_base)
-    apr_net_unlevered = unlevered_base
-    apr90_unlevered = unlevered_base
-    apr30_unlevered = unlevered_base
-    apr5_unlevered = unlevered_base
-    days_to_breakeven_unlevered = 0.0  # Unlevered has no fees, instant breakeven
-
-    # Build row names with emojis at the start
-    row_name_levered = f"🔄 Loop"
-    row_name_unlevered = f"▶️ No-Loop"
-
-    # Build two-row table with Strategy column first
+    # Build single-row table
     apr_table_data = {
-        'Strategy': [row_name_levered, row_name_unlevered],
-        'APR(net)': [f"{apr_net_levered * 100:.2f}%", f"{apr_net_unlevered * 100:.2f}%"],
-        'APR5': [f"{apr5_levered * 100:.2f}%", f"{apr5_unlevered * 100:.2f}%"],
-        'APR30': [f"{apr30_levered * 100:.2f}%", f"{apr30_unlevered * 100:.2f}%"],
-        'APR90': [f"{apr90_levered * 100:.2f}%", f"{apr90_unlevered * 100:.2f}%"],
-        'Days': [format_days_to_breakeven(days_to_breakeven_levered),
-                 format_days_to_breakeven(days_to_breakeven_unlevered)]
+        'APR(net)': [f"{apr_net_levered * 100:.2f}%"],
+        'APR5': [f"{apr5_levered * 100:.2f}%"],
+        'APR30': [f"{apr30_levered * 100:.2f}%"],
+        'APR90': [f"{apr90_levered * 100:.2f}%"],
+        'Days': [format_days_to_breakeven(days_to_breakeven_levered)]
     }
 
     apr_df = pd.DataFrame(apr_table_data)
@@ -327,27 +133,10 @@ def display_apr_table(strategy_row: Union[pd.Series, Dict[str, Any]], deployment
             # Store strategy details in session state for confirmation form
             st.session_state.pending_deployment = {
                 'strategy_row': strategy_row if isinstance(strategy_row, dict) else strategy_row.to_dict(),
-                'is_levered': True,
                 'deployment_usd': deployment_usd,
                 'liquidation_distance': liquidation_distance,
                 'timestamp': timestamp
             }
-            st.session_state.show_deploy_form = True
-            st.session_state.skip_data_reload = True  # Skip data refresh when showing deploy form
-            st.rerun()
-
-        # Deploy button for unlevered strategy
-        if st.button(f"🚀 ${deployment_usd:,.0f}", key=f"deploy_unlevered_{strategy_idx}_{mode}", width="stretch"):
-            # Store strategy details in session state for confirmation form
-            st.session_state.pending_deployment = {
-                'strategy_row': strategy_row if isinstance(strategy_row, dict) else strategy_row.to_dict(),
-                'is_levered': False,
-                'deployment_usd': deployment_usd,
-                'liquidation_distance': liquidation_distance,
-                'timestamp': timestamp
-            }
-            st.session_state.show_deploy_form = True
-            st.session_state.skip_data_reload = True  # Skip data refresh when showing deploy form
             st.rerun()
 
     # Prepare fee caption (default to 0 if missing)
@@ -363,14 +152,13 @@ def display_apr_table(strategy_row: Union[pd.Series, Dict[str, Any]], deployment
     return fee_caption, warning_message
 
 
-def display_strategy_details(strategy_row: Union[pd.Series, Dict[str, Any]], use_unlevered: bool = False, deployment_usd: float = 1.0) -> Tuple[Optional[str], Optional[str]]:
+def display_strategy_details(strategy_row: Union[pd.Series, Dict[str, Any]], deployment_usd: float = 1.0) -> Tuple[Optional[str], Optional[str]]:
     """
     Display expanded strategy details when row is clicked
     Returns liquidity info to be displayed at the end
 
     Args:
         strategy_row: A row from the all_results DataFrame (as a dict or Series)
-        use_unlevered: If True, show only unlevered strategy (3 rows instead of 4)
         deployment_usd: Deployment size in USD (for scaling token amounts)
 
     Returns:
@@ -482,20 +270,19 @@ def display_strategy_details(strategy_row: Union[pd.Series, Dict[str, Any]], use
         }
     ]
 
-    # Only add 4th row (Borrow token3 from Protocol B) if levered
-    if not use_unlevered:
-        table_data.append({
-            'Protocol': protocol_B,
-            'Token': token3,
-            'Contract': format_contract(token3_contract),
-            'Action': 'Borrow',
-            'Rate': f"{borrow_rate_3B * 100:.2f}%",
-            'Weight': f"{B_B:.2f}",
-            'Token Amount': f"{(B_B * deployment_usd) / P3_B:.2f}",
-            'Price': f"${P3_B:.4f}",
-            'Fee': f"{borrow_fee_3B*100:.2f}%" if pd.notna(borrow_fee_3B) else 'N/A',
-            'Available': format_usd_abbreviated(available_borrow_3B) if pd.notna(available_borrow_3B) else 'N/A'
-        })
+    # Add 4th row (Borrow token3 from Protocol B)
+    table_data.append({
+        'Protocol': protocol_B,
+        'Token': token3,
+        'Contract': format_contract(token3_contract),
+        'Action': 'Borrow',
+        'Rate': f"{borrow_rate_3B * 100:.2f}%",
+        'Weight': f"{B_B:.2f}",
+        'Token Amount': f"{(B_B * deployment_usd) / P3_B:.2f}",
+        'Price': f"${P3_B:.4f}",
+        'Fee': f"{borrow_fee_3B*100:.2f}%" if pd.notna(borrow_fee_3B) else 'N/A',
+        'Available': format_usd_abbreviated(available_borrow_3B) if pd.notna(available_borrow_3B) else 'N/A'
+    })
 
     # Create DataFrame and display
     details_df = pd.DataFrame(table_data)
@@ -603,23 +390,297 @@ def display_strategies_table(
     return None
 
 
-@st.dialog("Strategy Details")
-def show_placeholder_modal(strategy: Dict):
+def calculate_position_returns(strategy: Dict, deployment_usd: float) -> Dict:
     """
-    Placeholder modal for strategy details.
-    Will be replaced with full implementation in Phase 3.
+    Calculate position sizes and expected returns for a given deployment amount.
 
     Args:
-        strategy: Strategy dictionary with all details
-    """
-    st.markdown("### 🚧 This is a placeholder")
-    st.info("Full strategy details modal will be implemented in Phase 3")
+        strategy: Strategy dict with multipliers (L_A, B_A, L_B, B_B) and net_apr
+        deployment_usd: USD amount to deploy
 
-    # Show basic strategy info
-    st.markdown(f"**Selected Strategy:** {strategy['token1']}/{strategy['token2']}/{strategy['token3']}")
-    st.markdown(f"**Protocols:** {strategy['protocol_A']} + {strategy['protocol_B']}")
-    st.markdown(f"**Net APR:** {strategy['net_apr'] * 100:.2f}%")
-    st.markdown(f"**Days to Breakeven:** {strategy.get('days_to_breakeven', 0):.1f} days")
+    Returns:
+        Dict with:
+        - lend_a_usd: Lend A position size (USD)
+        - borrow_a_usd: Borrow A position size (USD)
+        - lend_b_usd: Lend B position size (USD)
+        - borrow_b_usd: Borrow B position size (USD)
+        - lend_a_pct: Percentage of deployment
+        - borrow_a_pct: Percentage of deployment
+        - lend_b_pct: Percentage of deployment
+        - borrow_b_pct: Percentage of deployment
+        - daily_return_usd: Expected daily return (USD)
+        - monthly_return_usd: Expected monthly return (USD)
+        - yearly_return_usd: Expected yearly return (USD)
+        - total_fees_usd: Total upfront fees
+        - days_to_breakeven: Days to recover fees
+
+    Design Notes:
+    - All rates stored as decimals (DESIGN_NOTES.md #7)
+    - Position sizes = multiplier × deployment_usd (DESIGN_NOTES.md #3)
+    """
+    net_apr = strategy['net_apr']  # Decimal (0.1185 = 11.85%)
+
+    # Position sizes (multiplier × deployment)
+    # All strategies are 4-leg levered strategies
+    lend_a_usd = strategy['L_A'] * deployment_usd
+    borrow_a_usd = strategy['B_A'] * deployment_usd
+    lend_b_usd = strategy['L_B'] * deployment_usd
+    borrow_b_usd = strategy['B_B'] * deployment_usd
+
+    # Percentages (for display)
+    lend_a_pct = strategy['L_A'] * 100
+    borrow_a_pct = strategy['B_A'] * 100
+    lend_b_pct = strategy['L_B'] * 100
+    borrow_b_pct = strategy['B_B'] * 100
+
+    # Expected returns (based on net APR)
+    yearly_return_usd = deployment_usd * net_apr
+    daily_return_usd = yearly_return_usd / 365
+    monthly_return_usd = daily_return_usd * 30
+
+    # Fees and breakeven (from strategy calculation)
+    total_fees_usd = strategy.get('total_fees_usd', 0)
+    days_to_breakeven = strategy.get('days_to_breakeven', 0)
+
+    return {
+        'lend_a_usd': lend_a_usd,
+        'borrow_a_usd': borrow_a_usd,
+        'lend_b_usd': lend_b_usd,
+        'borrow_b_usd': borrow_b_usd,
+        'lend_a_pct': lend_a_pct,
+        'borrow_a_pct': borrow_a_pct,
+        'lend_b_pct': lend_b_pct,
+        'borrow_b_pct': borrow_b_pct,
+        'daily_return_usd': daily_return_usd,
+        'monthly_return_usd': monthly_return_usd,
+        'yearly_return_usd': yearly_return_usd,
+        'total_fees_usd': total_fees_usd,
+        'days_to_breakeven': days_to_breakeven
+    }
+
+
+@st.dialog("Strategy Details", width="large")
+def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
+    """
+    Full strategy details modal with calculator and actions.
+
+    Phase 3a: Core functionality WITHOUT charting
+    Phase 3b: Will add APR trend chart section
+
+    Args:
+        strategy: Strategy dict from all_results DataFrame
+        timestamp_seconds: Current timestamp (Unix seconds) - DESIGN_NOTES.md #5
+    """
+    import streamlit as st
+
+    print("=" * 80)
+    print("[MODAL] show_strategy_modal called")
+    print(f"[MODAL] strategy tokens: {strategy.get('token1')}/{strategy.get('token2')}/{strategy.get('token3')}")
+    print("=" * 80)
+
+    # ========================================
+    # HEADER SECTION
+    # ========================================
+    st.markdown(f"## 📊 {strategy['token1']} / {strategy['token2']} / {strategy['token3']}")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown(f"**Protocol A:** {strategy['protocol_A']}")
+    with col2:
+        st.markdown(f"**Protocol B:** {strategy['protocol_B']}")
+
+    st.divider()
+
+    # ========================================
+    # METRICS SECTION
+    # ========================================
+    metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
+
+    with metric_col1:
+        # Convert decimal to percentage for display (DESIGN_NOTES.md #7)
+        st.metric(
+            label="Net APR",
+            value=f"{strategy['net_apr'] * 100:.2f}%",
+            help="Current instantaneous APR after all fees"
+        )
+
+    with metric_col2:
+        st.metric(
+            label="APR 5d",
+            value=f"{strategy.get('apr5', 0) * 100:.2f}%",
+            help="Annualized return if you exit after 5 days"
+        )
+
+    with metric_col3:
+        st.metric(
+            label="APR 30d",
+            value=f"{strategy.get('apr30', 0) * 100:.2f}%",
+            help="Annualized return if you exit after 30 days"
+        )
+
+    with metric_col4:
+        st.metric(
+            label="Days to Breakeven",
+            value=f"{strategy.get('days_to_breakeven', 0):.1f}",
+            help="Days until upfront fees are recovered"
+        )
+
+    st.divider()
+
+    # ========================================
+    # POSITION CALCULATOR SECTION
+    # ========================================
+    st.markdown("### 💰 Position Calculator")
+
+    # Default deployment amount: min of $10k or max_size
+    max_size = float(strategy.get('max_size', 1000000))
+    default_deployment = min(10000.0, max_size)
+
+    deployment_usd = st.number_input(
+        "Deployment Amount (USD)",
+        min_value=100.0,
+        max_value=max_size,
+        value=default_deployment,
+        step=100.0,
+        help="USD amount to deploy in this strategy"
+    )
+
+    # Calculate position breakdown
+    position_calc = calculate_position_returns(strategy, deployment_usd)
+
+    # Position sizes display
+    st.markdown("**Position Sizes:**")
+    pos_col1, pos_col2 = st.columns(2)
+
+    with pos_col1:
+        st.markdown(f"• **Lend A**: ${position_calc['lend_a_usd']:,.2f} ({position_calc['lend_a_pct']:.1f}%)")
+        st.markdown(f"• **Borrow A**: ${position_calc['borrow_a_usd']:,.2f} ({position_calc['borrow_a_pct']:.1f}%)")
+
+    with pos_col2:
+        st.markdown(f"• **Lend B**: ${position_calc['lend_b_usd']:,.2f} ({position_calc['lend_b_pct']:.1f}%)")
+        st.markdown(f"• **Borrow B**: ${position_calc['borrow_b_usd']:,.2f} ({position_calc['borrow_b_pct']:.1f}%)")
+
+    # Expected returns display
+    st.markdown("**Expected Returns:**")
+    ret_col1, ret_col2, ret_col3 = st.columns(3)
+
+    with ret_col1:
+        st.metric("Daily", f"${position_calc['daily_return_usd']:.2f}")
+    with ret_col2:
+        st.metric("Monthly", f"${position_calc['monthly_return_usd']:.2f}")
+    with ret_col3:
+        st.metric("Yearly", f"${position_calc['yearly_return_usd']:.2f}")
+
+    st.divider()
+
+    # ========================================
+    # RISK METRICS SECTION
+    # ========================================
+    st.markdown("### ⚠️ Risk Metrics")
+
+    liquidation_distance = strategy.get('liquidation_distance', 0.20)
+
+    # Display liquidation distance as percentage (DESIGN_NOTES.md #7)
+    st.markdown(f"**Liquidation Distance**: {liquidation_distance * 100:.0f}%")
+
+    # Health factor visualization
+    # Scale liquidation distance to 0-100 range for progress bar
+    health_pct = min(100, liquidation_distance * 500)  # 20% distance = 100% health
+
+    health_label = "Good" if health_pct > 70 else "Moderate" if health_pct > 50 else "Risky"
+    st.progress(health_pct / 100, text=f"Health Factor: {health_label}")
+
+    # Warning for risky positions
+    if liquidation_distance < 0.10:
+        st.warning("⚠️ Low liquidation distance - higher liquidation risk")
+
+    st.divider()
+
+    # ========================================
+    # ACTION BUTTONS
+    # ========================================
+    col1, col2 = st.columns([3, 1])
+
+    with col1:
+        if st.button("🚀 Deploy Position", type="primary", width="stretch"):
+            print("[DEPLOY BUTTON] Deploy button clicked!")
+            try:
+                # Connect to database
+                conn = get_db_connection()
+                service = PositionService(conn)
+
+                # Get position multipliers from strategy history calculation
+                _, L_A, B_A, L_B, B_B = get_strategy_history(
+                    strategy_row=strategy,
+                    liquidation_distance=liquidation_distance
+                )
+
+                # Build positions dict
+                positions = {
+                    'L_A': L_A,
+                    'B_A': B_A,
+                    'L_B': L_B,
+                    'B_B': B_B
+                }
+
+                # Create position (all strategies are 4-leg levered)
+                position_id = service.create_position(
+                    strategy_row=pd.Series(strategy) if isinstance(strategy, dict) else strategy,
+                    positions=positions,
+                    token1=strategy['token1'],
+                    token2=strategy['token2'],
+                    token3=strategy.get('token3'),
+                    token1_contract=strategy['token1_contract'],
+                    token2_contract=strategy['token2_contract'],
+                    token3_contract=strategy.get('token3_contract'),
+                    protocol_A=strategy['protocol_A'],
+                    protocol_B=strategy['protocol_B'],
+                    deployment_usd=deployment_usd,
+                    is_paper_trade=True,
+                    notes=""
+                )
+
+                conn.close()
+
+                print(f"[DEPLOY BUTTON] Position created successfully: {position_id}")
+
+                # Store success info in session state
+                st.session_state.deployment_success = {
+                    'position_id': position_id,
+                    'timestamp': time.time()
+                }
+
+                print("[DEPLOY BUTTON] Success - triggering rerun to close modal and refresh dashboard")
+
+                # Set flag to prevent modal from reopening
+                st.session_state.skip_modal_reopen = True
+
+                # Trigger rerun to close modal and refresh dashboard
+                st.rerun()
+
+            except Exception as e:
+                import traceback
+                print(f"[DEPLOY BUTTON] ERROR: {e}")
+                traceback.print_exc()
+                st.error(f"❌ Failed to create position: {e}")
+
+    with col2:
+        if st.button("📥 Export", use_container_width=True):
+            import json
+
+            # Prepare export data
+            export_data = {
+                **strategy,
+                'deployment_amount': deployment_usd,
+                'position_breakdown': position_calc
+            }
+
+            st.download_button(
+                label="Download JSON",
+                data=json.dumps(export_data, indent=2, default=str),
+                file_name=f"strategy_{strategy['token1']}_{strategy['token2']}_{strategy['token3']}.json",
+                mime="application/json"
+            )
 
 
 def render_rate_tables_tab(lend_rates: pd.DataFrame, borrow_rates: pd.DataFrame,
@@ -788,24 +849,21 @@ def render_positions_table_tab():
 
         # Render expandable rows (Stages 1-4)
         for _, position in active_positions.iterrows():
-            # Build token flow string
-            if position['is_levered']:
-                token_flow = f"{position['token1']} → {position['token2']} → {position['token3']}"
-            else:
-                token_flow = f"{position['token1']} → {position['token2']}"
+            # Build token flow string (all positions are 4-leg levered)
+            token_flow = f"{position['token1']} → {position['token2']} → {position['token3']}"
 
             # Build protocol pair string
             protocol_pair = f"{position['protocol_A']} ↔ {position['protocol_B']}"
 
-            # Get current rates for the 4 legs from rates_snapshot
+            # Get current rates for all 4 legs from rates_snapshot
             lend_1A = get_rate(position['token1'], position['protocol_A'], 'lend')
             borrow_2A = get_rate(position['token2'], position['protocol_A'], 'borrow')
             lend_2B = get_rate(position['token2'], position['protocol_B'], 'lend')
-            borrow_3B = get_rate(position['token3'], position['protocol_B'], 'borrow') if position['is_levered'] else 0.0
+            borrow_3B = get_rate(position['token3'], position['protocol_B'], 'borrow')
 
             # Get borrow fees
             borrow_fee_2A = get_borrow_fee(position['token2'], position['protocol_A'])
-            borrow_fee_3B = get_borrow_fee(position['token3'], position['protocol_B']) if position['is_levered'] else 0.0
+            borrow_fee_3B = get_borrow_fee(position['token3'], position['protocol_B'])
 
             # Calculate GROSS APR using position multipliers
             # Rates are already in decimal format (0.05 = 5%)
@@ -813,7 +871,7 @@ def render_positions_table_tab():
                 (position['L_A'] * lend_1A) +
                 (position['L_B'] * lend_2B) -
                 (position['B_A'] * borrow_2A) -
-                (position['B_B'] * borrow_3B if position['is_levered'] else 0)
+                (position['B_B'] * borrow_3B)
             )
 
             # Calculate fee cost (keep as decimal per DESIGN_NOTES.md Rule #7)
@@ -856,25 +914,25 @@ def render_positions_table_tab():
                 entry_token_amount_1A = (position['L_A'] * position['deployment_usd']) / position['entry_price_1A'] if position['entry_price_1A'] > 0 else 0
                 entry_token_amount_2A = (position['B_A'] * position['deployment_usd']) / position['entry_price_2A'] if position['entry_price_2A'] > 0 else 0
                 entry_token_amount_2B = (position['L_B'] * position['deployment_usd']) / position['entry_price_2B'] if position['entry_price_2B'] > 0 else 0
-                entry_token_amount_3B = (position['B_B'] * position['deployment_usd']) / position['entry_price_3B'] if position['is_levered'] and position['entry_price_3B'] > 0 else 0
+                entry_token_amount_3B = (position['B_B'] * position['deployment_usd']) / position['entry_price_3B'] if position['entry_price_3B'] > 0 else 0
 
                 # STAGE 4: Get live prices for all tokens
                 live_price_1A = get_price(position['token1'], position['protocol_A'])
                 live_price_2A = get_price(position['token2'], position['protocol_A'])
                 live_price_2B = get_price(position['token2'], position['protocol_B'])
-                live_price_3B = get_price(position['token3'], position['protocol_B']) if position['is_levered'] else 0
+                live_price_3B = get_price(position['token3'], position['protocol_B'])
 
                 # STAGE 4: Calculate current token amounts (price-rebalanced to maintain USD values)
                 current_token_amount_1A = (position['L_A'] * position['deployment_usd']) / live_price_1A if live_price_1A > 0 else 0
                 current_token_amount_2A = (position['B_A'] * position['deployment_usd']) / live_price_2A if live_price_2A > 0 else 0
                 current_token_amount_2B = (position['L_B'] * position['deployment_usd']) / live_price_2B if live_price_2B > 0 else 0
-                current_token_amount_3B = (position['B_B'] * position['deployment_usd']) / live_price_3B if position['is_levered'] and live_price_3B > 0 else 0
+                current_token_amount_3B = (position['B_B'] * position['deployment_usd']) / live_price_3B if live_price_3B > 0 else 0
 
                 # Calculate dynamic precision for token amounts (based on live prices)
                 precision_1A = get_token_precision(live_price_1A)
                 precision_2A = get_token_precision(live_price_2A)
                 precision_2B = get_token_precision(live_price_2B)
-                precision_3B = get_token_precision(live_price_3B) if position['is_levered'] else 2
+                precision_3B = get_token_precision(live_price_3B)
 
                 # Row 1: Protocol A - Lend token1
                 detail_data.append({
@@ -918,20 +976,19 @@ def render_positions_table_tab():
                     'Live Rate': f"{lend_2B * 100:.2f}%",
                 })
 
-                # Row 4: Protocol B - Borrow token3 (if levered)
-                if position['is_levered']:
-                    detail_data.append({
-                        'Protocol': position['protocol_B'],
-                        'Token': position['token3'],
-                        'Action': 'Borrow',
-                        'Weight': f"{position['B_B']:.4f}",
-                        'Entry Rate': f"{position['entry_borrow_rate_3B'] * 100:.2f}%",
-                        'Entry Token Amount': f"{entry_token_amount_3B:,.{precision_3B}f}",
-                        'Current Token Amount': f"{current_token_amount_3B:,.{precision_3B}f}",
-                        'Entry Price': f"${position['entry_price_3B']:.4f}",
-                        'Live Price': f"${live_price_3B:.4f}",
-                        'Live Rate': f"{borrow_3B * 100:.2f}%",
-                    })
+                # Row 4: Protocol B - Borrow token3 (4th leg)
+                detail_data.append({
+                    'Protocol': position['protocol_B'],
+                    'Token': position['token3'],
+                    'Action': 'Borrow',
+                    'Weight': f"{position['B_B']:.4f}",
+                    'Entry Rate': f"{position['entry_borrow_rate_3B'] * 100:.2f}%",
+                    'Entry Token Amount': f"{entry_token_amount_3B:,.{precision_3B}f}",
+                    'Current Token Amount': f"{current_token_amount_3B:,.{precision_3B}f}",
+                    'Entry Price': f"${position['entry_price_3B']:.4f}",
+                    'Live Price': f"${live_price_3B:.4f}",
+                    'Live Rate': f"{borrow_3B * 100:.2f}%",
+                })
 
                 # Display detail table
                 detail_df = pd.DataFrame(detail_data)
@@ -944,7 +1001,7 @@ def render_positions_table_tab():
 
 
 def render_zero_liquidity_tab(zero_liquidity_results: pd.DataFrame, deployment_usd: float,
-                              use_unlevered: bool, mode: str,
+                              mode: str,
                               timestamp: Optional[int] = None):
     """
     Render the Zero Liquidity tab
@@ -952,7 +1009,6 @@ def render_zero_liquidity_tab(zero_liquidity_results: pd.DataFrame, deployment_u
     Args:
         zero_liquidity_results: Strategies with insufficient liquidity
         deployment_usd: Deployment amount threshold
-        use_unlevered: Whether to show unlevered APR
         mode: 'unified' (kept for compatibility)
         timestamp: Unix timestamp in seconds (for chart caching)
     """
@@ -971,17 +1027,9 @@ def render_zero_liquidity_tab(zero_liquidity_results: pd.DataFrame, deployment_u
             else:
                 max_size_text = " | No Liquidity Data"
 
-            if use_unlevered:
-                token_flow = f"{row['token1']} → {row['token2']}"
-            else:
-                token_flow = f"{row['token1']} → {row['token2']} → {row['token3']}"
-
-            if use_unlevered:
-                net_apr_value = row.get('unlevered_apr', 0)
-                apr5_value = row.get('unlevered_apr', 0)
-            else:
-                net_apr_value = row.get('apr_net', row['net_apr'])
-                apr5_value = row.get('apr5', row['net_apr'])
+            token_flow = f"{row['token1']} → {row['token2']} → {row['token3']}"
+            net_apr_value = row.get('apr_net', row['net_apr'])
+            apr5_value = row.get('apr5', row['net_apr'])
 
             net_apr_indicator = "🟢" if net_apr_value >= 0 else "🔴"
             apr5_indicator = "🟢" if apr5_value >= 0 else "🔴"
@@ -996,7 +1044,7 @@ def render_zero_liquidity_tab(zero_liquidity_results: pd.DataFrame, deployment_u
                 fee_caption, warning_message = display_apr_table(row, deployment_usd, 0.2, idx, mode, timestamp)
 
                 # Display strategy details
-                max_size_msg, liquidity_msg = display_strategy_details(row, use_unlevered, deployment_usd)
+                max_size_msg, liquidity_msg = display_strategy_details(row, deployment_usd)
 
                 # Display warnings/info
                 st.caption(fee_caption)
@@ -1051,7 +1099,7 @@ def render_sidebar_filters(display_results: pd.DataFrame):
         display_results: Current filtered results (for token/protocol options)
 
     Returns:
-        tuple: (liquidation_distance, deployment_usd, force_usdc_start, force_token3_equals_token1, stablecoin_only, use_unlevered, min_apr, token_filter, protocol_filter)
+        tuple: (liquidation_distance, deployment_usd, force_usdc_start, force_token3_equals_token1, stablecoin_only, min_apr, token_filter, protocol_filter)
     """
     st.header("⚙️ Settings")
 
@@ -1130,12 +1178,6 @@ def render_sidebar_filters(display_results: pd.DataFrame):
         help="When enabled, only shows strategies where all three tokens are stablecoins"
     )
 
-    use_unlevered = st.toggle(
-        "No leverage/looping",
-        value=False,
-        help="When enabled, shows unlevered APR (single lend→borrow→lend cycle without recursive loop)"
-    )
-
     st.markdown("---")
 
     # Filters section
@@ -1156,7 +1198,7 @@ def render_sidebar_filters(display_results: pd.DataFrame):
     )
 
     return (liquidation_distance, deployment_usd, force_usdc_start, force_token3_equals_token1,
-            stablecoin_only, use_unlevered, min_apr, token_filter, protocol_filter)
+            stablecoin_only, min_apr, token_filter, protocol_filter)
 
 
 # ============================================================================
@@ -1239,43 +1281,41 @@ def render_dashboard(data_loader: DataLoader, mode: str):
         empty_df = pd.DataFrame()
 
         (liquidation_distance, deployment_usd, force_usdc_start, force_token3_equals_token1,
-         stablecoin_only, use_unlevered, min_apr, token_filter, protocol_filter) = render_sidebar_filters(empty_df)
+         stablecoin_only, min_apr, token_filter, protocol_filter) = render_sidebar_filters(empty_df)
 
-    # === RUN ANALYSIS WITH SMART CACHING ===
+    # === RUN ANALYSIS WITH DATABASE CACHING ===
     analysis_start = time.time()
     print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] Starting analysis...")
 
-    # Initialize analysis cache if not exists
-    if 'analysis_cache' not in st.session_state:
-        st.session_state.analysis_cache = {}
+    # Initialize RateTracker for database cache
+    tracker = RateTracker()
 
-    # Create cache key based on timestamp (seconds) and liquidation distance
-    cache_key = f"{timestamp_seconds}_{liquidation_distance}"
-    print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] Cache key: {cache_key}")
+    # Check database cache FIRST
+    print(f"[CACHE] Checking: timestamp={timestamp_seconds}, liq_dist={liquidation_distance}")
+    cached_results = tracker.load_analysis_cache(timestamp_seconds, liquidation_distance)
 
-    # Check if we have cached results for this exact combination
-    if cache_key in st.session_state.analysis_cache:
-        # Use cached analysis results (instant load)
-        protocol_A, protocol_B, all_results = st.session_state.analysis_cache[cache_key]
-        st.sidebar.caption("✅ Using cached analysis")
-        analysis_time = (time.time() - analysis_start) * 1000
-        print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] ✅ Cache HIT (session): {len(all_results)} strategies in {analysis_time:.1f}ms")
-    elif 'pipeline_analysis_results' in st.session_state:
-        # Use analysis results from refresh_pipeline (already computed during refresh)
-        protocol_A, protocol_B, all_results = st.session_state.pipeline_analysis_results
-        # Cache these results
-        st.session_state.analysis_cache[cache_key] = (protocol_A, protocol_B, all_results)
-        # Clear pipeline results after using once
-        del st.session_state.pipeline_analysis_results
-        st.sidebar.caption("⚡ Used fresh analysis from refresh_pipeline")
-        analysis_time = (time.time() - analysis_start) * 1000
-        print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] ⚡ Used pipeline results: {len(all_results)} strategies in {analysis_time:.1f}ms")
+    if cached_results is not None:
+        # Use cached analysis from database (returns DataFrame only)
+        all_results = cached_results
+        # Extract protocol_A and protocol_B from the best strategy (first row, sorted by net_apr desc)
+        if not all_results.empty:
+            best_strategy = all_results.iloc[0]
+            protocol_A = best_strategy['protocol_A']
+            protocol_B = best_strategy['protocol_B']
+        else:
+            protocol_A = None
+            protocol_B = None
+
+        st.sidebar.caption("✅ Using cached analysis from database")
+        print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] ✅ Cache HIT: {len(all_results)} strategies")
     else:
         # Run analysis (expensive operation)
         st.sidebar.caption("⏳ Running strategy analysis...")
+        print(f"[CACHE MISS] No cached analysis found")
         print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] ❌ Cache MISS - running analysis...")
 
         analyzer_init_start = time.time()
+        print(f"[ANALYSIS START] Running analyzer.find_best_protocol_pair()")
         analyzer = RateAnalyzer(
             lend_rates=lend_rates,
             borrow_rates=borrow_rates,
@@ -1294,10 +1334,12 @@ def render_dashboard(data_loader: DataLoader, mode: str):
         analysis_run_start = time.time()
         protocol_A, protocol_B, all_results = analyzer.find_best_protocol_pair()
         analysis_run_time = (time.time() - analysis_run_start) * 1000
+        print(f"[ANALYSIS COMPLETE] Found {len(all_results)} valid strategies")
         print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] Analysis completed: {len(all_results)} strategies in {analysis_run_time:.1f}ms")
 
-        # Cache the results for future use
-        st.session_state.analysis_cache[cache_key] = (protocol_A, protocol_B, all_results)
+        # Save to database cache
+        tracker.save_analysis_cache(timestamp_seconds, liquidation_distance, all_results)
+        print(f"[CACHE SAVE] Saved to database")
         analysis_time = (time.time() - analysis_start) * 1000
         print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] Total analysis time: {analysis_time:.1f}ms")
 
@@ -1348,7 +1390,7 @@ def render_dashboard(data_loader: DataLoader, mode: str):
         ]
 
     # Sort filtered results
-    apr_col = 'unlevered_apr' if use_unlevered else 'apr_net'
+    apr_col = 'apr_net'
 
     if not filtered_results.empty:
         filtered_results = filtered_results.sort_values(by=apr_col, ascending=False)
@@ -1380,8 +1422,23 @@ def render_dashboard(data_loader: DataLoader, mode: str):
     with filter_placeholder:
         st.metric("Strategies Found", f"{len(display_results)} / {len(all_results)}")
 
-    # Render deployment confirmation form if active
-    render_deployment_form(mode)
+    # Display deployment success banner if present
+    if 'deployment_success' in st.session_state:
+        success_info = st.session_state.deployment_success
+        position_id = success_info['position_id']
+
+        # Show success banner
+        st.success(f"✅ **Position Deployed Successfully!** Position ID: `{position_id}`")
+
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            st.info("📊 View your position details in the **Positions** tab")
+        with col2:
+            if st.button("✓ Dismiss", type="secondary"):
+                del st.session_state.deployment_success
+                st.rerun()
+
+        st.markdown("---")
 
     # === TABS ===
     tabs_start = time.time()
@@ -1402,9 +1459,17 @@ def render_dashboard(data_loader: DataLoader, mode: str):
         # Display sortable table
         selected_strategy = display_strategies_table(display_results, mode=mode)
 
-        # If user clicked a row, show placeholder modal
+        # Check if we should skip reopening modal after deployment
+        skip_reopen = st.session_state.get('skip_modal_reopen', False)
+        if skip_reopen:
+            print("[TAB1] Skipping modal reopen after deployment")
+            st.session_state.skip_modal_reopen = False
+            selected_strategy = None  # Clear selection
+
+        # If user clicked a row, show strategy modal
         if selected_strategy:
-            show_placeholder_modal(selected_strategy)
+            print(f"[TAB1] Opening strategy modal for selected strategy")
+            show_strategy_modal(selected_strategy, timestamp_seconds)
 
         tab1_time = (time.time() - tab1_start) * 1000
         print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] Tab1 (Strategies) rendered in {tab1_time:.1f}ms")
@@ -1421,7 +1486,7 @@ def render_dashboard(data_loader: DataLoader, mode: str):
     with tab3:
         tab3_start = time.time()
         render_zero_liquidity_tab(
-            zero_liquidity_results, deployment_usd, use_unlevered, mode, timestamp_seconds  # These render functions need updating
+            zero_liquidity_results, deployment_usd, mode, timestamp_seconds
         )
         tab3_time = (time.time() - tab3_start) * 1000
         print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] Tab3 (Zero Liquidity) rendered in {tab3_time:.1f}ms")

@@ -33,17 +33,15 @@ def format_max_size_millions(value: float) -> str:
     return f"${value/1_000_000:.2f}M"
 
 
-def format_strategy_summary_line(strategy: Dict, liq_dist: float, use_unlevered: bool = False) -> str:
+def format_strategy_summary_line(strategy: Dict, liq_dist: float) -> str:
     """
     Format a single strategy as a summary line
 
-    Format (levered): TOKEN1 → TOKEN2 → TOKEN3 | PROTOCOL_A ↔ PROTOCOL_B | Max Size $X.XXM | 🟢 Net APR XX.XX% | 🟢 5day APR XX.XX%
-    Format (unlevered): TOKEN1 → TOKEN2 | PROTOCOL_A ↔ PROTOCOL_B | Max Size $X.XXM | 🟢 Net APR XX.XX% | 🟢 5day APR XX.XX%
+    Format: TOKEN1 → TOKEN2 → TOKEN3 | PROTOCOL_A ↔ PROTOCOL_B | Max Size $X.XXM | 🟢 Net APR XX.XX% | 🟢 5day APR XX.XX%
 
     Args:
         strategy: Dictionary with strategy details (can be DataFrame row dict)
         liq_dist: Liquidation distance as decimal (e.g., 0.20 for 20%)
-        use_unlevered: If True, show unlevered APR and token1→token2 flow
 
     Returns:
         Formatted summary line string
@@ -58,28 +56,16 @@ def format_strategy_summary_line(strategy: Dict, liq_dist: float, use_unlevered:
     # Format max size
     max_size_str = format_max_size_millions(max_size)
 
-    # Get APR values based on leverage toggle
-    if use_unlevered:
-        # For unlevered, use unlevered_apr for both (simplified)
-        unlevered_apr = strategy.get('unlevered_apr', 0)
-        net_apr_value = unlevered_apr
-        apr5_value = unlevered_apr  # Simplified - can enhance later with fee-adjusted values
-    else:
-        # For levered, use apr_net and apr5 (fee-adjusted values)
-        net_apr_value = strategy.get('apr_net', strategy.get('net_apr', 0))
-        apr5_value = strategy.get('apr5', strategy.get('net_apr', 0))
+    # Get APR values (levered)
+    net_apr_value = strategy.get('apr_net', strategy.get('net_apr', 0))
+    apr5_value = strategy.get('apr5', strategy.get('net_apr', 0))
 
     # Determine emoji indicators based on positive/negative values
     net_apr_indicator = "🟢" if net_apr_value >= 0 else "🔴"
     apr5_indicator = "🟢" if apr5_value >= 0 else "🔴"
 
-    # Build token flow based on leverage type
-    if use_unlevered:
-        # Unlevered: token1 → token2 (no token3, no loop)
-        token_flow = f"{token1} → {token2}"
-    else:
-        # Levered: token1 → token2 → token3 (with loop)
-        token_flow = f"{token1} → {token2} → {token3}"
+    # Build token flow (levered)
+    token_flow = f"{token1} → {token2} → {token3}"
 
     return f"{token_flow} | {protocol_A} ↔ {protocol_B} | Max Size {max_size_str} | {net_apr_indicator} Net APR {net_apr_value * 100:.2f}% | {apr5_indicator} 5day APR {apr5_value * 100:.2f}%"
 
@@ -277,18 +263,11 @@ class SlackNotifier:
             (all_results['max_size'] >= deployment_usd)
         ].head(3)
 
-        # Filter Set 3: Unlevered (no token restrictions, sort by unlevered_apr, deployment filter)
-        # For unlevered, we only care about token1→token2 pairs, so deduplicate by those
-        filtered_set3_raw = all_results[
+        # Filter Set 3: Top strategies by Net APR (no token restrictions, deployment filter)
+        filtered_set3 = all_results[
             (all_results['max_size'].notna()) &
             (all_results['max_size'] >= deployment_usd)
-        ].sort_values(by='unlevered_apr', ascending=False)
-
-        # Deduplicate by (token1, token2, protocol_A, protocol_B) to avoid showing the same unlevered strategy multiple times
-        filtered_set3 = filtered_set3_raw.drop_duplicates(
-            subset=['token1', 'token2', 'protocol_A', 'protocol_B'],
-            keep='first'
-        ).head(3)
+        ].sort_values(by='apr_net', ascending=False).head(3)
 
         # Build formatted lines for Set 1
         set1_lines = []
@@ -305,7 +284,7 @@ class SlackNotifier:
         # Build formatted lines for Set 3
         set3_lines = []
         for _, row in filtered_set3.iterrows():
-            line = format_strategy_summary_line(row.to_dict(), liquidation_distance, use_unlevered=True)
+            line = format_strategy_summary_line(row.to_dict(), liquidation_distance)
             set3_lines.append(line)
 
         # Prepare variables for Slack Workflow

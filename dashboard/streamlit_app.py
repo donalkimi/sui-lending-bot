@@ -168,8 +168,7 @@ def main():
                         st.session_state['current_seconds'] = result.timestamp
                         # Convert to datetime string for display and selection
                         st.session_state.selected_timestamp = to_datetime_str(result.timestamp)
-                        # Store analysis results from refresh_pipeline to avoid re-running analysis
-                        st.session_state.pipeline_analysis_results = (result.protocol_A, result.protocol_B, result.all_results)
+                        # Analysis results are automatically cached in database by refresh_pipeline
                         st.success(f"✅ Fresh data loaded at {to_datetime_str(result.timestamp)}")
                         st.rerun()
                     else:
@@ -181,14 +180,6 @@ def main():
         st.caption("Fetches real-time protocol data and saves a new snapshot to the database")
 
     # === LOAD DATA FOR SELECTED TIMESTAMP ===
-    # Check if we should skip data reload (e.g., after position deployment)
-    if st.session_state.get('skip_data_reload', False):
-        # Clear the flag for next run
-        st.session_state.skip_data_reload = False
-        # Only stop if we're not trying to show the deployment form
-        if not st.session_state.get('show_deploy_form', False):
-            st.stop()
-
     try:
         loader = UnifiedDataLoader(st.session_state.selected_timestamp)
         data_tuple = loader.load_data()

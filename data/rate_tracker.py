@@ -664,6 +664,7 @@ class RateTracker:
                 strategy_count,
                 created_at
             ))
+            print(f"[CACHE SAVE] Database: {strategy_count} strategies saved")
 
     def load_analysis_cache(
         self,

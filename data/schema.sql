@@ -130,16 +130,15 @@ CREATE TABLE IF NOT EXISTS positions (
 
     -- Phase 1/2 flags
     is_paper_trade BOOLEAN NOT NULL DEFAULT TRUE,
-    is_levered BOOLEAN NOT NULL,
     user_id TEXT,  -- Nullable for Phase 1 (single user), required for multi-user
 
-    -- Strategy Details
+    -- Strategy Details (all positions are 4-leg levered)
     token1 TEXT NOT NULL,
     token2 TEXT NOT NULL,
-    token3 TEXT,  -- NULL for unlevered positions
+    token3 TEXT NOT NULL,
     token1_contract TEXT NOT NULL,
     token2_contract TEXT NOT NULL,
-    token3_contract TEXT,  -- NULL for unlevered positions
+    token3_contract TEXT NOT NULL,
     protocol_A TEXT NOT NULL,
     protocol_B TEXT NOT NULL,
 
@@ -151,19 +150,19 @@ CREATE TABLE IF NOT EXISTS positions (
     L_A DECIMAL(10, 6) NOT NULL,  -- Lend multiplier at Protocol A
     B_A DECIMAL(10, 6) NOT NULL,  -- Borrow multiplier at Protocol A
     L_B DECIMAL(10, 6) NOT NULL,  -- Lend multiplier at Protocol B
-    B_B DECIMAL(10, 6),  -- Borrow multiplier at Protocol B (NULL for unlevered)
+    B_B DECIMAL(10, 6) NOT NULL,  -- Borrow multiplier at Protocol B (4th leg)
 
     -- Entry Rates (as decimals: 0.0316 = 3.16%)
     entry_lend_rate_1A DECIMAL(10, 6) NOT NULL,
     entry_borrow_rate_2A DECIMAL(10, 6) NOT NULL,
     entry_lend_rate_2B DECIMAL(10, 6) NOT NULL,
-    entry_borrow_rate_3B DECIMAL(10, 6),  -- NULL for unlevered
+    entry_borrow_rate_3B DECIMAL(10, 6) NOT NULL,
 
     -- Entry Prices (leg-level for Step 6)
     entry_price_1A DECIMAL(20, 10) NOT NULL,
     entry_price_2A DECIMAL(20, 10) NOT NULL,
     entry_price_2B DECIMAL(20, 10) NOT NULL,
-    entry_price_3B DECIMAL(20, 10),  -- NULL for unlevered
+    entry_price_3B DECIMAL(20, 10) NOT NULL,
 
     -- Entry Collateral Ratios
     entry_collateral_ratio_1A DECIMAL(10, 6) NOT NULL,

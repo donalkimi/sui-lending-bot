@@ -11,7 +11,6 @@ const LENDING_MARKET_ID = "0x84030d26d85eaa7035084a057f2f11f701b7e2e4eda87551bec
 const LENDING_MARKET_TYPE = "0xf95b06141ed4a174f239417323bde3f209b972f5930d8521ea38a52aff3a6ddf::suilend::MAIN_POOL";
 const RPC_URL = process.env.SUI_RPC_URL || "https://rpc.mainnet.sui.io";
 const MS_PER_YEAR = 365 * 24 * 60 * 60 * 1000;
-const DEBUG = true; // Temporarily enable to check DEEP decimals
 const MAX_RETRIES = 1;  // Only retry once
 const RETRY_DELAY_MS = 2000;
 
@@ -34,23 +33,7 @@ async function main() {
 
       const reserves = suilendClient.lendingMarket.reserves;
 
-  // DEBUG: Write each reserve object to file BEFORE parsing (only if DEBUG=1)
-  if (DEBUG) {
-    const debugOutput = [];
-    debugOutput.push("=== DEBUG: Raw reserves from Suilend SDK ===");
-    debugOutput.push(`Total reserves count: ${reserves.length}\n`);
-
-    reserves.forEach((reserve, idx) => {
-      const coinType = normalizeStructTag(reserve.coinType.name);
-      debugOutput.push(`\n--- Reserve ${idx + 1}: ${coinType} ---`);
-      debugOutput.push(JSON.stringify(reserve, null, 2));
-    });
-    debugOutput.push("\n=== END DEBUG ===");
-
-    // Write to file
-    fs.writeFileSync('suilend_reserves_debug.json', debugOutput.join('\n'), 'utf8');
-    console.error("Debug output written to suilend_reserves_debug.json");
-  }
+  
 
   // Step 1: Collect all unique coin types (reserves + rewards)
   const allCoinTypes = new Set();
@@ -113,12 +96,7 @@ async function main() {
     coinMetadataMap = dbResult.metadata || {};
     missingDecimalsTokens = dbResult.missing_decimals || [];
 
-    if (DEBUG) {
-      console.error(`Loaded metadata for ${Object.keys(coinMetadataMap).length} tokens from database`);
-      if (missingDecimalsTokens.length > 0) {
-        console.error(`WARNING: ${missingDecimalsTokens.length} tokens missing decimals`);
-      }
-    }
+    
 
     // FAIL LOUDLY: If any tokens are missing decimals, write to file and notify user
     if (missingDecimalsTokens.length > 0) {
@@ -175,19 +153,7 @@ async function main() {
     priceMap[r.coinType] = r.price;
     parsedReserveMap[r.coinType] = r;
   });
-  // DEBUG: Check SPRING_SUI metadata
-  if (DEBUG) {
-    const springSuiType = '0x83556891f4a0f233ce7b05cfe7f957d4020492a34f5405b2cb9377d060bef4bf::spring_sui::SPRING_SUI';
-    console.error('\n=== CHECKING SPRING_SUI METADATA ===');
-    console.error('SPRING_SUI in coinMetadataMap?', springSuiType in coinMetadataMap);
-    if (springSuiType in coinMetadataMap) {
-      console.error('SPRING_SUI metadata:', coinMetadataMap[springSuiType]);
-    }
-    console.error('SPRING_SUI in priceMap?', springSuiType in priceMap);
-    if (springSuiType in priceMap) {
-      console.error('SPRING_SUI price:', priceMap[springSuiType] ? priceMap[springSuiType].toString() : 'undefined');
-    }
-  }
+  
 
   // Step 5: Use SDK's formatRewards to get all rewards with correct APR calculations
   const rewardMap = formatRewards(parsedReserveMap, coinMetadataMap, priceMap);
@@ -206,26 +172,6 @@ async function main() {
     // Use getDedupedAprRewards to get only rewards with VALID aprPercent (not NaN)
     const dedupedDepositRewards = getDedupedAprRewards(filteredDepositRewards);
     const dedupedBorrowRewards = getDedupedAprRewards(filteredBorrowRewards);
-
-    // DEBUG: Log deduped rewards for AUSD and DEEP
-    if ((reserve.token.symbol === 'AUSD' || reserve.token.symbol === 'DEEP') && DEBUG) {
-      console.error(`\n=== DEDUPED REWARDS for ${reserve.token.symbol} (valid APR only) ===`);
-      console.error('Filtered count:', filteredDepositRewards.length);
-      console.error('Deduped count (valid APR):', dedupedDepositRewards.length);
-      dedupedDepositRewards.forEach((reward, i) => {
-        console.error(`\nValid Reward ${i}:`);
-        console.error('  symbol:', reward.stats.symbol);
-        console.error('  rewardCoinType:', reward.stats.rewardCoinType);
-        console.error('  mintDecimals:', reward.stats.mintDecimals);
-        console.error('  aprPercent:', reward.stats.aprPercent.toString());
-        console.error('  price:', reward.stats.price ? reward.stats.price.toString() : 'undefined');
-        // Check what's in coinMetadataMap for this reward token
-        const rewardMeta = coinMetadataMap[reward.stats.rewardCoinType];
-        if (rewardMeta) {
-          console.error('  coinMetadataMap decimals:', rewardMeta.decimals);
-        }
-      });
-    }
 
     // Calculate reward APRs by summing up valid rewards
     const lendBase = reserve.depositAprPercent;

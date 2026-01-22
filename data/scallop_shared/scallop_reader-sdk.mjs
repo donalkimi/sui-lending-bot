@@ -7,10 +7,8 @@ import { Scallop } from "@scallop-io/sui-scallop-sdk";
 // Read config from env (so Python can control it)
 const RPC_URL = process.env.SUI_RPC_URL || "https://rpc.mainnet.sui.io";
 const NETWORK = "mainnet";
-const DEBUG = process.env.SCALLOP_DEBUG === "1";
 
 async function main() {
-  console.error("[SDK-JS] Initializing Scallop SDK...");
   const startTime = Date.now();
 
   // Initialize Scallop SDK with network type
@@ -18,32 +16,23 @@ async function main() {
     networkType: NETWORK,
   });
 
-  console.error("[SDK-JS] Calling scallopSDK.init()...");
   // Initialize the SDK (required before use)
   await scallopSDK.init();
-  console.error(`[SDK-JS] SDK initialized in ${Date.now() - startTime}ms`);
 
-  console.error("[SDK-JS] Creating query instance...");
   // Create query instance to fetch market data
   const scallopQuery = await scallopSDK.createScallopQuery();
 
-  console.error(`[SDK-JS] Fetching market data... (elapsed: ${Date.now() - startTime}ms)`);
   // Get all market pools and collateral data
   const marketData = await scallopQuery.queryMarket();
-  console.error(`[SDK-JS] Market data fetched (elapsed: ${Date.now() - startTime}ms)`);
 
-  console.error(`[SDK-JS] Fetching borrow incentive pools... (elapsed: ${Date.now() - startTime}ms)`);
   // Get borrow incentive pools for reward APRs
   let borrowIncentivePools = {};
   try {
     borrowIncentivePools = await scallopQuery.getBorrowIncentivePools();
-    console.error(`[SDK-JS] Borrow incentive pools fetched (elapsed: ${Date.now() - startTime}ms)`);
   } catch (err) {
-    console.error("Warning: getBorrowIncentivePools failed");
-    console.error(err.message);
+    // Silently handle - rewards may not be available
   }
 
-  console.error(`[SDK-JS] Fetching stake reward pools... (elapsed: ${Date.now() - startTime}ms)`);
   // Get stake reward pools for supply reward APRs
   let stakeRewardPools = {};
   try {
@@ -54,11 +43,9 @@ async function main() {
 
     if (spoolNames.length > 0) {
       stakeRewardPools = await scallopQuery.getStakeRewardPools(spoolNames);
-      console.error(`[SDK-JS] Stake reward pools fetched (elapsed: ${Date.now() - startTime}ms)`);
     }
   } catch (err) {
-    console.error("Warning: getStakeRewardPools failed");
-    console.error(err.message);
+    // Silently handle - stake rewards may not be available
   }
 
   // Get prices from market data (prices are already included in pool data)
@@ -70,35 +57,6 @@ async function main() {
       }
     }
   }
-  console.error(`[SDK-JS] Extracted prices from market data (elapsed: ${Date.now() - startTime}ms)`);
-
-  console.error(`[SDK-JS] Total SDK execution time: ${Date.now() - startTime}ms`);
-
-  // DEBUG: Show raw SDK output
-  if (DEBUG) {
-    console.error("=== DEBUG: Raw marketData ===");
-    console.error(JSON.stringify(marketData, null, 2));
-    console.error("\n=== DEBUG: Raw prices ===");
-    console.error(JSON.stringify(prices, null, 2));
-    console.error("\n=== DEBUG: Borrow incentive pools ===");
-    console.error(JSON.stringify(borrowIncentivePools, null, 2));
-    console.error("\n=== DEBUG: Stake reward pools ===");
-    console.error(JSON.stringify(stakeRewardPools, null, 2));
-    console.error("\n=== DEBUG: Available pool keys ===");
-    console.error(Object.keys(marketData.pools || {}));
-
-    // Show first pool in detail
-    if (marketData.pools) {
-      const firstCoin = Object.keys(marketData.pools)[0];
-      if (firstCoin) {
-        console.error(`\n=== DEBUG: Sample pool data for ${firstCoin} ===`);
-        console.error(JSON.stringify(marketData.pools[firstCoin], null, 2));
-        console.error(`\n=== DEBUG: Sample collateral data for ${firstCoin} ===`);
-        console.error(JSON.stringify(marketData.collaterals?.[firstCoin] || {}, null, 2));
-      }
-    }
-    console.error("\n=== END DEBUG ===\n");
-  }
 
   // Transform market data to our schema
   const markets = [];
@@ -108,7 +66,6 @@ async function main() {
     for (const [coinName, poolData] of Object.entries(marketData.pools)) {
       // Filter out deprecated assets (borrowLimit = 0)
       if (poolData.borrowLimit === 0) {
-        console.error(`${coinName.toUpperCase()} SKIPPED (borrowLimit = 0)`);
         continue;
       }
 
@@ -199,30 +156,22 @@ async function main() {
     }
   }
 
-  console.error(`[SDK-JS] Transforming data to JSON... (elapsed: ${Date.now() - startTime}ms)`);
-  const jsonOutput = JSON.stringify(markets);
-  console.error(`[SDK-JS] JSON stringified (${jsonOutput.length} bytes, elapsed: ${Date.now() - startTime}ms)`);
-
   // Print JSON for Python to read
-  console.log(jsonOutput);
-  console.error(`[SDK-JS] JSON printed to stdout (elapsed: ${Date.now() - startTime}ms)`);
-  console.error(`[SDK-JS] Script finishing... (elapsed: ${Date.now() - startTime}ms)`);
+  console.log(JSON.stringify(markets));
+
+  // Print completion message
+  const elapsedSeconds = ((Date.now() - startTime) / 1000).toFixed(2);
+  console.error(`SCALLOP SDK CALL COMPLETED IN ${elapsedSeconds} seconds`);
 }
 
 // Run
-const scriptStartTime = Date.now();
 main()
   .then(async () => {
-    console.error(`[SDK-JS] main() completed successfully (total elapsed: ${Date.now() - scriptStartTime}ms)`);
-    console.error(`[SDK-JS] Waiting for WebSocket connections to close gracefully...`);
     // Allow event loop to drain WebSocket close frames before terminating
     await new Promise(resolve => setTimeout(resolve, 100));
-    console.error(`[SDK-JS] Exiting...`);
     process.exit(0);
   })
   .catch((err) => {
     console.error("Scallop reader failed:", err.message || err);
-    console.error("\nFull error stack:");
-    console.error(err.stack || err);
     process.exit(1);
   });

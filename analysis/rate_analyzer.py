@@ -76,6 +76,9 @@ class RateAnalyzer:
         # Initialize calculator
         self.calculator = PositionCalculator(self.liquidation_distance)
 
+        # Track exclusions
+        self.excluded_by_rate_spread = 0  # Count strategies excluded by rate spread filter
+
         # Store timestamp (when this data was captured) - must be int (seconds)
         if timestamp is None:
             raise ValueError("timestamp is required and must be explicitly provided")
@@ -244,25 +247,138 @@ class RateAnalyzer:
         print(f"   Tokens to analyze: {len(tokens)}")
         print(f"   Protocol pairs: {len(self.protocols) * (len(self.protocols) - 1)} (bidirectional)")
         print(f"   [!] Enforcing: Token1 must be a stablecoin (market neutral requirement)")
-        
+
+        # Pre-filter token2 candidates based on best-case spread
+        spread_threshold = settings.RATE_SPREAD_THRESHOLD
+        valid_token2s = []
+        excluded_token2s = []
+
+        for token in tokens:
+            # Get all borrow rates for this token across protocols
+            borrow_rates = [self.get_rate(self.borrow_rates, token, p) for p in self.protocols]
+            borrow_rates = [r for r in borrow_rates if not np.isnan(r)]
+
+            # Get all lend rates for this token across protocols
+            lend_rates = [self.get_rate(self.lend_rates, token, p) for p in self.protocols]
+            lend_rates = [r for r in lend_rates if not np.isnan(r)]
+
+            if not borrow_rates or not lend_rates:
+                continue
+
+            # Best case: lend at max rate, borrow at min rate
+            best_spread = max(lend_rates) - min(borrow_rates)
+
+            if best_spread >= spread_threshold:
+                valid_token2s.append(token)
+            else:
+                excluded_token2s.append((token, best_spread))
+                print(f"   [EXCLUDED TOKEN2] {token}: best spread {best_spread*100:.2f}% < {spread_threshold*100:.0f}%")
+
+        print(f"   [OK] Token2 candidates: {len(valid_token2s)} valid, {len(excluded_token2s)} excluded")
+
+        # Pre-filter token1 (stablecoin) candidates based on minimum lending threshold
+        # Find minimum borrow rate across all stablecoins and protocols
+        all_stablecoin_borrow_rates = []
+        for stablecoin in self.STABLECOINS:
+            for protocol in self.protocols:
+                rate = self.get_rate(self.borrow_rates, stablecoin, protocol)
+                if not np.isnan(rate):
+                    all_stablecoin_borrow_rates.append(rate)
+
+        if not all_stablecoin_borrow_rates:
+            print(f"   [ERROR] No stablecoin borrow rates found")
+            return pd.DataFrame()
+
+        # Minimum viable lending rate = min borrow rate + threshold
+        min_stablecoin_borrow = min(all_stablecoin_borrow_rates)
+        min_lending_threshold = min_stablecoin_borrow + spread_threshold
+
+        print(f"   [OK] Min stablecoin borrow rate: {min_stablecoin_borrow*100:.2f}%")
+        print(f"   [OK] Min lending threshold for token1: {min_lending_threshold*100:.2f}%")
+
+        valid_token1s = []
+        excluded_token1s = []
+
+        for stablecoin in self.STABLECOINS:
+            # Get all lend rates for this stablecoin across protocols
+            lend_rates = [self.get_rate(self.lend_rates, stablecoin, p) for p in self.protocols]
+            lend_rates = [r for r in lend_rates if not np.isnan(r)]
+
+            if not lend_rates:
+                continue
+
+            # Check if max lending rate meets minimum threshold
+            max_lend_rate = max(lend_rates)
+
+            if max_lend_rate >= min_lending_threshold:
+                valid_token1s.append(stablecoin)
+            else:
+                excluded_token1s.append((stablecoin, max_lend_rate))
+                print(f"   [EXCLUDED TOKEN1] {stablecoin}: max lend {max_lend_rate*100:.2f}% < threshold {min_lending_threshold*100:.2f}%")
+
+        print(f"   [OK] Token1 candidates: {len(valid_token1s)} valid, {len(excluded_token1s)} excluded")
+
+        # Pre-filter token3 (stablecoin) candidates based on maximum borrow threshold
+        # Find MAXIMUM lend rate across all stablecoins and protocols
+        all_stablecoin_lend_rates = []
+        for stablecoin in self.STABLECOINS:
+            for protocol in self.protocols:
+                rate = self.get_rate(self.lend_rates, stablecoin, protocol)
+                if not np.isnan(rate):
+                    all_stablecoin_lend_rates.append(rate)
+
+        if not all_stablecoin_lend_rates:
+            print(f"   [ERROR] No stablecoin lend rates found")
+            return pd.DataFrame()
+
+        # Maximum viable borrow rate = max lend rate - threshold
+        # Logic: Even with the best token1 lending rate, token3 borrow must be low enough to maintain 1% spread
+        max_stablecoin_lend = max(all_stablecoin_lend_rates)
+        max_borrow_threshold = max_stablecoin_lend - spread_threshold
+
+        print(f"   [OK] Max stablecoin lend rate: {max_stablecoin_lend*100:.2f}%")
+        print(f"   [OK] Max borrow threshold for token3: {max_borrow_threshold*100:.2f}%")
+
+        valid_token3s = []
+        excluded_token3s = []
+
+        for stablecoin in self.STABLECOINS:
+            # Get all borrow rates for this stablecoin across protocols
+            borrow_rates = [self.get_rate(self.borrow_rates, stablecoin, p) for p in self.protocols]
+            borrow_rates = [r for r in borrow_rates if not np.isnan(r)]
+
+            if not borrow_rates:
+                continue
+
+            # Check if min borrow rate is below maximum threshold
+            min_borrow_rate = min(borrow_rates)
+
+            if min_borrow_rate <= max_borrow_threshold:
+                valid_token3s.append(stablecoin)
+            else:
+                excluded_token3s.append((stablecoin, min_borrow_rate))
+                print(f"   [EXCLUDED TOKEN3] {stablecoin}: min borrow {min_borrow_rate*100:.2f}% > threshold {max_borrow_threshold*100:.2f}%")
+
+        print(f"   [OK] Token3 candidates: {len(valid_token3s)} valid, {len(excluded_token3s)} excluded")
+
         results = []
         analyzed = 0
         valid = 0
-        
+
         # For each token pair
         # CRITICAL: token1 must be a stablecoin to avoid price exposure
-        for token1 in tokens:
+        for token1 in valid_token1s:
             # Enforce that token1 is a stablecoin
             if token1 not in self.STABLECOINS:
                 continue
             
-            for token2 in tokens:
+            for token2 in valid_token2s:
                 # Skip if same token
                 if token1 == token2:
                     continue
                 
                 # For each closing stablecoin (CHANGE1: Stablecoin fungibility)
-                for token3 in self.STABLECOINS:
+                for token3 in valid_token3s:
                     # Skip if token3 same as token2
                     if token3 == token2:
                         continue
@@ -281,6 +397,37 @@ class RateAnalyzer:
                             borrow_rate_2A = self.get_rate(self.borrow_rates, token2, protocol_A)
                             lend_rate_2B = self.get_rate(self.lend_rates, token2, protocol_B)
                             borrow_rate_3B = self.get_rate(self.borrow_rates, token3, protocol_B)
+                            
+                            # Apply rate spread filter
+                            spread_threshold = settings.RATE_SPREAD_THRESHOLD
+
+                            # Condition 1: token2 spread (lend to B should be higher than borrow from A)
+                            # We want: lend_rate_2B - borrow_rate_2A >= +1%
+                            token2_spread = lend_rate_2B - borrow_rate_2A
+
+                            # Condition 2: token1/token3 spread (lend to A should be higher than borrow from B)
+                            # We want: lend_rate_1A - borrow_rate_3B >= +1%
+                            token1_spread = lend_rate_1A - borrow_rate_3B
+
+                            # If either spread is below threshold, exclude this strategy
+                            if token2_spread < spread_threshold or token1_spread < spread_threshold:
+                                self.excluded_by_rate_spread += 1
+
+                                # # Log to console for debugging
+                                # failed_conditions = []
+                                # if token2_spread < spread_threshold:
+                                #     failed_conditions.append(
+                                #         f"token2_spread: {token2_spread*100:.2f}% "
+                                #         f"(lend {token2} @ {lend_rate_2B*100:.2f}% - borrow @ {borrow_rate_2A*100:.2f}%)"
+                                #     )
+                                # if token1_spread < spread_threshold:
+                                #     failed_conditions.append(
+                                #         f"token1_spread: {token1_spread*100:.2f}% "
+                                #         f"(lend {token1} @ {lend_rate_1A*100:.2f}% - borrow {token3} @ {borrow_rate_3B*100:.2f}%)"
+                                #     )
+
+                                # #print(f"   [FILTERED] {protocol_A} <-> {protocol_B} | {token1}->{token2}->{token3} | {', '.join(failed_conditions)}")
+                                continue  # Skip this combination
                             
                             # Get collateral ratios
                             collateral_1A = self.get_rate(self.collateral_ratios, token1, protocol_A)
@@ -304,7 +451,8 @@ class RateAnalyzer:
                                             borrow_rate_3B, collateral_1A, collateral_2B,
                                             price_1A, price_2A, price_2B, price_3B])):  # Add prices to check
                                 continue
-                            
+
+
                             # Analyze this strategy
                             result = self.calculator.analyze_strategy(
                                 token1=token1,
@@ -338,6 +486,7 @@ class RateAnalyzer:
                                 results.append(result)
         
         print(f"   [OK] Analyzed {analyzed} combinations")
+        print(f"   [OK] {self.excluded_by_rate_spread} excluded by rate spread filter (<{settings.RATE_SPREAD_THRESHOLD*100:.0f}% spread)")
         print(f"   [OK] {valid} valid strategies found")
         
         # Convert to DataFrame and sort by net APR

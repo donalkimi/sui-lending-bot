@@ -807,8 +807,7 @@ class BackgroundProcessor:
                 liquidation_distance=liq_distance,  # Use custom liquidation distance
                 force_usdc_start=False,
                 force_token3_equals_token1=False,
-                stablecoin_only=False,
-                use_unlevered=False
+                stablecoin_only=False
             )
 
             protocol_A, protocol_B, all_results = analyzer.find_best_protocol_pair()
@@ -956,7 +955,7 @@ def render_dashboard(loader, mode='unified'):
 
     # Get liquidation_distance and other filters from sidebar
     (liquidation_distance, deployment_usd, force_usdc_start,
-     force_token3_equals_token1, stablecoin_only, use_unlevered,
+     force_token3_equals_token1, stablecoin_only,
      min_apr, token_filter, protocol_filter) = render_sidebar_filters(display_results)
 
     # Store liquidation_distance in session state for background processor
@@ -992,8 +991,7 @@ def render_dashboard(loader, mode='unified'):
                 liquidation_distance=liquidation_distance,
                 force_usdc_start=force_usdc_start,
                 force_token3_equals_token1=force_token3_equals_token1,
-                stablecoin_only=stablecoin_only,
-                use_unlevered=use_unlevered
+                stablecoin_only=stablecoin_only
             )
 
             protocol_A, protocol_B, all_results = analyzer.find_best_protocol_pair()

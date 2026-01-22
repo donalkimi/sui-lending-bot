@@ -42,7 +42,6 @@ class PositionService:
         protocol_A: str,
         protocol_B: str,
         deployment_usd: float,
-        is_levered: bool,
         is_paper_trade: bool = True,
         user_id: Optional[str] = None,
         notes: Optional[str] = None,
@@ -58,14 +57,13 @@ class PositionService:
             positions: Position multipliers (L_A, B_A, L_B, B_B)
             token1: First token symbol
             token2: Second token symbol
-            token3: Third token symbol (None for unlevered)
+            token3: Third token symbol
             token1_contract: Token1 contract address
             token2_contract: Token2 contract address
-            token3_contract: Token3 contract address (None for unlevered)
+            token3_contract: Token3 contract address
             protocol_A: First protocol name
             protocol_B: Second protocol name
             deployment_usd: USD amount to deploy
-            is_levered: Whether position is levered (4-leg) or not (3-leg)
             is_paper_trade: True for Phase 1 (paper), False for Phase 2 (real capital)
             user_id: Optional user ID for multi-user support (Phase 2)
             notes: Optional user notes
@@ -98,19 +96,19 @@ class PositionService:
         L_A = positions['L_A']
         B_A = positions['B_A']
         L_B = positions['L_B']
-        B_B = positions.get('B_B')  # None for unlevered positions
+        B_B = positions.get('B_B')
 
         # Extract entry rates (already in decimal format: 0.0316 = 3.16%)
         entry_lend_rate_1A = strategy_row.get('lend_rate_1A', 0)
         entry_borrow_rate_2A = strategy_row.get('borrow_rate_2A', 0)
         entry_lend_rate_2B = strategy_row.get('lend_rate_2B', 0)
-        entry_borrow_rate_3B = strategy_row.get('borrow_rate_3B') if is_levered else None
+        entry_borrow_rate_3B = strategy_row.get('borrow_rate_3B')
 
         # Extract entry prices (leg-level)
         entry_price_1A = strategy_row.get('P1_A', 0)
         entry_price_2A = strategy_row.get('P2_A', 0)
         entry_price_2B = strategy_row.get('P2_B', 0)
-        entry_price_3B = strategy_row.get('P3_B') if is_levered else None
+        entry_price_3B = strategy_row.get('P3_B')
 
         # Extract entry collateral ratios
         entry_collateral_ratio_1A = strategy_row.get('collateral_ratio_1A', 0)
@@ -127,7 +125,7 @@ class PositionService:
         # Extract entry liquidity & fees
         entry_max_size_usd = strategy_row.get('max_size_usd')
         entry_borrow_fee_2A = strategy_row.get('borrow_fee_2A')
-        entry_borrow_fee_3B = strategy_row.get('borrow_fee_3B') if is_levered else None
+        entry_borrow_fee_3B = strategy_row.get('borrow_fee_3B')
 
         # Convert timestamp to datetime string for DB
         entry_timestamp_str = to_datetime_str(entry_timestamp)
@@ -137,7 +135,7 @@ class PositionService:
         cursor.execute("""
             INSERT INTO positions (
                 position_id, status, strategy_type,
-                is_paper_trade, is_levered, user_id,
+                is_paper_trade, user_id,
                 token1, token2, token3,
                 token1_contract, token2_contract, token3_contract,
                 protocol_A, protocol_B,
@@ -152,7 +150,7 @@ class PositionService:
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             position_id, 'active', 'recursive_lending',
-            is_paper_trade, is_levered, user_id,
+            is_paper_trade, user_id,
             token1, token2, token3,
             token1_contract, token2_contract, token3_contract,
             protocol_A, protocol_B,
@@ -302,14 +300,14 @@ class PositionService:
         L_A = position['L_A']
         B_A = position['B_A']
         L_B = position['L_B']
-        B_B = position['B_B'] if position['is_levered'] else 0
+        B_B = position['B_B']
         entry_fee_2A = position.get('entry_borrow_fee_2A') or 0
-        entry_fee_3B = (position.get('entry_borrow_fee_3B') or 0) if position['is_levered'] else 0
+        entry_fee_3B = position.get('entry_borrow_fee_3B') or 0
 
         # Position legs
         token1 = position['token1']
         token2 = position['token2']
-        token3 = position['token3'] if position['is_levered'] else None
+        token3 = position['token3']
         protocol_A = position['protocol_A']
         protocol_B = position['protocol_B']
 
@@ -347,37 +345,22 @@ class PositionService:
         # For each timestamp, get rates for all 4 legs
         rates_data = []
         for ts_str in timestamps_df['timestamp']:
-            # Build query for this timestamp's rates
-            if position['is_levered']:
-                leg_query = """
-                SELECT protocol, token, lend_base_apr, lend_reward_apr,
-                       borrow_base_apr, borrow_reward_apr
-                FROM rates_snapshot
-                WHERE timestamp = ?
-                  AND ((protocol = ? AND token = ?) OR
-                       (protocol = ? AND token = ?) OR
-                       (protocol = ? AND token = ?) OR
-                       (protocol = ? AND token = ?))
-                """
-                params = (ts_str,
-                         protocol_A, token1,
-                         protocol_A, token2,
-                         protocol_B, token2,
-                         protocol_B, token3)
-            else:
-                leg_query = """
-                SELECT protocol, token, lend_base_apr, lend_reward_apr,
-                       borrow_base_apr, borrow_reward_apr
-                FROM rates_snapshot
-                WHERE timestamp = ?
-                  AND ((protocol = ? AND token = ?) OR
-                       (protocol = ? AND token = ?) OR
-                       (protocol = ? AND token = ?))
-                """
-                params = (ts_str,
-                         protocol_A, token1,
-                         protocol_A, token2,
-                         protocol_B, token2)
+            # Build query for all 4 legs (levered)
+            leg_query = """
+            SELECT protocol, token, lend_base_apr, lend_reward_apr,
+                   borrow_base_apr, borrow_reward_apr
+            FROM rates_snapshot
+            WHERE timestamp = ?
+              AND ((protocol = ? AND token = ?) OR
+                   (protocol = ? AND token = ?) OR
+                   (protocol = ? AND token = ?) OR
+                   (protocol = ? AND token = ?))
+            """
+            params = (ts_str,
+                     protocol_A, token1,
+                     protocol_A, token2,
+                     protocol_B, token2,
+                     protocol_B, token3)
 
             leg_rates = pd.read_sql_query(leg_query, self.conn, params=params)
 
@@ -430,7 +413,7 @@ class PositionService:
 
             current_rates = current['rates']
             borrow_rate_2A = get_rate(current_rates, protocol_A, token2, 'borrow')
-            borrow_rate_3B = get_rate(current_rates, protocol_B, token3, 'borrow') if position['is_levered'] else 0
+            borrow_rate_3B = get_rate(current_rates, protocol_B, token3, 'borrow')
 
             # Borrow costs for this period
             period_borrow = deployment * (B_A * borrow_rate_2A + B_B * borrow_rate_3B) * time_years

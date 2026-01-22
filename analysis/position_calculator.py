@@ -47,14 +47,7 @@ class PositionCalculator:
         # Adjusted collateral ratios with safety buffer
         r_A = collateral_ratio_A / (1 + self.liq_dist)
         r_B = collateral_ratio_B / (1 + self.liq_dist)
-        
-        # Check if the loop converges (r_A * r_B must be < 1)
-        if r_A * r_B >= 1.0:
-            raise ValueError(
-                f"Position does not converge! r_A * r_B = {r_A * r_B:.4f} >= 1.0\n"
-                f"Reduce liquidation distance or use protocols with lower LTV ratios."
-            )
-        
+
         # Geometric series convergence
         # L_A = 1 + r_A*r_B + (r_A*r_B)^2 + ... = 1 / (1 - r_A*r_B)
         L_A = 1.0 / (1.0 - r_A * r_B)
@@ -122,51 +115,6 @@ class PositionCalculator:
         net_apr = gross_apr - fee_cost
 
         return net_apr
-
-    def calculate_unlevered_apr(
-        self,
-        collateral_ratio_A: float,
-        collateral_ratio_B: float,
-        lend_rate_token1_A: float,
-        borrow_rate_token2_A: float,
-        lend_rate_token2_B: float
-    ) -> float:
-        """
-        Calculate the unlevered APR without the recursive loop
-
-        Strategy (unlevered):
-        1. Lend 1.0 of token1 in Protocol A
-        2. Borrow r_A of token2 from Protocol A (with liq distance)
-        3. Lend r_A of token2 in Protocol B
-        4. STOP (no loop back)
-
-        Args:
-            collateral_ratio_A: Max LTV for Protocol A
-            collateral_ratio_B: Max LTV for Protocol B
-            lend_rate_token1_A: Lending rate for token1 in Protocol A (decimal)
-            borrow_rate_token2_A: Borrow rate for token2 from Protocol A (decimal)
-            lend_rate_token2_B: Lending rate for token2 in Protocol B (decimal)
-
-        Returns:
-            Unlevered APR as percentage
-        """
-        # Adjusted collateral ratios with safety buffer
-        r_A = collateral_ratio_A / (1 + self.liq_dist)
-
-        # Position sizes (no loop)
-        L_A = 1.0  # Lend 1.0 token1 in Protocol A
-        B_A = L_A * r_A  # Borrow r_A * token2 from Protocol A
-        L_B = B_A  # Lend all borrowed token2 in Protocol B
-
-        # Earnings and costs
-        earn_A = L_A * lend_rate_token1_A
-        earn_B = L_B * lend_rate_token2_B
-        cost_A = B_A * borrow_rate_token2_A
-
-        # Unlevered APR (no borrowing cost from Protocol B, as decimal)
-        unlevered_apr = earn_A + earn_B - cost_A
-
-        return unlevered_apr
 
     def calculate_apr_for_days(
         self,
@@ -386,15 +334,6 @@ class PositionCalculator:
                 borrow_fee_3B if borrow_fee_3B is not None else 0.0
             )
 
-            # Calculate unlevered APR (without the loop)
-            unlevered_apr = self.calculate_unlevered_apr(
-                collateral_ratio_token1_A,
-                collateral_ratio_token2_B,
-                lend_rate_token1_A,
-                borrow_rate_token2_A,
-                lend_rate_token2_B
-            )
-
             # Calculate fee-adjusted APRs for different time horizons (5, 30, 90 days)
             # Note: net_apr already includes fees, so we need to back out fees and recalculate for different time periods
             # For now, calculate based on gross APR
@@ -420,7 +359,6 @@ class PositionCalculator:
                 'protocol_A': protocol_A,
                 'protocol_B': protocol_B,
                 'net_apr': net_apr,  # As decimal
-                'unlevered_apr': unlevered_apr,  # As decimal
                 'apr_net': fee_adjusted_aprs['apr_net'],  # As decimal
                 'apr5': fee_adjusted_aprs['apr5'],  # As decimal
                 'apr30': fee_adjusted_aprs['apr30'],  # As decimal

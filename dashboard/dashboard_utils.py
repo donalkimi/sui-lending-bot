@@ -67,10 +67,13 @@ def get_available_timestamps(conn: Optional[Any] = None) -> List[str]:
         should_close = False
 
     try:
+        print(f"[INIT] Querying available timestamps from database")
         query = "SELECT DISTINCT timestamp FROM rates_snapshot ORDER BY timestamp DESC"
         df = pd.read_sql_query(query, conn)
+        timestamps = df['timestamp'].tolist()
+        print(f"[INIT] Found {len(timestamps)} historical snapshots")
         # Return timestamps as strings to avoid precision issues
-        return df['timestamp'].tolist()
+        return timestamps
     finally:
         if should_close:
             conn.close()
@@ -118,6 +121,7 @@ def load_historical_snapshot(timestamp: str, conn: Optional[Any] = None) -> Tupl
         should_close = False
 
     try:
+        print(f"[DATA LOAD] Loading snapshot: timestamp={timestamp}")
         # Query rates_snapshot at this timestamp
         ph = '%s' if settings.USE_CLOUD_DB else '?'
         query = f"""
@@ -142,6 +146,7 @@ def load_historical_snapshot(timestamp: str, conn: Optional[Any] = None) -> Tupl
         timestamp_param = timestamp
 
         df = pd.read_sql_query(query, conn, params=(timestamp_param,))
+        print(f"[DATA LOAD] Loaded {len(df)} rows from rates_snapshot table")
 
         if df.empty:
             raise ValueError(f"No snapshot data found for timestamp: {timestamp}")
@@ -189,14 +194,6 @@ def format_usd_abbreviated(value: float) -> str:
         return f"${value/1_000:.1f}K"
     else:
         return f"${value:.0f}"
-
-
-def get_apr_value(row: Union[pd.Series, Dict[str, Any]], use_unlevered: bool) -> float:
-    """Get the appropriate Net APR value based on leverage toggle"""
-    if use_unlevered:
-        return float(row.get('unlevered_apr', 0))
-    else:
-        return float(row.get('apr_net', row.get('net_apr', 0)))
 
 
 # ============================================================================
@@ -572,7 +569,7 @@ def get_strategy_history(strategy_row: Dict[str, Any], liquidation_distance: flo
             print(f"Error: Missing contracts for tokens - token1={token1} ({token1_contract}), token2={token2} ({token2_contract})")
             return None, None, None, None, None
 
-        # token3 can be None for unlevered strategies - use empty string to skip SQL query
+        # Validate token3 is present
         if token3_contract is None:
             token3_contract = ""  # Will be filtered in SQL WHERE clause
 
