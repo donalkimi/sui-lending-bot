@@ -3,7 +3,7 @@ Position size calculator for recursive cross-protocol lending strategy
 """
 
 import numpy as np
-from typing import Dict, Tuple
+from typing import Dict, Tuple, Union
 
 
 class PositionCalculator:
@@ -12,11 +12,21 @@ class PositionCalculator:
     def __init__(self, liquidation_distance: float = 0.30):
         """
         Initialize the position calculator
-        
+
         Args:
-            liquidation_distance: Safety buffer as decimal (0.30 = 30%)
+            liquidation_distance: Minimum safety buffer as decimal (0.20 = 20% minimum)
+                                This is the minimum protection guaranteed on the lending side.
+                                Internally transformed to liq_max = liq_dist / (1 - liq_dist)
+                                to ensure proper protection using existing formulas.
         """
-        self.liq_dist = liquidation_distance
+        # Store original user input for display/reporting purposes
+        self.liq_dist_input = liquidation_distance
+
+        # Transform user's minimum liquidation distance to liq_max for internal use
+        # This ensures the user gets AT LEAST their requested protection on lending side
+        # Formula: liq_max = liq_dist / (1 - liq_dist)
+        # Example: 0.20 → 0.25, which gives 20% lending protection and 25% borrowing protection
+        self.liq_dist = liquidation_distance / (1 - liquidation_distance)
     
     def calculate_positions(
         self, 
@@ -62,7 +72,7 @@ class PositionCalculator:
             'B_B': B_B,  # Total borrowed token1 from Protocol B
             'r_A': r_A,  # Effective ratio for Protocol A
             'r_B': r_B,  # Effective ratio for Protocol B
-            'liquidation_distance': self.liq_dist  # Safety buffer from liquidation
+            'liquidation_distance': self.liq_dist_input  # Original user input (for display)
         }
     
     def calculate_net_apr(
@@ -200,6 +210,137 @@ class PositionCalculator:
 
         return days_to_breakeven
 
+    def calculate_liquidation_price(
+        self,
+        collateral_value: float,
+        loan_value: float,
+        lending_token_price: float,
+        borrowing_token_price: float,
+        lltv: float,
+        side: str
+    ) -> Dict[str, Union[float, str]]:
+        """
+        Calculate the token price at which a position would be liquidated.
+
+        This function solves for the price movement required to trigger liquidation
+        by calculating when LTV equals LLTV. It can calculate from either the
+        lending perspective (price drop) or borrowing perspective (price rise).
+
+        Args:
+            collateral_value: Total USD value of collateral position
+            loan_value: Total USD value of borrowed position
+            lending_token_price: Current price of lending/collateral token (USD)
+            borrowing_token_price: Current price of borrowing/loan token (USD)
+            lltv: Liquidation Loan-to-Value ratio as decimal (e.g., 0.75 for 75%)
+            side: Calculate for 'lending' price drop or 'borrowing' price rise
+
+        Returns:
+            Dictionary with liquidation analysis:
+                - liq_price: Liquidation price (0.0 if already liquidated, inf if impossible)
+                - current_price: Current price of the queried token
+                - pct_distance: Percentage price change to liquidation (negative = down, positive = up)
+                - current_ltv: Current LTV ratio
+                - lltv: Liquidation LTV threshold
+                - direction: 'up', 'down', 'liquidated', or 'impossible'
+
+        Raises:
+            ValueError: If side is not 'lending' or 'borrowing'
+            ValueError: If lltv is not positive
+            ValueError: If token prices are not positive
+
+        Examples:
+            >>> calc = PositionCalculator()
+            >>> # Calculate lending side liquidation price
+            >>> result = calc.calculate_liquidation_price(
+            ...     collateral_value=100.0,
+            ...     loan_value=50.0,
+            ...     lending_token_price=1.0,
+            ...     borrowing_token_price=1.0,
+            ...     lltv=0.75,
+            ...     side='lending'
+            ... )
+            >>> print(f"Liquidation at ${result['liq_price']:.2f}")
+            Liquidation at $0.67
+            >>> print(f"Distance: {result['pct_distance']*100:.1f}%")
+            Distance: -33.3%
+        """
+        # Input validation
+        if side not in ['lending', 'borrowing']:
+            raise ValueError(f"side must be 'lending' or 'borrowing', got '{side}'")
+
+        if lltv <= 0:
+            raise ValueError(f"lltv must be positive, got {lltv}")
+
+        if lending_token_price <= 0 or borrowing_token_price <= 0:
+            raise ValueError("Token prices must be positive")
+
+        # Calculate current LTV
+        if collateral_value <= 0:
+            current_ltv = float('inf')
+        else:
+            current_ltv = loan_value / collateral_value
+
+        # Determine current price based on side
+        current_price = lending_token_price if side == 'lending' else borrowing_token_price
+
+        # Check for edge case: zero or negative values
+        if collateral_value <= 0 or loan_value <= 0:
+            return {
+                'liq_price': float('inf'),
+                'current_price': current_price,
+                'pct_distance': float('inf'),
+                'current_ltv': current_ltv,
+                'lltv': lltv,
+                'direction': 'impossible'
+            }
+
+        # Check if already liquidated
+        if current_ltv >= lltv:
+            return {
+                'liq_price': 0.0,
+                'current_price': current_price,
+                'pct_distance': -1.0,
+                'current_ltv': current_ltv,
+                'lltv': lltv,
+                'direction': 'liquidated'
+            }
+
+        # Calculate liquidation price based on side
+        if side == 'lending':
+            # Lending token price must fall for liquidation
+            # liq_price = lending_token_price * (current_ltv / lltv)
+            liq_price = lending_token_price * (current_ltv / lltv)
+            direction = 'down'  # Price must go down to trigger liquidation
+
+        else:  # side == 'borrowing'
+            # Borrowing token price must rise for liquidation
+            # liq_price = borrowing_token_price * (lltv / current_ltv)
+            liq_price = borrowing_token_price * (lltv / current_ltv)
+            direction = 'up'  # Price must go up to trigger liquidation
+
+        # Check for impossible liquidation (negative price)
+        if liq_price <= 0:
+            return {
+                'liq_price': float('inf'),
+                'current_price': current_price,
+                'pct_distance': float('inf'),
+                'current_ltv': current_ltv,
+                'lltv': lltv,
+                'direction': 'impossible'
+            }
+
+        # Calculate percentage distance
+        pct_distance = (liq_price - current_price) / current_price
+
+        return {
+            'liq_price': liq_price,
+            'current_price': current_price,
+            'pct_distance': pct_distance,
+            'current_ltv': current_ltv,
+            'lltv': lltv,
+            'direction': direction
+        }
+
     def calculate_fee_adjusted_aprs(
         self,
         gross_apr: float,
@@ -272,7 +413,7 @@ class PositionCalculator:
         borrow_fee_2A: float = None,  # NEW
         borrow_fee_3B: float = None   # NEW
     ) -> Dict:
-        """
+        """a
         Complete analysis of a strategy combination
         
         Args:

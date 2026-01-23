@@ -20,6 +20,7 @@ from config import settings
 from config.stablecoins import STABLECOIN_CONTRACTS, STABLECOIN_SYMBOLS
 from dashboard.data_loaders import DataLoader
 from data.rate_tracker import RateTracker
+from analysis.position_calculator import PositionCalculator
 
 
 def format_days_to_breakeven(days: float) -> str:
@@ -462,73 +463,84 @@ def calculate_position_returns(strategy: Dict, deployment_usd: float) -> Dict:
 @st.dialog("Strategy Details", width="large")
 def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
     """
-    Full strategy details modal with calculator and actions.
+    Strategy details modal with APR summary and token-level details tables.
 
-    Phase 3a: Core functionality WITHOUT charting
-    Phase 3b: Will add APR trend chart section
+    Redesigned to match Active Positions expanded row styling.
 
     Args:
         strategy: Strategy dict from all_results DataFrame
         timestamp_seconds: Current timestamp (Unix seconds) - DESIGN_NOTES.md #5
     """
     import streamlit as st
+    import math
 
     print("=" * 80)
     print("[MODAL] show_strategy_modal called")
     print(f"[MODAL] strategy tokens: {strategy.get('token1')}/{strategy.get('token2')}/{strategy.get('token3')}")
     print("=" * 80)
 
+    # Helper function for token precision
+    def get_token_precision(price: float, target_usd: float = 10.0) -> int:
+        """Calculate decimal places to show ~$10 worth of precision."""
+        if price <= 0:
+            return 3
+        decimal_places = math.ceil(-math.log10(price / target_usd))
+        return max(3, min(8, decimal_places))
+
     # ========================================
     # HEADER SECTION
     # ========================================
     st.markdown(f"## 📊 {strategy['token1']} / {strategy['token2']} / {strategy['token3']}")
 
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown(f"**Protocol A:** {strategy['protocol_A']}")
-    with col2:
-        st.markdown(f"**Protocol B:** {strategy['protocol_B']}")
+    # ========================================
+    # APR SUMMARY TABLE
+    # ========================================
+    # Calculate upfront fees percentage
+    upfront_fees_pct = (
+        strategy['B_A'] * strategy['borrow_fee_2A'] +
+        strategy['B_B'] * strategy['borrow_fee_3B']
+    )
 
-    st.divider()
+    # Build display strings
+    token_flow = f"{strategy['token1']} → {strategy['token2']} → {strategy['token3']}"
+    protocol_pair = f"{strategy['protocol_A']} ↔ {strategy['protocol_B']}"
+
+    # Create summary table
+    summary_data = [{
+        'Time': to_datetime_str(timestamp_seconds),
+        'Token Flow': token_flow,
+        'Protocols': protocol_pair,
+        'Net APR': f"{strategy['net_apr'] * 100:.2f}%",
+        'APR 5d': f"{strategy.get('apr5', 0) * 100:.2f}%",
+        'APR 30d': f"{strategy.get('apr30', 0) * 100:.2f}%",
+        'Liq Dist': f"{strategy['liquidation_distance'] * 100:.2f}%",
+        'Upfront Fees (%)': f"{upfront_fees_pct * 100:.2f}%",
+        'Days to Breakeven': f"{strategy.get('days_to_breakeven', 0):.1f}",
+        'Max Liquidity': f"${strategy['max_size']:,.2f}",
+    }]
+    summary_df = pd.DataFrame(summary_data)
+
+    # Apply color formatting to APR columns
+    def color_apr(val):
+        """Color positive APRs green, negative red"""
+        if isinstance(val, str) and '%' in val:
+            try:
+                numeric_val = float(val.replace('%', ''))
+                if numeric_val > 0:
+                    return 'color: green'
+                elif numeric_val < 0:
+                    return 'color: red'
+            except (ValueError, TypeError):
+                pass
+        return ''
+
+    styled_summary_df = summary_df.style.map(color_apr, subset=['Net APR', 'APR 5d', 'APR 30d'])
+    st.dataframe(styled_summary_df, width='stretch', hide_index=True)
+
+    st.markdown("")  # Tighter spacing instead of divider
 
     # ========================================
-    # METRICS SECTION
-    # ========================================
-    metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
-
-    with metric_col1:
-        # Convert decimal to percentage for display (DESIGN_NOTES.md #7)
-        st.metric(
-            label="Net APR",
-            value=f"{strategy['net_apr'] * 100:.2f}%",
-            help="Current instantaneous APR after all fees"
-        )
-
-    with metric_col2:
-        st.metric(
-            label="APR 5d",
-            value=f"{strategy.get('apr5', 0) * 100:.2f}%",
-            help="Annualized return if you exit after 5 days"
-        )
-
-    with metric_col3:
-        st.metric(
-            label="APR 30d",
-            value=f"{strategy.get('apr30', 0) * 100:.2f}%",
-            help="Annualized return if you exit after 30 days"
-        )
-
-    with metric_col4:
-        st.metric(
-            label="Days to Breakeven",
-            value=f"{strategy.get('days_to_breakeven', 0):.1f}",
-            help="Days until upfront fees are recovered"
-        )
-
-    st.divider()
-
-    # ========================================
-    # POSITION CALCULATOR SECTION
+    # POSITION CALCULATOR - DEPLOYMENT INPUT
     # ========================================
     st.markdown("### 💰 Position Calculator")
 
@@ -536,151 +548,267 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
     max_size = float(strategy.get('max_size', 1000000))
     default_deployment = min(10000.0, max_size)
 
-    deployment_usd = st.number_input(
-        "Deployment Amount (USD)",
-        min_value=100.0,
-        max_value=max_size,
-        value=default_deployment,
-        step=100.0,
-        help="USD amount to deploy in this strategy"
+    # Use column to constrain width of input
+    col1, col2 = st.columns([1, 2])
+    with col1:
+        deployment_usd = st.number_input(
+            "Deployment Amount (USD)",
+            min_value=100.0,
+            max_value=max_size,
+            value=default_deployment,
+            step=100.0,
+            help="USD amount to deploy in this strategy"
+        )
+
+    st.markdown("")  # Tighter spacing instead of divider
+
+    # ========================================
+    # TOKEN-LEVEL DETAILS TABLE
+    # ========================================
+    # Calculate token amounts (with zero-division protection)
+    entry_token_amount_1A = (strategy['L_A'] * deployment_usd) / strategy['P1_A'] if strategy['P1_A'] > 0 else 0
+    entry_token_amount_2A = (strategy['B_A'] * deployment_usd) / strategy['P2_A'] if strategy['P2_A'] > 0 else 0
+    entry_token_amount_2B = (strategy['L_B'] * deployment_usd) / strategy['P2_B'] if strategy['P2_B'] > 0 else 0
+    entry_token_amount_3B = (strategy['B_B'] * deployment_usd) / strategy['P3_B'] if strategy['P3_B'] > 0 else 0
+
+    # Calculate position sizes in USD (weight * deployment_usd)
+    position_size_1A = strategy['L_A'] * deployment_usd
+    position_size_2A = strategy['B_A'] * deployment_usd
+    position_size_2B = strategy['L_B'] * deployment_usd
+    position_size_3B = strategy['B_B'] * deployment_usd
+
+    # Calculate fee amounts in USD
+    fee_usd_2A = strategy['B_A'] * strategy['borrow_fee_2A'] * deployment_usd
+    fee_usd_3B = strategy['B_B'] * strategy['borrow_fee_3B'] * deployment_usd
+
+    # Calculate dynamic precision
+    precision_1A = get_token_precision(strategy['P1_A'])
+    precision_2A = get_token_precision(strategy['P2_A'])
+    precision_2B = get_token_precision(strategy['P2_B'])
+    precision_3B = get_token_precision(strategy['P3_B'])
+
+    # Create position calculator for liquidation analysis
+    position_calculator = PositionCalculator()
+
+    # Calculate liquidation data for Row 1 (lending side - Protocol A)
+    liq_result_1 = position_calculator.calculate_liquidation_price(
+        collateral_value=position_size_1A,
+        loan_value=position_size_2A,
+        lending_token_price=strategy['P1_A'],
+        borrowing_token_price=strategy['P2_A'],
+        lltv=strategy['collateral_ratio_1A'],
+        side='lending'
     )
 
-    # Calculate position breakdown
-    position_calc = calculate_position_returns(strategy, deployment_usd)
+    # Calculate liquidation data for Row 2 (borrowing side - Protocol A)
+    liq_result_2 = position_calculator.calculate_liquidation_price(
+        collateral_value=position_size_1A,
+        loan_value=position_size_2A,
+        lending_token_price=strategy['P1_A'],
+        borrowing_token_price=strategy['P2_A'],
+        lltv=strategy['collateral_ratio_1A'],
+        side='borrowing'
+    )
 
-    # Position sizes display
-    st.markdown("**Position Sizes:**")
-    pos_col1, pos_col2 = st.columns(2)
+    # Calculate liquidation data for Row 3 (lending side - Protocol B)
+    liq_result_3 = position_calculator.calculate_liquidation_price(
+        collateral_value=position_size_2B,
+        loan_value=position_size_3B,
+        lending_token_price=strategy['P2_B'],
+        borrowing_token_price=strategy['P3_B'],
+        lltv=strategy['collateral_ratio_2B'],
+        side='lending'
+    )
 
-    with pos_col1:
-        st.markdown(f"• **Lend A**: ${position_calc['lend_a_usd']:,.2f} ({position_calc['lend_a_pct']:.1f}%)")
-        st.markdown(f"• **Borrow A**: ${position_calc['borrow_a_usd']:,.2f} ({position_calc['borrow_a_pct']:.1f}%)")
+    # Calculate liquidation data for Row 4 (borrowing side - Protocol B)
+    liq_result_4 = position_calculator.calculate_liquidation_price(
+        collateral_value=position_size_2B,
+        loan_value=position_size_3B,
+        lending_token_price=strategy['P2_B'],
+        borrowing_token_price=strategy['P3_B'],
+        lltv=strategy['collateral_ratio_2B'],
+        side='borrowing'
+    )
 
-    with pos_col2:
-        st.markdown(f"• **Lend B**: ${position_calc['lend_b_usd']:,.2f} ({position_calc['lend_b_pct']:.1f}%)")
-        st.markdown(f"• **Borrow B**: ${position_calc['borrow_b_usd']:,.2f} ({position_calc['borrow_b_pct']:.1f}%)")
+    # Build detail table
+    st.markdown("**Position Details:**")
+    detail_data = []
 
-    # Expected returns display
-    st.markdown("**Expected Returns:**")
-    ret_col1, ret_col2, ret_col3 = st.columns(3)
+    # Row 1: Protocol A - Lend token1
+    detail_data.append({
+        'Protocol': strategy['protocol_A'],
+        'Token': strategy['token1'],
+        'Action': 'Lend',
+        'Weight': f"{strategy['L_A']:.4f}",
+        'Rate': f"{strategy['lend_rate_1A'] * 100:.2f}%" if strategy['lend_rate_1A'] > 0 else "",
+        'Token Amount': f"{entry_token_amount_1A:,.{precision_1A}f}",
+        'Size ($$$)': f"${position_size_1A:,.2f}",
+        'Price': f"${strategy['P1_A']:.4f}",
+        'Fees (%)': "",
+        'Fees ($$$)': "",
+        'Collateral Factor': f"{strategy['collateral_ratio_1A'] * 100:.2f}%",
+        'Liquidation Price': f"${liq_result_1['liq_price']:.4f}" if liq_result_1['liq_price'] != float('inf') and liq_result_1['liq_price'] > 0 else "N/A",
+        'Liq Distance': f"{liq_result_1['pct_distance'] * 100:.2f}%" if liq_result_1['liq_price'] != float('inf') and liq_result_1['liq_price'] > 0 else "N/A",
+        'Max Borrow': "",
+    })
 
-    with ret_col1:
-        st.metric("Daily", f"${position_calc['daily_return_usd']:.2f}")
-    with ret_col2:
-        st.metric("Monthly", f"${position_calc['monthly_return_usd']:.2f}")
-    with ret_col3:
-        st.metric("Yearly", f"${position_calc['yearly_return_usd']:.2f}")
+    # Row 2: Protocol A - Borrow token2
+    detail_data.append({
+        'Protocol': strategy['protocol_A'],
+        'Token': strategy['token2'],
+        'Action': 'Borrow',
+        'Weight': f"{strategy['B_A']:.4f}",
+        'Rate': f"{strategy['borrow_rate_2A'] * 100:.2f}%" if strategy['borrow_rate_2A'] > 0 else "",
+        'Token Amount': f"{entry_token_amount_2A:,.{precision_2A}f}",
+        'Size ($$$)': f"${position_size_2A:,.2f}",
+        'Price': f"${strategy['P2_A']:.4f}",
+        'Fees (%)': f"{strategy['borrow_fee_2A'] * 100:.2f}%" if strategy['borrow_fee_2A'] > 0 else "",
+        'Fees ($$$)': f"${fee_usd_2A:.2f}" if fee_usd_2A > 0 else "",
+        'Collateral Factor': "",
+        'Liquidation Price': f"${liq_result_2['liq_price']:.4f}" if liq_result_2['liq_price'] != float('inf') and liq_result_2['liq_price'] > 0 else "N/A",
+        'Liq Distance': f"{liq_result_2['pct_distance'] * 100:.2f}%" if liq_result_2['liq_price'] != float('inf') and liq_result_2['liq_price'] > 0 else "N/A",
+        'Max Borrow': f"${strategy['available_borrow_2A']:,.2f}" if strategy['available_borrow_2A'] > 0 else "",
+    })
 
-    st.divider()
+    # Row 3: Protocol B - Lend token2
+    detail_data.append({
+        'Protocol': strategy['protocol_B'],
+        'Token': strategy['token2'],
+        'Action': 'Lend',
+        'Weight': f"{strategy['L_B']:.4f}",
+        'Rate': f"{strategy['lend_rate_2B'] * 100:.2f}%" if strategy['lend_rate_2B'] > 0 else "",
+        'Token Amount': f"{entry_token_amount_2B:,.{precision_2B}f}",
+        'Size ($$$)': f"${position_size_2B:,.2f}",
+        'Price': f"${strategy['P2_B']:.4f}",
+        'Fees (%)': "",
+        'Fees ($$$)': "",
+        'Collateral Factor': f"{strategy['collateral_ratio_2B'] * 100:.2f}%",
+        'Liquidation Price': f"${liq_result_3['liq_price']:.4f}" if liq_result_3['liq_price'] != float('inf') and liq_result_3['liq_price'] > 0 else "N/A",
+        'Liq Distance': f"{liq_result_3['pct_distance'] * 100:.2f}%" if liq_result_3['liq_price'] != float('inf') and liq_result_3['liq_price'] > 0 else "N/A",
+        'Max Borrow': "",
+    })
 
-    # ========================================
-    # RISK METRICS SECTION
-    # ========================================
-    st.markdown("### ⚠️ Risk Metrics")
+    # Row 4: Protocol B - Borrow token3
+    detail_data.append({
+        'Protocol': strategy['protocol_B'],
+        'Token': strategy['token3'],
+        'Action': 'Borrow',
+        'Weight': f"{strategy['B_B']:.4f}",
+        'Rate': f"{strategy['borrow_rate_3B'] * 100:.2f}%" if strategy['borrow_rate_3B'] > 0 else "",
+        'Token Amount': f"{entry_token_amount_3B:,.{precision_3B}f}",
+        'Size ($$$)': f"${position_size_3B:,.2f}",
+        'Price': f"${strategy['P3_B']:.4f}",
+        'Fees (%)': f"{strategy['borrow_fee_3B'] * 100:.2f}%" if strategy['borrow_fee_3B'] > 0 else "",
+        'Fees ($$$)': f"${fee_usd_3B:.2f}" if fee_usd_3B > 0 else "",
+        'Collateral Factor': "",
+        'Liquidation Price': f"${liq_result_4['liq_price']:.4f}" if liq_result_4['liq_price'] != float('inf') and liq_result_4['liq_price'] > 0 else "N/A",
+        'Liq Distance': f"{liq_result_4['pct_distance'] * 100:.2f}%" if liq_result_4['liq_price'] != float('inf') and liq_result_4['liq_price'] > 0 else "N/A",
+        'Max Borrow': f"${strategy['available_borrow_3B']:,.2f}" if strategy['available_borrow_3B'] > 0 else "",
+    })
 
-    liquidation_distance = strategy.get('liquidation_distance', 0.20)
+    # Display detail table with color formatting
+    detail_df = pd.DataFrame(detail_data)
 
-    # Display liquidation distance as percentage (DESIGN_NOTES.md #7)
-    st.markdown(f"**Liquidation Distance**: {liquidation_distance * 100:.0f}%")
-
-    # Health factor visualization
-    # Scale liquidation distance to 0-100 range for progress bar
-    health_pct = min(100, liquidation_distance * 500)  # 20% distance = 100% health
-
-    health_label = "Good" if health_pct > 70 else "Moderate" if health_pct > 50 else "Risky"
-    st.progress(health_pct / 100, text=f"Health Factor: {health_label}")
-
-    # Warning for risky positions
-    if liquidation_distance < 0.10:
-        st.warning("⚠️ Low liquidation distance - higher liquidation risk")
-
-    st.divider()
-
-    # ========================================
-    # ACTION BUTTONS
-    # ========================================
-    col1, col2 = st.columns([3, 1])
-
-    with col1:
-        if st.button("🚀 Deploy Position", type="primary", width="stretch"):
-            print("[DEPLOY BUTTON] Deploy button clicked!")
+    # Apply color formatting to Rate column
+    def color_rate(val):
+        """Color positive rates green"""
+        if isinstance(val, str) and '%' in val and val != "":
             try:
-                # Connect to database
-                conn = get_db_connection()
-                service = PositionService(conn)
+                numeric_val = float(val.replace('%', ''))
+                if numeric_val > 0:
+                    return 'color: green'
+            except (ValueError, TypeError):
+                pass
+        return ''
 
-                # Get position multipliers from strategy history calculation
-                _, L_A, B_A, L_B, B_B = get_strategy_history(
-                    strategy_row=strategy,
-                    liquidation_distance=liquidation_distance
-                )
+    # Apply color formatting to Liquidation Distance column
+    def color_liq_distance(val):
+        """Color liquidation distance based on risk level"""
+        if isinstance(val, str) and '%' in val and val != "N/A":
+            try:
+                numeric_val = abs(float(val.replace('%', '')))  # Use absolute value
+                if numeric_val < 10:
+                    return 'color: red'
+                elif numeric_val < 30:
+                    return 'color: orange'
+                else:
+                    return 'color: green'
+            except (ValueError, TypeError):
+                pass
+        return ''
 
-                # Build positions dict
-                positions = {
-                    'L_A': L_A,
-                    'B_A': B_A,
-                    'L_B': L_B,
-                    'B_B': B_B
-                }
+    styled_detail_df = detail_df.style.map(color_rate, subset=['Rate']).map(color_liq_distance, subset=['Liq Distance'])
+    st.dataframe(styled_detail_df, width='stretch', hide_index=True)
 
-                # Create position (all strategies are 4-leg levered)
-                position_id = service.create_position(
-                    strategy_row=pd.Series(strategy) if isinstance(strategy, dict) else strategy,
-                    positions=positions,
-                    token1=strategy['token1'],
-                    token2=strategy['token2'],
-                    token3=strategy.get('token3'),
-                    token1_contract=strategy['token1_contract'],
-                    token2_contract=strategy['token2_contract'],
-                    token3_contract=strategy.get('token3_contract'),
-                    protocol_A=strategy['protocol_A'],
-                    protocol_B=strategy['protocol_B'],
-                    deployment_usd=deployment_usd,
-                    is_paper_trade=True,
-                    notes=""
-                )
+    st.markdown("")  # Tighter spacing instead of divider
 
-                conn.close()
+    # ========================================
+    # ACTION BUTTON
+    # ========================================
+    if st.button("🚀 Deploy Position", type="primary", use_container_width=True):
+        print("[DEPLOY BUTTON] Deploy button clicked!")
+        try:
+            # Connect to database
+            conn = get_db_connection()
+            service = PositionService(conn)
 
-                print(f"[DEPLOY BUTTON] Position created successfully: {position_id}")
+            # Get liquidation distance from strategy
+            liquidation_distance = strategy.get('liquidation_distance', 0.20)
 
-                # Store success info in session state
-                st.session_state.deployment_success = {
-                    'position_id': position_id,
-                    'timestamp': time.time()
-                }
+            # Get position multipliers from strategy history calculation
+            _, L_A, B_A, L_B, B_B = get_strategy_history(
+                strategy_row=strategy,
+                liquidation_distance=liquidation_distance
+            )
 
-                print("[DEPLOY BUTTON] Success - triggering rerun to close modal and refresh dashboard")
-
-                # Set flag to prevent modal from reopening
-                st.session_state.skip_modal_reopen = True
-
-                # Trigger rerun to close modal and refresh dashboard
-                st.rerun()
-
-            except Exception as e:
-                import traceback
-                print(f"[DEPLOY BUTTON] ERROR: {e}")
-                traceback.print_exc()
-                st.error(f"❌ Failed to create position: {e}")
-
-    with col2:
-        if st.button("📥 Export", use_container_width=True):
-            import json
-
-            # Prepare export data
-            export_data = {
-                **strategy,
-                'deployment_amount': deployment_usd,
-                'position_breakdown': position_calc
+            # Build positions dict
+            positions = {
+                'L_A': L_A,
+                'B_A': B_A,
+                'L_B': L_B,
+                'B_B': B_B
             }
 
-            st.download_button(
-                label="Download JSON",
-                data=json.dumps(export_data, indent=2, default=str),
-                file_name=f"strategy_{strategy['token1']}_{strategy['token2']}_{strategy['token3']}.json",
-                mime="application/json"
+            # Create position (all strategies are 4-leg levered)
+            position_id = service.create_position(
+                strategy_row=pd.Series(strategy) if isinstance(strategy, dict) else strategy,
+                positions=positions,
+                token1=strategy['token1'],
+                token2=strategy['token2'],
+                token3=strategy.get('token3'),
+                token1_contract=strategy['token1_contract'],
+                token2_contract=strategy['token2_contract'],
+                token3_contract=strategy.get('token3_contract'),
+                protocol_A=strategy['protocol_A'],
+                protocol_B=strategy['protocol_B'],
+                deployment_usd=deployment_usd,
+                is_paper_trade=True,
+                notes=""
             )
+
+            conn.close()
+
+            print(f"[DEPLOY BUTTON] Position created successfully: {position_id}")
+
+            # Store success info in session state
+            st.session_state.deployment_success = {
+                'position_id': position_id,
+                'timestamp': time.time()
+            }
+
+            print("[DEPLOY BUTTON] Success - triggering rerun to close modal and refresh dashboard")
+
+            # Set flag to prevent modal from reopening
+            st.session_state.skip_modal_reopen = True
+
+            # Trigger rerun to close modal and refresh dashboard
+            st.rerun()
+
+        except Exception as e:
+            import traceback
+            print(f"[DEPLOY BUTTON] ERROR: {e}")
+            traceback.print_exc()
+            st.error(f"❌ Failed to create position: {e}")
 
 
 def render_rate_tables_tab(lend_rates: pd.DataFrame, borrow_rates: pd.DataFrame,
@@ -902,7 +1030,26 @@ def render_positions_table_tab():
                     'Entry Liq Distance': f"{position['entry_liquidation_distance'] * 100:.2f}%",
                 }]
                 summary_df = pd.DataFrame(summary_data)
-                st.dataframe(summary_df, width='stretch', hide_index=True)
+
+                # Apply color formatting to APR columns
+                def color_apr(val):
+                    """Color positive APRs green, negative red"""
+                    if isinstance(val, str) and '%' in val:
+                        try:
+                            numeric_val = float(val.replace('%', ''))
+                            if numeric_val > 0:
+                                return 'color: green'
+                            elif numeric_val < 0:
+                                return 'color: red'
+                        except (ValueError, TypeError):
+                            pass
+                    return ''
+
+                styled_summary_df = summary_df.style.map(
+                    color_apr,
+                    subset=['Entry APR', 'Current APR', 'Realized APR']
+                )
+                st.dataframe(styled_summary_df, width='stretch', hide_index=True)
 
                 # Add spacing
                 st.markdown("---")
@@ -934,6 +1081,80 @@ def render_positions_table_tab():
                 precision_2B = get_token_precision(live_price_2B)
                 precision_3B = get_token_precision(live_price_3B)
 
+                # Calculate liquidation prices for all 4 legs
+                from analysis.position_calculator import PositionCalculator
+                calc = PositionCalculator(liquidation_distance=position['entry_liquidation_distance'])
+
+                # Helper function to format liquidation price
+                def format_liq_price(liq_result):
+                    if liq_result['direction'] == 'liquidated':
+                        return "LIQUIDATED"
+                    elif liq_result['direction'] == 'impossible':
+                        return ""
+                    else:
+                        return f"${liq_result['liq_price']:.4f}"
+
+                # Helper function to format liquidation distance
+                def format_liq_distance(liq_result):
+                    if liq_result['direction'] == 'liquidated':
+                        return "0.00%"
+                    elif liq_result['direction'] == 'impossible':
+                        return ""
+                    else:
+                        return f"{liq_result['pct_distance'] * 100:.2f}%"
+
+                # Calculate current collateral and loan values using ENTRY token amounts and LIVE PRICES
+                # Token amounts don't change - only prices change
+                # Protocol A (Lend token1, Borrow token2)
+                # Collateral value = entry token amount × live price
+                current_collateral_A = entry_token_amount_1A * live_price_1A
+                current_loan_A = entry_token_amount_2A * live_price_2A
+
+                # Leg 1: Liquidation price for token1 (lending side - price must drop)
+                liq_1A = calc.calculate_liquidation_price(
+                    collateral_value=current_collateral_A,
+                    loan_value=current_loan_A,
+                    lending_token_price=live_price_1A,
+                    borrowing_token_price=live_price_2A,
+                    lltv=position['entry_collateral_ratio_1A'],
+                    side='lending'
+                )
+
+                # Leg 2: Liquidation price for token2 (borrowing side - price must rise)
+                liq_2A = calc.calculate_liquidation_price(
+                    collateral_value=current_collateral_A,
+                    loan_value=current_loan_A,
+                    lending_token_price=live_price_1A,
+                    borrowing_token_price=live_price_2A,
+                    lltv=position['entry_collateral_ratio_1A'],
+                    side='borrowing'
+                )
+
+                # Protocol B (Lend token2, Borrow token3)
+                # Collateral value = entry token amount × live price
+                current_collateral_B = entry_token_amount_2B * live_price_2B
+                current_loan_B = entry_token_amount_3B * live_price_3B
+
+                # Leg 3: Liquidation price for token2 (lending side - price must drop)
+                liq_2B = calc.calculate_liquidation_price(
+                    collateral_value=current_collateral_B,
+                    loan_value=current_loan_B,
+                    lending_token_price=live_price_2B,
+                    borrowing_token_price=live_price_3B,
+                    lltv=position['entry_collateral_ratio_2B'],
+                    side='lending'
+                )
+
+                # Leg 4: Liquidation price for token3 (borrowing side - price must rise)
+                liq_3B = calc.calculate_liquidation_price(
+                    collateral_value=current_collateral_B,
+                    loan_value=current_loan_B,
+                    lending_token_price=live_price_2B,
+                    borrowing_token_price=live_price_3B,
+                    lltv=position['entry_collateral_ratio_2B'],
+                    side='borrowing'
+                )
+
                 # Row 1: Protocol A - Lend token1
                 detail_data.append({
                     'Protocol': position['protocol_A'],
@@ -946,6 +1167,8 @@ def render_positions_table_tab():
                     'Entry Price': f"${position['entry_price_1A']:.4f}",
                     'Live Price': f"${live_price_1A:.4f}",
                     'Live Rate': f"{lend_1A * 100:.2f}%",
+                    'Current Liq Price': format_liq_price(liq_1A),
+                    'Liq Distance': format_liq_distance(liq_1A),
                 })
 
                 # Row 2: Protocol A - Borrow token2
@@ -960,6 +1183,8 @@ def render_positions_table_tab():
                     'Entry Price': f"${position['entry_price_2A']:.4f}",
                     'Live Price': f"${live_price_2A:.4f}",
                     'Live Rate': f"{borrow_2A * 100:.2f}%",
+                    'Current Liq Price': format_liq_price(liq_2A),
+                    'Liq Distance': format_liq_distance(liq_2A),
                 })
 
                 # Row 3: Protocol B - Lend token2
@@ -974,6 +1199,8 @@ def render_positions_table_tab():
                     'Entry Price': f"${position['entry_price_2B']:.4f}",
                     'Live Price': f"${live_price_2B:.4f}",
                     'Live Rate': f"{lend_2B * 100:.2f}%",
+                    'Current Liq Price': format_liq_price(liq_2B),
+                    'Liq Distance': format_liq_distance(liq_2B),
                 })
 
                 # Row 4: Protocol B - Borrow token3 (4th leg)
@@ -988,11 +1215,62 @@ def render_positions_table_tab():
                     'Entry Price': f"${position['entry_price_3B']:.4f}",
                     'Live Price': f"${live_price_3B:.4f}",
                     'Live Rate': f"{borrow_3B * 100:.2f}%",
+                    'Current Liq Price': format_liq_price(liq_3B),
+                    'Liq Distance': format_liq_distance(liq_3B),
                 })
 
-                # Display detail table
+                # Display detail table with styling
                 detail_df = pd.DataFrame(detail_data)
-                st.dataframe(detail_df, width='stretch', hide_index=True)
+
+                # Apply modal style guide formatting
+                def color_rate(val):
+                    """Color positive rates green, negative red"""
+                    if isinstance(val, str) and '%' in val:
+                        try:
+                            numeric_val = float(val.replace('%', ''))
+                            if numeric_val > 0:
+                                return 'color: green'
+                            elif numeric_val < 0:
+                                return 'color: red'
+                        except (ValueError, TypeError):
+                            pass
+                    return ''
+
+                def color_liq_price(val):
+                    """Color liquidation prices - red for LIQUIDATED"""
+                    if isinstance(val, str):
+                        if val == "LIQUIDATED":
+                            return 'color: red; font-weight: bold'
+                    return ''
+
+                def color_liq_distance(val):
+                    """Color liquidation distance based on risk level"""
+                    if isinstance(val, str) and '%' in val and val != "":
+                        try:
+                            numeric_val = abs(float(val.replace('%', '')))  # Use absolute value
+                            if numeric_val < 10:
+                                return 'color: red; font-weight: bold'
+                            elif numeric_val < 30:
+                                return 'color: orange'
+                            else:
+                                return 'color: green'
+                        except (ValueError, TypeError):
+                            pass
+                    return ''
+
+                # Apply styling to rates and liquidation columns
+                styled_detail_df = detail_df.style.map(
+                    color_rate,
+                    subset=['Entry Rate', 'Live Rate']
+                ).map(
+                    color_liq_price,
+                    subset=['Current Liq Price']
+                ).map(
+                    color_liq_distance,
+                    subset=['Liq Distance']
+                )
+
+                st.dataframe(styled_detail_df, width='stretch', hide_index=True)
 
         conn.close()
 

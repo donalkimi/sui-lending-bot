@@ -217,6 +217,24 @@ class PositionService:
 
         self.conn.commit()
 
+    def delete_position(self, position_id: str) -> None:
+        """
+        Permanently delete a position from the database.
+
+        Use with caution - this is irreversible. Prefer close_position()
+        for normal position lifecycle management.
+
+        Args:
+            position_id: UUID of position to delete
+        """
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            DELETE FROM positions
+            WHERE position_id = ?
+        """, (position_id,))
+
+        self.conn.commit()
+
     def get_active_positions(self) -> pd.DataFrame:
         """Get all active positions"""
         query = """
