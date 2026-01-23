@@ -1103,6 +1103,33 @@ def render_positions_table_tab():
                     else:
                         return f"{liq_result['pct_distance'] * 100:.2f}%"
 
+                # Helper function to format target liquidation distance
+                def get_target_liq_distance_display(target_liq_dist_input: float, action: str) -> str:
+                    """
+                    Get the appropriate liquidation distance to display based on action type.
+
+                    Args:
+                        target_liq_dist_input: User's target liquidation distance (e.g., 0.20)
+                        action: 'Lend' or 'Borrow'
+
+                    Returns:
+                        Formatted percentage string
+                    """
+                    if action == 'Lend':
+                        # Show original user input (lending protection)
+                        return f"{target_liq_dist_input * 100:.2f}%"
+                    else:  # action == 'Borrow'
+                        # Transform and show liq_max (borrowing protection)
+                        liq_max = target_liq_dist_input / (1 - target_liq_dist_input)
+                        return f"{liq_max * 100:.2f}%"
+
+                # Calculate target weights using PositionCalculator with entry liquidation distance
+                target_calc = PositionCalculator(liquidation_distance=position['entry_liquidation_distance'])
+                target_positions = target_calc.calculate_positions(
+                    collateral_ratio_A=position['entry_collateral_ratio_1A'],
+                    collateral_ratio_B=position['entry_collateral_ratio_2B']
+                )
+
                 # Calculate current collateral and loan values using ENTRY token amounts and LIVE PRICES
                 # Token amounts don't change - only prices change
                 # Protocol A (Lend token1, Borrow token2)
@@ -1161,6 +1188,7 @@ def render_positions_table_tab():
                     'Token': position['token1'],
                     'Action': 'Lend',
                     'Weight': f"{position['L_A']:.4f}",
+                    'Target Weight': f"{target_positions['L_A']:.4f}",
                     'Entry Rate': f"{position['entry_lend_rate_1A'] * 100:.2f}%",
                     'Entry Token Amount': f"{entry_token_amount_1A:,.{precision_1A}f}",
                     'Current Token Amount': f"{current_token_amount_1A:,.{precision_1A}f}",
@@ -1169,6 +1197,7 @@ def render_positions_table_tab():
                     'Live Rate': f"{lend_1A * 100:.2f}%",
                     'Current Liq Price': format_liq_price(liq_1A),
                     'Liq Distance': format_liq_distance(liq_1A),
+                    'Target Liq Dist': get_target_liq_distance_display(position['entry_liquidation_distance'], 'Lend'),
                 })
 
                 # Row 2: Protocol A - Borrow token2
@@ -1177,6 +1206,7 @@ def render_positions_table_tab():
                     'Token': position['token2'],
                     'Action': 'Borrow',
                     'Weight': f"{position['B_A']:.4f}",
+                    'Target Weight': f"{target_positions['B_A']:.4f}",
                     'Entry Rate': f"{position['entry_borrow_rate_2A'] * 100:.2f}%",
                     'Entry Token Amount': f"{entry_token_amount_2A:,.{precision_2A}f}",
                     'Current Token Amount': f"{current_token_amount_2A:,.{precision_2A}f}",
@@ -1185,6 +1215,7 @@ def render_positions_table_tab():
                     'Live Rate': f"{borrow_2A * 100:.2f}%",
                     'Current Liq Price': format_liq_price(liq_2A),
                     'Liq Distance': format_liq_distance(liq_2A),
+                    'Target Liq Dist': get_target_liq_distance_display(position['entry_liquidation_distance'], 'Borrow'),
                 })
 
                 # Row 3: Protocol B - Lend token2
@@ -1193,6 +1224,7 @@ def render_positions_table_tab():
                     'Token': position['token2'],
                     'Action': 'Lend',
                     'Weight': f"{position['L_B']:.4f}",
+                    'Target Weight': f"{target_positions['L_B']:.4f}",
                     'Entry Rate': f"{position['entry_lend_rate_2B'] * 100:.2f}%",
                     'Entry Token Amount': f"{entry_token_amount_2B:,.{precision_2B}f}",
                     'Current Token Amount': f"{current_token_amount_2B:,.{precision_2B}f}",
@@ -1201,6 +1233,7 @@ def render_positions_table_tab():
                     'Live Rate': f"{lend_2B * 100:.2f}%",
                     'Current Liq Price': format_liq_price(liq_2B),
                     'Liq Distance': format_liq_distance(liq_2B),
+                    'Target Liq Dist': get_target_liq_distance_display(position['entry_liquidation_distance'], 'Lend'),
                 })
 
                 # Row 4: Protocol B - Borrow token3 (4th leg)
@@ -1209,6 +1242,7 @@ def render_positions_table_tab():
                     'Token': position['token3'],
                     'Action': 'Borrow',
                     'Weight': f"{position['B_B']:.4f}",
+                    'Target Weight': f"{target_positions['B_B']:.4f}",
                     'Entry Rate': f"{position['entry_borrow_rate_3B'] * 100:.2f}%",
                     'Entry Token Amount': f"{entry_token_amount_3B:,.{precision_3B}f}",
                     'Current Token Amount': f"{current_token_amount_3B:,.{precision_3B}f}",
@@ -1217,6 +1251,7 @@ def render_positions_table_tab():
                     'Live Rate': f"{borrow_3B * 100:.2f}%",
                     'Current Liq Price': format_liq_price(liq_3B),
                     'Liq Distance': format_liq_distance(liq_3B),
+                    'Target Liq Dist': get_target_liq_distance_display(position['entry_liquidation_distance'], 'Borrow'),
                 })
 
                 # Display detail table with styling
