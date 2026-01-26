@@ -567,8 +567,11 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
     # ========================================
     # Calculate token amounts (with zero-division protection)
     entry_token_amount_1A = (strategy['L_A'] * deployment_usd) / strategy['P1_A'] if strategy['P1_A'] > 0 else 0
-    entry_token_amount_2A = (strategy['B_A'] * deployment_usd) / strategy['P2_A'] if strategy['P2_A'] > 0 else 0
-    entry_token_amount_2B = (strategy['L_B'] * deployment_usd) / strategy['P2_B'] if strategy['P2_B'] > 0 else 0
+    # Token 2: Calculate using Protocol A price (source of borrowed tokens)
+    # This ensures the same token quantity is used for both Protocol A and Protocol B
+    entry_token_amount_2 = (strategy['B_A'] * deployment_usd) / strategy['P2_A'] if strategy['P2_A'] > 0 else 0
+    entry_token_amount_2A = entry_token_amount_2  # Borrowed from Protocol A
+    entry_token_amount_2B = entry_token_amount_2  # Same tokens lent to Protocol B
     entry_token_amount_3B = (strategy['B_B'] * deployment_usd) / strategy['P3_B'] if strategy['P3_B'] > 0 else 0
 
     # Calculate position sizes in USD (weight * deployment_usd)
@@ -889,9 +892,12 @@ def render_rate_tables_tab(lend_rates: pd.DataFrame, borrow_rates: pd.DataFrame,
     st.dataframe(borrow_fees_display, width='stretch', hide_index=True)
 
 
-def render_positions_table_tab():
+def render_positions_table_tab(timestamp_seconds: int):
     """
     Render simple positions table showing all active positions
+
+    Args:
+        timestamp_seconds: Dashboard-selected timestamp (Unix seconds) representing "current time"
     """
     st.header("💼 Active Positions")
 
@@ -908,11 +914,9 @@ def render_positions_table_tab():
             conn.close()
             return
 
-        # Get latest rates from rates_snapshot table
-        cursor = conn.cursor()
-        cursor.execute("SELECT MAX(timestamp) FROM rates_snapshot")
-        latest_timestamp_str = cursor.fetchone()[0]
-        latest_timestamp = to_seconds(latest_timestamp_str)  # Convert to Unix timestamp
+        # Use dashboard-selected timestamp as "current time"
+        latest_timestamp = timestamp_seconds
+        latest_timestamp_str = to_datetime_str(timestamp_seconds)
 
         # Query all rates and prices at latest timestamp
         rates_query = """
@@ -1018,16 +1022,20 @@ def render_positions_table_tab():
             # STAGE 2-3: Build detail table inside expander
             with st.expander(title, expanded=False):
                 # Summary table (1 row with key metrics)
+                # Calculate PnL (ex fees) = current_value - start_capital + fees
+                pnl_ex_fees = pv_result['current_value'] - position['deployment_usd'] + pv_result['fees']
+
                 summary_data = [{
                     'Entry Time': to_datetime_str(position['entry_timestamp']),
                     'Token Flow': token_flow,
                     'Protocols': protocol_pair,
-                    'Start Capital': f"${position['deployment_usd']:,.2f}",
                     'Entry APR': f"{position['entry_net_apr'] * 100:.2f}%",
-                    'Current APR': f"{current_net_apr_decimal * 100:.2f}%",
                     'Realized APR': f"{realized_apr * 100:.2f}%",
+                    'Current APR': f"{current_net_apr_decimal * 100:.2f}%",
+                    'Start Capital': f"${position['deployment_usd']:,.2f}",
+                    'PnL (ex fees)': f"${pnl_ex_fees:,.2f}",
+                    'Fees': f"${pv_result['fees']:,.2f}",
                     'Current Value': f"${pv_result['current_value']:,.2f}",
-                    'Entry Liq Distance': f"{position['entry_liquidation_distance'] * 100:.2f}%",
                 }]
                 summary_df = pd.DataFrame(summary_data)
 
@@ -1045,9 +1053,25 @@ def render_positions_table_tab():
                             pass
                     return ''
 
+                def color_pnl(val):
+                    """Color positive PnL green, negative red"""
+                    if isinstance(val, str) and '$' in val:
+                        try:
+                            numeric_val = float(val.replace('$', '').replace(',', ''))
+                            if numeric_val > 0:
+                                return 'color: green'
+                            elif numeric_val < 0:
+                                return 'color: red'
+                        except (ValueError, TypeError):
+                            pass
+                    return ''
+
                 styled_summary_df = summary_df.style.map(
                     color_apr,
                     subset=['Entry APR', 'Current APR', 'Realized APR']
+                ).map(
+                    color_pnl,
+                    subset=['PnL (ex fees)']
                 )
                 st.dataframe(styled_summary_df, width='stretch', hide_index=True)
 
@@ -1059,8 +1083,11 @@ def render_positions_table_tab():
 
                 # Calculate entry token amounts (Stage 3) with zero-division protection
                 entry_token_amount_1A = (position['L_A'] * position['deployment_usd']) / position['entry_price_1A'] if position['entry_price_1A'] > 0 else 0
-                entry_token_amount_2A = (position['B_A'] * position['deployment_usd']) / position['entry_price_2A'] if position['entry_price_2A'] > 0 else 0
-                entry_token_amount_2B = (position['L_B'] * position['deployment_usd']) / position['entry_price_2B'] if position['entry_price_2B'] > 0 else 0
+                # Token 2: Calculate using Protocol A price (source of borrowed tokens)
+                # This ensures the same token quantity is used for both Protocol A and Protocol B
+                entry_token_amount_2 = (position['B_A'] * position['deployment_usd']) / position['entry_price_2A'] if position['entry_price_2A'] > 0 else 0
+                entry_token_amount_2A = entry_token_amount_2  # Borrowed from Protocol A
+                entry_token_amount_2B = entry_token_amount_2  # Same tokens lent to Protocol B
                 entry_token_amount_3B = (position['B_B'] * position['deployment_usd']) / position['entry_price_3B'] if position['entry_price_3B'] > 0 else 0
 
                 # STAGE 4: Get live prices for all tokens
@@ -1068,12 +1095,6 @@ def render_positions_table_tab():
                 live_price_2A = get_price(position['token2'], position['protocol_A'])
                 live_price_2B = get_price(position['token2'], position['protocol_B'])
                 live_price_3B = get_price(position['token3'], position['protocol_B'])
-
-                # STAGE 4: Calculate current token amounts (price-rebalanced to maintain USD values)
-                current_token_amount_1A = (position['L_A'] * position['deployment_usd']) / live_price_1A if live_price_1A > 0 else 0
-                current_token_amount_2A = (position['B_A'] * position['deployment_usd']) / live_price_2A if live_price_2A > 0 else 0
-                current_token_amount_2B = (position['L_B'] * position['deployment_usd']) / live_price_2B if live_price_2B > 0 else 0
-                current_token_amount_3B = (position['B_B'] * position['deployment_usd']) / live_price_3B if live_price_3B > 0 else 0
 
                 # Calculate dynamic precision for token amounts (based on live prices)
                 precision_1A = get_token_precision(live_price_1A)
@@ -1130,6 +1151,16 @@ def render_positions_table_tab():
                     collateral_ratio_B=position['entry_collateral_ratio_2B']
                 )
 
+                # Calculate CURRENT token amounts using TARGET weights and LIVE prices
+                # This shows what the position SHOULD be at current market conditions
+                current_token_amount_1A = (target_positions['L_A'] * position['deployment_usd']) / live_price_1A if live_price_1A > 0 else 0
+                # Token 2: Calculate using Protocol A price and TARGET weight
+                # This ensures the same token quantity is used for both Protocol A and Protocol B
+                current_token_amount_2 = (target_positions['B_A'] * position['deployment_usd']) / live_price_2A if live_price_2A > 0 else 0
+                current_token_amount_2A = current_token_amount_2  # Borrowed from Protocol A
+                current_token_amount_2B = current_token_amount_2  # Same tokens lent to Protocol B
+                current_token_amount_3B = (target_positions['B_B'] * position['deployment_usd']) / live_price_3B if live_price_3B > 0 else 0
+
                 # Calculate current collateral and loan values using ENTRY token amounts and LIVE PRICES
                 # Token amounts don't change - only prices change
                 # Protocol A (Lend token1, Borrow token2)
@@ -1182,6 +1213,122 @@ def render_positions_table_tab():
                     side='borrowing'
                 )
 
+                # Calculate entry liquidation distances (using entry prices instead of live prices)
+                # Protocol A (using entry collateral and loan values)
+                entry_collateral_A = entry_token_amount_1A * position['entry_price_1A']
+                entry_loan_A = entry_token_amount_2A * position['entry_price_2A']
+
+                entry_liq_1A = calc.calculate_liquidation_price(
+                    collateral_value=entry_collateral_A,
+                    loan_value=entry_loan_A,
+                    lending_token_price=position['entry_price_1A'],
+                    borrowing_token_price=position['entry_price_2A'],
+                    lltv=position['entry_collateral_ratio_1A'],
+                    side='lending'
+                )
+
+                entry_liq_2A = calc.calculate_liquidation_price(
+                    collateral_value=entry_collateral_A,
+                    loan_value=entry_loan_A,
+                    lending_token_price=position['entry_price_1A'],
+                    borrowing_token_price=position['entry_price_2A'],
+                    lltv=position['entry_collateral_ratio_1A'],
+                    side='borrowing'
+                )
+
+                # Protocol B (using entry collateral and loan values)
+                entry_collateral_B = entry_token_amount_2B * position['entry_price_2B']
+                entry_loan_B = entry_token_amount_3B * position['entry_price_3B']
+
+                entry_liq_2B = calc.calculate_liquidation_price(
+                    collateral_value=entry_collateral_B,
+                    loan_value=entry_loan_B,
+                    lending_token_price=position['entry_price_2B'],
+                    borrowing_token_price=position['entry_price_3B'],
+                    lltv=position['entry_collateral_ratio_2B'],
+                    side='lending'
+                )
+
+                entry_liq_3B = calc.calculate_liquidation_price(
+                    collateral_value=entry_collateral_B,
+                    loan_value=entry_loan_B,
+                    lending_token_price=position['entry_price_2B'],
+                    borrowing_token_price=position['entry_price_3B'],
+                    lltv=position['entry_collateral_ratio_2B'],
+                    side='borrowing'
+                )
+
+                # Helper function to format token rebalance display
+                def format_token_rebalance(rebalance_amount: float, action: str, precision: int) -> str:
+                    """
+                    Format token rebalance display based on action type.
+
+                    Args:
+                        rebalance_amount: current_token_amount - entry_token_amount
+                        action: 'Lend' or 'Borrow'
+                        precision: Decimal places for token amount
+
+                    Returns:
+                        Formatted string with action and amount
+                    """
+                    abs_amount = abs(rebalance_amount)
+
+                    if action == 'Lend':
+                        if rebalance_amount > 0:
+                            return f"Add {abs_amount:,.{precision}f}"
+                        elif rebalance_amount < 0:
+                            return f"Withdraw {abs_amount:,.{precision}f}"
+                        else:
+                            return "No change"
+                    else:  # action == 'Borrow'
+                        if rebalance_amount > 0:
+                            return f"Borrow {abs_amount:,.{precision}f}"
+                        elif rebalance_amount < 0:
+                            return f"Repay {abs_amount:,.{precision}f}"
+                        else:
+                            return "No change"
+
+                # Calculate token rebalance amounts for all legs
+                token_rebalance_1A = current_token_amount_1A - entry_token_amount_1A
+                token_rebalance_2A = current_token_amount_2A - entry_token_amount_2A
+                token_rebalance_2B = current_token_amount_2B - entry_token_amount_2B
+                token_rebalance_3B = current_token_amount_3B - entry_token_amount_3B
+
+                # Calculate rebalance size in USD for all legs
+                rebalance_usd_1A = token_rebalance_1A * live_price_1A
+                rebalance_usd_2A = token_rebalance_2A * live_price_2A
+                rebalance_usd_2B = token_rebalance_2B * live_price_2B
+                rebalance_usd_3B = token_rebalance_3B * live_price_3B
+
+                # Helper function to format rebalance size in USD
+                def format_rebalance_usd(rebalance_usd: float, action: str) -> str:
+                    """
+                    Format rebalance size in USD based on action type.
+
+                    Args:
+                        rebalance_usd: token_rebalance × live_price
+                        action: 'Lend' or 'Borrow'
+
+                    Returns:
+                        Formatted string with action prefix and USD amount
+                    """
+                    abs_amount = abs(rebalance_usd)
+
+                    if action == 'Lend':
+                        if rebalance_usd > 0:
+                            return f"Add ${abs_amount:,.2f}"
+                        elif rebalance_usd < 0:
+                            return f"Withdraw ${abs_amount:,.2f}"
+                        else:
+                            return "$0.00"
+                    else:  # action == 'Borrow'
+                        if rebalance_usd > 0:
+                            return f"Borrow ${abs_amount:,.2f}"
+                        elif rebalance_usd < 0:
+                            return f"Repay ${abs_amount:,.2f}"
+                        else:
+                            return "$0.00"
+
                 # Row 1: Protocol A - Lend token1
                 detail_data.append({
                     'Protocol': position['protocol_A'],
@@ -1192,12 +1339,14 @@ def render_positions_table_tab():
                     'Entry Rate': f"{position['entry_lend_rate_1A'] * 100:.2f}%",
                     'Entry Token Amount': f"{entry_token_amount_1A:,.{precision_1A}f}",
                     'Current Token Amount': f"{current_token_amount_1A:,.{precision_1A}f}",
+                    'Token Rebalance': format_token_rebalance(token_rebalance_1A, 'Lend', precision_1A),
+                    'Rebalance Size $$$': format_rebalance_usd(rebalance_usd_1A, 'Lend'),
                     'Entry Price': f"${position['entry_price_1A']:.4f}",
                     'Live Price': f"${live_price_1A:.4f}",
                     'Live Rate': f"{lend_1A * 100:.2f}%",
                     'Current Liq Price': format_liq_price(liq_1A),
                     'Liq Distance': format_liq_distance(liq_1A),
-                    'Target Liq Dist': get_target_liq_distance_display(position['entry_liquidation_distance'], 'Lend'),
+                    'Entry Liq Dist': format_liq_distance(entry_liq_1A),
                 })
 
                 # Row 2: Protocol A - Borrow token2
@@ -1210,12 +1359,14 @@ def render_positions_table_tab():
                     'Entry Rate': f"{position['entry_borrow_rate_2A'] * 100:.2f}%",
                     'Entry Token Amount': f"{entry_token_amount_2A:,.{precision_2A}f}",
                     'Current Token Amount': f"{current_token_amount_2A:,.{precision_2A}f}",
+                    'Token Rebalance': format_token_rebalance(token_rebalance_2A, 'Borrow', precision_2A),
+                    'Rebalance Size $$$': format_rebalance_usd(rebalance_usd_2A, 'Borrow'),
                     'Entry Price': f"${position['entry_price_2A']:.4f}",
                     'Live Price': f"${live_price_2A:.4f}",
                     'Live Rate': f"{borrow_2A * 100:.2f}%",
                     'Current Liq Price': format_liq_price(liq_2A),
                     'Liq Distance': format_liq_distance(liq_2A),
-                    'Target Liq Dist': get_target_liq_distance_display(position['entry_liquidation_distance'], 'Borrow'),
+                    'Entry Liq Dist': format_liq_distance(entry_liq_2A),
                 })
 
                 # Row 3: Protocol B - Lend token2
@@ -1228,12 +1379,14 @@ def render_positions_table_tab():
                     'Entry Rate': f"{position['entry_lend_rate_2B'] * 100:.2f}%",
                     'Entry Token Amount': f"{entry_token_amount_2B:,.{precision_2B}f}",
                     'Current Token Amount': f"{current_token_amount_2B:,.{precision_2B}f}",
+                    'Token Rebalance': format_token_rebalance(token_rebalance_2B, 'Lend', precision_2B),
+                    'Rebalance Size $$$': format_rebalance_usd(rebalance_usd_2B, 'Lend'),
                     'Entry Price': f"${position['entry_price_2B']:.4f}",
                     'Live Price': f"${live_price_2B:.4f}",
                     'Live Rate': f"{lend_2B * 100:.2f}%",
                     'Current Liq Price': format_liq_price(liq_2B),
                     'Liq Distance': format_liq_distance(liq_2B),
-                    'Target Liq Dist': get_target_liq_distance_display(position['entry_liquidation_distance'], 'Lend'),
+                    'Entry Liq Dist': format_liq_distance(entry_liq_2B),
                 })
 
                 # Row 4: Protocol B - Borrow token3 (4th leg)
@@ -1246,12 +1399,14 @@ def render_positions_table_tab():
                     'Entry Rate': f"{position['entry_borrow_rate_3B'] * 100:.2f}%",
                     'Entry Token Amount': f"{entry_token_amount_3B:,.{precision_3B}f}",
                     'Current Token Amount': f"{current_token_amount_3B:,.{precision_3B}f}",
+                    'Token Rebalance': format_token_rebalance(token_rebalance_3B, 'Borrow', precision_3B),
+                    'Rebalance Size $$$': format_rebalance_usd(rebalance_usd_3B, 'Borrow'),
                     'Entry Price': f"${position['entry_price_3B']:.4f}",
                     'Live Price': f"${live_price_3B:.4f}",
                     'Live Rate': f"{borrow_3B * 100:.2f}%",
                     'Current Liq Price': format_liq_price(liq_3B),
                     'Liq Distance': format_liq_distance(liq_3B),
-                    'Target Liq Dist': get_target_liq_distance_display(position['entry_liquidation_distance'], 'Borrow'),
+                    'Entry Liq Dist': format_liq_distance(entry_liq_3B),
                 })
 
                 # Display detail table with styling
@@ -1293,6 +1448,15 @@ def render_positions_table_tab():
                             pass
                     return ''
 
+                def color_rebalance(val):
+                    """Color rebalance actions: Add/Repay green, Withdraw/Borrow red"""
+                    if isinstance(val, str):
+                        if 'Add' in val or 'Repay' in val:
+                            return 'color: green'
+                        elif 'Withdraw' in val or 'Borrow' in val:
+                            return 'color: red'
+                    return ''
+
                 # Apply styling to rates and liquidation columns
                 styled_detail_df = detail_df.style.map(
                     color_rate,
@@ -1303,6 +1467,15 @@ def render_positions_table_tab():
                 ).map(
                     color_liq_distance,
                     subset=['Liq Distance']
+                ).map(
+                    color_liq_distance,
+                    subset=['Entry Liq Dist']
+                ).map(
+                    color_rebalance,
+                    subset=['Token Rebalance']
+                ).map(
+                    color_rebalance,
+                    subset=['Rebalance Size $$$']
                 )
 
                 st.dataframe(styled_detail_df, width='stretch', hide_index=True)
@@ -1806,7 +1979,7 @@ def render_dashboard(data_loader: DataLoader, mode: str):
 
     with tab4:
         tab4_start = time.time()
-        render_positions_table_tab()
+        render_positions_table_tab(timestamp_seconds)
         tab4_time = (time.time() - tab4_start) * 1000
         print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] Tab4 (Positions) rendered in {tab4_time:.1f}ms")
 
