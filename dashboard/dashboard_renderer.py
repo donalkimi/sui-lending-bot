@@ -642,7 +642,7 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
         'Protocol': strategy['protocol_A'],
         'Token': strategy['token1'],
         'Action': 'Lend',
-        'Entry CF': f"{strategy['entry_collateral_ratio_1A']:.2%}",
+        'Entry CF': f"{strategy['collateral_ratio_1A']:.2%}",
         'Weight': f"{strategy['L_A']:.4f}",
         'Rate': f"{strategy['lend_rate_1A'] * 100:.2f}%" if strategy['lend_rate_1A'] > 0 else "",
         'Token Amount': f"{entry_token_amount_1A:,.{precision_1A}f}",
@@ -662,7 +662,7 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
         'Token': strategy['token2'],
         'Action': 'Borrow',
         'Weight': f"{strategy['B_A']:.4f}",
-        'Entry CF': f"{strategy['entry_collateral_ratio_1A']:.2%}",
+        'Entry CF': f"{strategy['collateral_ratio_1A']:.2%}",
         'Rate': f"{strategy['borrow_rate_2A'] * 100:.2f}%" if strategy['borrow_rate_2A'] > 0 else "",
         'Token Amount': f"{entry_token_amount_2A:,.{precision_2A}f}",
         'Size ($$$)': f"${position_size_2A:,.2f}",
@@ -681,7 +681,7 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
         'Token': strategy['token2'],
         'Action': 'Lend',
         'Weight': f"{strategy['L_B']:.4f}",
-        'Entry CF': f"{strategy['entry_collateral_ratio_2A']:.2%}",
+        'Entry CF': f"{strategy['collateral_ratio_2B']:.2%}",
         'Rate': f"{strategy['lend_rate_2B'] * 100:.2f}%" if strategy['lend_rate_2B'] > 0 else "",
         'Token Amount': f"{entry_token_amount_2B:,.{precision_2B}f}",
         'Size ($$$)': f"${position_size_2B:,.2f}",
@@ -700,7 +700,7 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
         'Token': strategy['token3'],
         'Action': 'Borrow',
         'Weight': f"{strategy['B_B']:.4f}",
-        'Entry CF': f"{strategy['entry_collateral_ratio_2A']:.2%}",
+        'Entry CF': f"{strategy['collateral_ratio_2B']:.2%}",
         'Rate': f"{strategy['borrow_rate_3B'] * 100:.2f}%" if strategy['borrow_rate_3B'] > 0 else "",
         'Token Amount': f"{entry_token_amount_3B:,.{precision_3B}f}",
         'Size ($$$)': f"${position_size_3B:,.2f}",
@@ -1029,15 +1029,25 @@ def render_positions_table_tab(timestamp_seconds: int):
                 # Calculate PnL (ex fees) = current_value - start_capital + fees
                 pnl_ex_fees = pv_result['current_value'] - position['deployment_usd'] + pv_result['fees']
 
+                # Determine entry time label (show last rebalance or original entry)
+                if pd.notna(position.get('last_rebalance_timestamp')):
+                    entry_time_label = f"{to_datetime_str(position['last_rebalance_timestamp'])} (Last Rebalance)"
+                else:
+                    entry_time_label = f"{to_datetime_str(position['entry_timestamp'])} (Original)"
+
+                # Get accumulated realised PnL (from previous rebalances)
+                accumulated_realised_pnl = position.get('accumulated_realised_pnl', 0.0) or 0.0
+
                 summary_data = [{
-                    'Entry Time': to_datetime_str(position['entry_timestamp']),
+                    'Entry Time': entry_time_label,
                     'Token Flow': token_flow,
                     'Protocols': protocol_pair,
                     'Entry APR': f"{position['entry_net_apr'] * 100:.2f}%",
                     'Realized APR': f"{realized_apr * 100:.2f}%",
                     'Current APR': f"{current_net_apr_decimal * 100:.2f}%",
                     'Start Capital': f"${position['deployment_usd']:,.2f}",
-                    'PnL (ex fees)': f"${pnl_ex_fees:,.2f}",
+                    'Unrealised PnL': f"${pnl_ex_fees:,.2f}",
+                    'Accumulated Realised PnL': f"${accumulated_realised_pnl:,.2f}",
                     'Fees': f"${pv_result['fees']:,.2f}",
                     'Current Value': f"${pv_result['current_value']:,.2f}",
                 }]
@@ -1075,7 +1085,7 @@ def render_positions_table_tab(timestamp_seconds: int):
                     subset=['Entry APR', 'Current APR', 'Realized APR']
                 ).map(
                     color_pnl,
-                    subset=['PnL (ex fees)']
+                    subset=['Unrealised PnL', 'Accumulated Realised PnL']
                 )
                 st.dataframe(styled_summary_df, width='stretch', hide_index=True)
 
@@ -1498,6 +1508,235 @@ def render_positions_table_tab(timestamp_seconds: int):
                 )
 
                 st.dataframe(styled_detail_df, width='stretch', hide_index=True)
+
+                # Add separator
+                st.markdown("---")
+
+                # Check if there's a pending action for THIS position
+                has_pending_rebalance = ('pending_rebalance' in st.session_state and
+                                        st.session_state.pending_rebalance.get('position_id') == position['position_id'])
+                has_pending_close = ('pending_close' in st.session_state and
+                                    st.session_state.pending_close.get('position_id') == position['position_id'])
+
+                # Only show buttons if NO pending action for this position
+                if not has_pending_rebalance and not has_pending_close:
+                    # Buttons for rebalance and close
+                    col1, col2 = st.columns(2)
+
+                    with col1:
+                        if st.button(
+                            "🔄 Rebalance Position",
+                            key=f"rebalance_{position['position_id']}",
+                            help="Snapshot current PnL and adjust token2 amounts to restore liquidation distance to target",
+                            use_container_width=True
+                        ):
+                            st.session_state.pending_rebalance = {
+                                'position_id': position['position_id'],
+                                'timestamp': latest_timestamp
+                            }
+                            st.rerun()
+
+                    with col2:
+                        if st.button(
+                            "❌ Close Position",
+                            key=f"close_{position['position_id']}",
+                            help="Close position and realize all PnL",
+                            use_container_width=True
+                        ):
+                            st.session_state.pending_close = {
+                                'position_id': position['position_id'],
+                                'timestamp': latest_timestamp
+                            }
+                            st.rerun()
+
+                # Check for pending rebalance confirmation (only for this specific position)
+                if has_pending_rebalance:
+                    pending = st.session_state.pending_rebalance
+                    st.warning("⚠️ Confirm Rebalance")
+                    st.write("This will:")
+                    st.write("1. Snapshot current position state and realised PnL (all 4 legs)")
+                    st.write("2. Adjust token2 amounts to restore $$$ balance to target weightings")
+                    st.write("3. Add rebalance record to history")
+                    st.write("4. Move token2 between Protocol A (borrow) and Protocol B (lend)")
+                    st.write("")
+                    st.info("Note: Weightings (L_A, B_A, L_B, B_B) remain constant. Only token amounts adjust.")
+
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        if st.button("✅ Confirm Rebalance", key=f"confirm_rebalance_{position['position_id']}"):
+                            try:
+                                rebalance_id = service.rebalance_position(
+                                    position_id=pending['position_id'],
+                                    live_timestamp=pending['timestamp'],
+                                    rebalance_reason='manual'
+                                )
+                                st.success(f"✅ Position rebalanced successfully! Rebalance ID: {rebalance_id[:8]}...")
+                                del st.session_state.pending_rebalance
+                                st.session_state.skip_modal_reopen = True  # Prevent strategy modal from appearing
+                                import time
+                                time.sleep(1)
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"❌ Error: {e}")
+                                import traceback
+                                st.code(traceback.format_exc())
+
+                    with col2:
+                        if st.button("❌ Cancel", key=f"cancel_rebalance_{position['position_id']}"):
+                            del st.session_state.pending_rebalance
+                            st.session_state.skip_modal_reopen = True  # Prevent strategy modal from appearing
+                            st.rerun()
+
+                # Check for pending close confirmation (only for this specific position)
+                if has_pending_close:
+                    pending = st.session_state.pending_close
+                    st.warning("⚠️ Confirm Close Position")
+                    st.write("This will:")
+                    st.write("1. Create final rebalance snapshot with current PnL")
+                    st.write("2. Mark position as closed")
+                    st.write("3. All PnL will be realized and recorded")
+                    st.write("")
+                    st.info("This action cannot be undone.")
+
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        if st.button("✅ Confirm Close", key=f"confirm_close_{position['position_id']}"):
+                            try:
+                                service.close_position_with_snapshot(
+                                    position_id=pending['position_id'],
+                                    close_timestamp=pending['timestamp'],
+                                    close_reason='manual_close',
+                                    close_notes='Closed via dashboard'
+                                )
+                                st.success("✅ Position closed successfully!")
+                                del st.session_state.pending_close
+                                st.session_state.skip_modal_reopen = True  # Prevent strategy modal from appearing
+                                import time
+                                time.sleep(1)
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"❌ Error: {e}")
+                                import traceback
+                                st.code(traceback.format_exc())
+
+                    with col2:
+                        if st.button("❌ Cancel", key=f"cancel_close_{position['position_id']}"):
+                            del st.session_state.pending_close
+                            st.session_state.skip_modal_reopen = True  # Prevent strategy modal from appearing
+                            st.rerun()
+
+                # Display rebalance history
+                rebalances = service.get_rebalance_history(position['position_id'])
+
+                if not rebalances.empty:
+                    st.markdown("---")
+                    st.markdown("### 📊 Rebalance History")
+
+                    for _, rebalance in rebalances.iterrows():
+                        # Build expander title with PnL indicator
+                        realised_pnl = rebalance['realised_pnl']
+                        pnl_indicator = "🟢" if realised_pnl >= 0 else "🔴"
+
+                        # Timestamps from DB are already datetime strings
+                        rebalance_title = (
+                            f"▼ Rebalance #{int(rebalance['sequence_number'])}: "
+                            f"{rebalance['opening_timestamp']} → "
+                            f"{rebalance['closing_timestamp']} | "
+                            f"Realised PnL: {pnl_indicator} ${realised_pnl:,.2f}"
+                        )
+
+                        with st.expander(rebalance_title, expanded=False):
+                            # Build rebalance detail table with all 4 legs
+                            rebalance_data = []
+
+                            # Helper to get protocol for each leg
+                            def get_protocol_for_leg(leg_id):
+                                if leg_id in ['1A', '2A']:
+                                    return position['protocol_A']
+                                else:  # '2B', '3B'
+                                    return position['protocol_B']
+
+                            # Helper to get token symbol for each leg
+                            def get_token_for_leg(leg_id):
+                                if leg_id == '1A':
+                                    return position['token1']
+                                elif leg_id in ['2A', '2B']:
+                                    return position['token2']
+                                else:  # '3B'
+                                    return position['token3']
+
+                            # Helper to get action for each leg
+                            def get_action_for_leg(leg_id):
+                                if leg_id in ['1A', '2B']:
+                                    return 'Lend'
+                                else:  # '2A', '3B'
+                                    return 'Borrow'
+
+                            # Build rows for all 4 legs
+                            for leg in ['1A', '2A', '2B', '3B']:
+                                action = get_action_for_leg(leg)
+
+                                # Determine rate column names based on action
+                                if action == 'Lend':
+                                    opening_rate_col = f'opening_lend_rate_{leg}'
+                                    closing_rate_col = f'closing_lend_rate_{leg}'
+                                    weight_col = f'L_{"A" if leg in ["1A", "2A"] else "B"}'
+                                else:  # Borrow
+                                    opening_rate_col = f'opening_borrow_rate_{leg}'
+                                    closing_rate_col = f'closing_borrow_rate_{leg}'
+                                    weight_col = f'B_{"A" if leg in ["1A", "2A"] else "B"}'
+
+                                row = {
+                                    'Protocol': get_protocol_for_leg(leg),
+                                    'Token': get_token_for_leg(leg),
+                                    'Action': action,
+                                    'Weight': f"{rebalance[weight_col]:.4f}",
+                                    # DESIGN PRINCIPLE: Rates stored as decimals, convert to % for display
+                                    'Entry Rate': f"{rebalance[opening_rate_col] * 100:.2f}%",
+                                    'Close Rate': f"{rebalance[closing_rate_col] * 100:.2f}%",
+                                    'Entry Price': f"${rebalance[f'opening_price_{leg}']:.4f}",
+                                    'Close Price': f"${rebalance[f'closing_price_{leg}']:.4f}",
+                                    'Entry Token Amt': f"{rebalance[f'entry_token_amount_{leg}']:,.4f}",
+                                    'Exit Token Amt': f"{rebalance[f'exit_token_amount_{leg}']:,.4f}",
+                                    'Entry $$$ Size': f"${rebalance[f'entry_size_usd_{leg}']:,.2f}",
+                                    'Exit $$$ Size': f"${rebalance[f'exit_size_usd_{leg}']:,.2f}",
+                                    'Entry Action': rebalance[f'entry_action_{leg}'] or '',
+                                    'Exit Action': rebalance[f'exit_action_{leg}'] or ''
+                                }
+                                rebalance_data.append(row)
+
+                            rebalance_df = pd.DataFrame(rebalance_data)
+                            # DESIGN PRINCIPLE: Use width='stretch' instead of deprecated use_container_width=True
+                            st.dataframe(rebalance_df, width='stretch', hide_index=True)
+
+                            # Summary metrics
+                            st.markdown("**Segment Summary**")
+                            col1, col2, col3, col4 = st.columns(4)
+                            with col1:
+                                st.metric("Realised Fees", f"${rebalance['realised_fees']:,.2f}")
+                            with col2:
+                                st.metric("Realised PnL", f"${rebalance['realised_pnl']:,.2f}")
+                            with col3:
+                                st.metric("Lend Earnings", f"${rebalance['realised_lend_earnings']:,.2f}")
+                            with col4:
+                                st.metric("Borrow Costs", f"${rebalance['realised_borrow_costs']:,.2f}")
+
+                            # Calculate holding days
+                            # DESIGN PRINCIPLE: Convert datetime strings to Unix seconds for arithmetic
+                            from utils.time_helpers import to_seconds
+                            holding_seconds = (
+                                to_seconds(rebalance['closing_timestamp']) -
+                                to_seconds(rebalance['opening_timestamp'])
+                            )
+                            holding_days = holding_seconds / 86400
+
+                            st.caption(f"Holding period: {holding_days:.1f} days")
+
+                            # Display reason and notes if available
+                            if pd.notna(rebalance.get('rebalance_reason')):
+                                st.caption(f"Reason: {rebalance['rebalance_reason']}")
+                            if pd.notna(rebalance.get('rebalance_notes')):
+                                st.caption(f"Notes: {rebalance['rebalance_notes']}")
 
         conn.close()
 

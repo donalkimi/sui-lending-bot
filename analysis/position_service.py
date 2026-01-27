@@ -177,7 +177,7 @@ class PositionService:
         transaction_hash_close: Optional[str] = None
     ) -> None:
         """
-        Close an active position
+        Close an active position and create final rebalance record.
 
         Args:
             position_id: UUID of position to close
@@ -187,7 +187,7 @@ class PositionService:
             transaction_hash_close: Optional transaction hash for closing (Phase 2)
 
         Raises:
-            ValueError: If timestamp is missing
+            ValueError: If timestamp is missing or position not found
             TypeError: If timestamp is not int
         """
         if close_timestamp is None:
@@ -198,6 +198,27 @@ class PositionService:
                 f"close_timestamp must be Unix seconds (int), got {type(close_timestamp).__name__}. "
                 f"Use to_seconds() to convert."
             )
+
+        # Get position to verify it exists and is active
+        position = self.get_position_by_id(position_id)
+        if position is None:
+            raise ValueError(f"Position {position_id} not found")
+
+        if position['status'] != 'active':
+            raise ValueError(f"Position {position_id} is not active (status: {position['status']})")
+
+        # Capture final snapshot and create rebalance record
+        try:
+            snapshot = self.capture_rebalance_snapshot(position, close_timestamp)
+            self.create_rebalance_record(
+                position_id,
+                snapshot,
+                rebalance_reason=f'position_closed:{close_reason}',
+                rebalance_notes=close_notes
+            )
+        except Exception as e:
+            # If rebalance record creation fails, log but don't block closure
+            print(f"Warning: Failed to create final rebalance record: {e}")
 
         # Convert to datetime string for DB
         close_timestamp_str = to_datetime_str(close_timestamp)
@@ -236,7 +257,11 @@ class PositionService:
         self.conn.commit()
 
     def get_active_positions(self) -> pd.DataFrame:
-        """Get all active positions"""
+        """
+        Get all active positions.
+
+        DESIGN PRINCIPLE: Always return timestamps as Unix seconds (int), not strings.
+        """
         query = """
         SELECT *
         FROM positions
@@ -245,9 +270,23 @@ class PositionService:
         """
         positions = pd.read_sql_query(query, self.conn)
 
-        # Convert timestamps to Unix seconds
-        if not positions.empty and 'entry_timestamp' in positions.columns:
-            positions['entry_timestamp'] = positions['entry_timestamp'].apply(to_seconds)
+        # Convert timestamps to Unix seconds (DESIGN_NOTES principle)
+        # IMPORTANT: Use Int64 dtype to handle nulls without converting to float64
+        if not positions.empty:
+            if 'entry_timestamp' in positions.columns:
+                positions['entry_timestamp'] = positions['entry_timestamp'].apply(
+                    lambda x: int(to_seconds(x))
+                )
+            if 'close_timestamp' in positions.columns:
+                # Use Int64 (nullable integer) to prevent float64 conversion with NaN
+                positions['close_timestamp'] = positions['close_timestamp'].apply(
+                    lambda x: int(to_seconds(x)) if pd.notna(x) else pd.NA
+                ).astype('Int64')
+            if 'last_rebalance_timestamp' in positions.columns:
+                # Use Int64 (nullable integer) to prevent float64 conversion with NaN
+                positions['last_rebalance_timestamp'] = positions['last_rebalance_timestamp'].apply(
+                    lambda x: int(to_seconds(x)) if pd.notna(x) else pd.NA
+                ).astype('Int64')
 
         return positions
 
@@ -263,12 +302,15 @@ class PositionService:
         if result.empty:
             return None
 
-        position = result.iloc[0]
+        position = result.iloc[0].copy()
 
         # Convert timestamps to Unix seconds
-        position['entry_timestamp'] = to_seconds(position['entry_timestamp'])
+        # IMPORTANT: Explicitly cast to int() to prevent pandas from converting to float64
+        position['entry_timestamp'] = int(to_seconds(position['entry_timestamp']))
         if pd.notna(position.get('close_timestamp')):
-            position['close_timestamp'] = to_seconds(position['close_timestamp'])
+            position['close_timestamp'] = int(to_seconds(position['close_timestamp']))
+        if pd.notna(position.get('last_rebalance_timestamp')):
+            position['last_rebalance_timestamp'] = int(to_seconds(position['last_rebalance_timestamp']))
 
         return position
 
@@ -310,7 +352,10 @@ class PositionService:
         if not isinstance(live_timestamp, int):
             raise TypeError(f"live_timestamp must be int (Unix seconds), got {type(live_timestamp).__name__}")
 
-        if live_timestamp < position['entry_timestamp']:
+        # Convert entry_timestamp from DB (string) to Unix seconds (int)
+        entry_ts = to_seconds(position['entry_timestamp'])
+
+        if live_timestamp < entry_ts:
             raise ValueError("live_timestamp cannot be before entry_timestamp")
 
         # Extract position parameters
@@ -330,7 +375,6 @@ class PositionService:
         protocol_B = position['protocol_B']
 
         # Calculate holding period
-        entry_ts = position['entry_timestamp']
         total_seconds = live_timestamp - entry_ts
         holding_days = total_seconds / 86400
 
@@ -477,3 +521,441 @@ class PositionService:
 
         # Realized APR = ANNUAL_NET_EARNINGS / deployment_usd
         return annual_net_earnings / position['deployment_usd']
+
+    # ==================== Rebalance Management ====================
+
+    def rebalance_position(
+        self,
+        position_id: str,
+        live_timestamp: int,
+        rebalance_reason: str,
+        rebalance_notes: Optional[str] = None
+    ) -> str:
+        """
+        Rebalance a position: snapshot current state, create rebalance record, update position.
+
+        IMPORTANT: Weightings (L_A, B_A, L_B, B_B) remain CONSTANT.
+        Only token amounts change to restore $$$ amounts to match weightings.
+
+        Args:
+            position_id: UUID of position to rebalance
+            live_timestamp: Unix timestamp when rebalancing (int)
+            rebalance_reason: Reason for rebalance ('manual', 'liquidation_risk', etc.)
+            rebalance_notes: Optional notes about rebalance
+
+        Returns:
+            rebalance_id: UUID of created rebalance record
+
+        Raises:
+            TypeError: If timestamp is not int
+            ValueError: If position not found or already closed
+        """
+        # Validate timestamp
+        if not isinstance(live_timestamp, int):
+            raise TypeError(
+                f"live_timestamp must be Unix seconds (int), got {type(live_timestamp).__name__}. "
+                f"Use to_seconds() to convert."
+            )
+
+        # Get position
+        position = self.get_position_by_id(position_id)
+        if position is None:
+            raise ValueError(f"Position {position_id} not found")
+
+        if position['status'] != 'active':
+            raise ValueError(f"Position {position_id} is not active (status: {position['status']})")
+
+        # Capture snapshot of current state
+        snapshot = self.capture_rebalance_snapshot(position, live_timestamp)
+
+        # Create rebalance record
+        rebalance_id = self.create_rebalance_record(
+            position_id,
+            snapshot,
+            rebalance_reason,
+            rebalance_notes
+        )
+
+        return rebalance_id
+
+    def capture_rebalance_snapshot(
+        self,
+        position: pd.Series,
+        live_timestamp: int
+    ) -> Dict:
+        """
+        Capture current position state before rebalancing.
+
+        DESIGN PRINCIPLES:
+        - live_timestamp is Unix seconds (int), no defaults
+        - Query by token_contract, not symbol
+        - Rates stored as decimals (0.05 = 5%)
+        - All timestamps in dict are Unix seconds (int)
+
+        Returns:
+            Dict with complete snapshot including realised PnL
+        """
+        # 1. Determine segment opening time
+        if pd.notna(position.get('last_rebalance_timestamp')):
+            opening_timestamp = to_seconds(position['last_rebalance_timestamp'])
+        else:
+            opening_timestamp = to_seconds(position['entry_timestamp'])
+
+        # 2. Calculate realised PnL for entire position (all 4 legs)
+        pv_result = self.calculate_position_value(position, live_timestamp)
+
+        # 3. Query closing rates & prices from rates_snapshot
+        closing_rates = self._query_rates_at_timestamp(position, live_timestamp)
+
+        # 4. Calculate current token amounts for all 4 legs
+        # Token amounts = (weight × deployment_usd) / price
+        deployment = position['deployment_usd']
+        L_A = position['L_A']
+        B_A = position['B_A']
+        L_B = position['L_B']
+        B_B = position['B_B']
+
+        # Entry token amounts (based on entry prices from position record)
+        entry_token_amount_1A = (L_A * deployment) / position['entry_price_1A']
+        entry_token_amount_2A = (B_A * deployment) / position['entry_price_2A']
+        entry_token_amount_2B = (L_B * deployment) / position['entry_price_2B']
+        entry_token_amount_3B = (B_B * deployment) / position['entry_price_3B']
+
+        # Exit token amounts (token amounts don't change during rebalancing - only $$$ changes with price)
+        # For rebalancing: token2 amounts will be adjusted to restore liq distance
+        # For now, exit amounts = entry amounts (will be adjusted by rebalance logic)
+        exit_token_amount_1A = entry_token_amount_1A  # No change for token1
+        exit_token_amount_2A = entry_token_amount_2A  # Will be adjusted
+        exit_token_amount_2B = entry_token_amount_2B  # Will be adjusted
+        exit_token_amount_3B = entry_token_amount_3B  # No change for token3
+
+        # 5. Calculate $$$ sizes
+        entry_size_usd_1A = entry_token_amount_1A * position['entry_price_1A']
+        entry_size_usd_2A = entry_token_amount_2A * position['entry_price_2A']
+        entry_size_usd_2B = entry_token_amount_2B * position['entry_price_2B']
+        entry_size_usd_3B = entry_token_amount_3B * position['entry_price_3B']
+
+        exit_size_usd_1A = exit_token_amount_1A * closing_rates['price_1A']
+        exit_size_usd_2A = exit_token_amount_2A * closing_rates['price_2A']
+        exit_size_usd_2B = exit_token_amount_2B * closing_rates['price_2B']
+        exit_size_usd_3B = exit_token_amount_3B * closing_rates['price_3B']
+
+        # 6. Determine rebalance actions
+        entry_action_1A = "Initial deployment"
+        entry_action_2A = "Initial deployment"
+        entry_action_2B = "Initial deployment"
+        entry_action_3B = "Initial deployment"
+
+        exit_action_1A = self._determine_rebalance_action('1A', entry_token_amount_1A, exit_token_amount_1A, 'Lend')
+        exit_action_2A = self._determine_rebalance_action('2A', entry_token_amount_2A, exit_token_amount_2A, 'Borrow')
+        exit_action_2B = self._determine_rebalance_action('2B', entry_token_amount_2B, exit_token_amount_2B, 'Lend')
+        exit_action_3B = self._determine_rebalance_action('3B', entry_token_amount_3B, exit_token_amount_3B, 'Borrow')
+
+        return {
+            'opening_timestamp': opening_timestamp,
+            'closing_timestamp': live_timestamp,
+            # Opening rates/prices from position record
+            'opening_lend_rate_1A': position['entry_lend_rate_1A'],
+            'opening_borrow_rate_2A': position['entry_borrow_rate_2A'],
+            'opening_lend_rate_2B': position['entry_lend_rate_2B'],
+            'opening_borrow_rate_3B': position['entry_borrow_rate_3B'],
+            'opening_price_1A': position['entry_price_1A'],
+            'opening_price_2A': position['entry_price_2A'],
+            'opening_price_2B': position['entry_price_2B'],
+            'opening_price_3B': position['entry_price_3B'],
+            # Closing rates/prices from rates_snapshot
+            'closing_lend_rate_1A': closing_rates['lend_rate_1A'],
+            'closing_borrow_rate_2A': closing_rates['borrow_rate_2A'],
+            'closing_lend_rate_2B': closing_rates['lend_rate_2B'],
+            'closing_borrow_rate_3B': closing_rates['borrow_rate_3B'],
+            'closing_price_1A': closing_rates['price_1A'],
+            'closing_price_2A': closing_rates['price_2A'],
+            'closing_price_2B': closing_rates['price_2B'],
+            'closing_price_3B': closing_rates['price_3B'],
+            # Collateral ratios
+            'collateral_ratio_1A': position['entry_collateral_ratio_1A'],
+            'collateral_ratio_2B': position['entry_collateral_ratio_2B'],
+            # Token amounts
+            'entry_token_amount_1A': entry_token_amount_1A,
+            'entry_token_amount_2A': entry_token_amount_2A,
+            'entry_token_amount_2B': entry_token_amount_2B,
+            'entry_token_amount_3B': entry_token_amount_3B,
+            'exit_token_amount_1A': exit_token_amount_1A,
+            'exit_token_amount_2A': exit_token_amount_2A,
+            'exit_token_amount_2B': exit_token_amount_2B,
+            'exit_token_amount_3B': exit_token_amount_3B,
+            # USD sizes
+            'entry_size_usd_1A': entry_size_usd_1A,
+            'entry_size_usd_2A': entry_size_usd_2A,
+            'entry_size_usd_2B': entry_size_usd_2B,
+            'entry_size_usd_3B': entry_size_usd_3B,
+            'exit_size_usd_1A': exit_size_usd_1A,
+            'exit_size_usd_2A': exit_size_usd_2A,
+            'exit_size_usd_2B': exit_size_usd_2B,
+            'exit_size_usd_3B': exit_size_usd_3B,
+            # Actions
+            'entry_action_1A': entry_action_1A,
+            'entry_action_2A': entry_action_2A,
+            'entry_action_2B': entry_action_2B,
+            'entry_action_3B': entry_action_3B,
+            'exit_action_1A': exit_action_1A,
+            'exit_action_2A': exit_action_2A,
+            'exit_action_2B': exit_action_2B,
+            'exit_action_3B': exit_action_3B,
+            # Realised PnL
+            'realised_pnl': pv_result['net_earnings'],
+            'realised_fees': pv_result['fees'],
+            'realised_lend_earnings': pv_result['lend_earnings'],
+            'realised_borrow_costs': pv_result['borrow_costs'],
+            # Weightings (constant)
+            'L_A': L_A,
+            'B_A': B_A,
+            'L_B': L_B,
+            'B_B': B_B,
+            'deployment_usd': deployment
+        }
+
+    def _query_rates_at_timestamp(
+        self,
+        position: pd.Series,
+        timestamp: int
+    ) -> Dict:
+        """
+        Query rates_snapshot for all 4 legs at given timestamp.
+
+        DESIGN PRINCIPLE: Use token CONTRACT addresses for queries, not symbols.
+        DESIGN PRINCIPLE: Use Unix timestamp (int), convert to datetime string for SQL.
+        """
+        # Convert timestamp to datetime string for query
+        timestamp_str = to_datetime_str(timestamp)
+
+        # Query rates for all 4 legs
+        query = """
+        SELECT protocol, token_contract, lend_base_apr, lend_reward_apr,
+               borrow_base_apr, borrow_reward_apr, price_usd, collateral_ratio
+        FROM rates_snapshot
+        WHERE timestamp = ?
+          AND ((protocol = ? AND token_contract = ?) OR
+               (protocol = ? AND token_contract = ?) OR
+               (protocol = ? AND token_contract = ?) OR
+               (protocol = ? AND token_contract = ?))
+        """
+        params = (
+            timestamp_str,
+            position['protocol_A'], position['token1_contract'],
+            position['protocol_A'], position['token2_contract'],
+            position['protocol_B'], position['token2_contract'],
+            position['protocol_B'], position['token3_contract']
+        )
+
+        rates_df = pd.read_sql_query(query, self.conn, params=params)
+
+        # Extract rates for each leg
+        def get_leg_data(protocol, token_contract):
+            row = rates_df[
+                (rates_df['protocol'] == protocol) &
+                (rates_df['token_contract'] == token_contract)
+            ]
+            if row.empty:
+                return {
+                    'lend_rate': 0,
+                    'borrow_rate': 0,
+                    'price': 0,
+                    'collateral_ratio': 0
+                }
+            row = row.iloc[0]
+            return {
+                'lend_rate': (row['lend_base_apr'] or 0) + (row['lend_reward_apr'] or 0),
+                'borrow_rate': (row['borrow_base_apr'] or 0) + (row['borrow_reward_apr'] or 0),
+                'price': row['price_usd'] or 0,
+                'collateral_ratio': row['collateral_ratio'] or 0
+            }
+
+        leg_1A = get_leg_data(position['protocol_A'], position['token1_contract'])
+        leg_2A = get_leg_data(position['protocol_A'], position['token2_contract'])
+        leg_2B = get_leg_data(position['protocol_B'], position['token2_contract'])
+        leg_3B = get_leg_data(position['protocol_B'], position['token3_contract'])
+
+        return {
+            'lend_rate_1A': leg_1A['lend_rate'],
+            'borrow_rate_2A': leg_2A['borrow_rate'],
+            'lend_rate_2B': leg_2B['lend_rate'],
+            'borrow_rate_3B': leg_3B['borrow_rate'],
+            'price_1A': leg_1A['price'],
+            'price_2A': leg_2A['price'],
+            'price_2B': leg_2B['price'],
+            'price_3B': leg_3B['price'],
+            'collateral_ratio_1A': leg_1A['collateral_ratio'],
+            'collateral_ratio_2B': leg_2B['collateral_ratio']
+        }
+
+    def _determine_rebalance_action(
+        self,
+        leg: str,
+        entry_token_amount: float,
+        exit_token_amount: float,
+        action_type: str
+    ) -> str:
+        """
+        Determine action text for a specific leg.
+
+        For token1 and token3 (1A, 3B): These don't change during rebalancing, return "No change"
+        For token2 (2A, 2B): Calculate delta and determine action
+
+        Returns: Action string (e.g., "Repay 100.0", "No change")
+        """
+        # Token1 and token3 don't change during rebalancing
+        if leg in ['1A', '3B']:
+            return "No change"
+
+        # Token2 legs - calculate delta
+        delta = exit_token_amount - entry_token_amount
+        abs_delta = abs(delta)
+
+        if abs_delta < 0.0001:  # Essentially no change
+            return "No change"
+
+        if delta > 0:
+            # Increasing token amount
+            if action_type == 'Lend':
+                return f"Add {abs_delta:.4f}"
+            else:  # Borrow
+                return f"Borrow {abs_delta:.4f}"
+        else:
+            # Decreasing token amount
+            if action_type == 'Lend':
+                return f"Withdraw {abs_delta:.4f}"
+            else:  # Borrow
+                return f"Repay {abs_delta:.4f}"
+
+    def create_rebalance_record(
+        self,
+        position_id: str,
+        snapshot: Dict,
+        rebalance_reason: str,
+        rebalance_notes: Optional[str] = None
+    ) -> str:
+        """
+        Insert rebalance record into position_rebalances table and update positions table.
+
+        DESIGN PRINCIPLES:
+        - Convert Unix seconds (int) to datetime strings using to_datetime_str() for DB insertion
+        - Store rates as decimals (not percentages)
+        - Weightings (L_A, B_A, L_B, B_B) remain CONSTANT
+        """
+        # Generate rebalance ID
+        rebalance_id = str(uuid.uuid4())
+
+        # Get current position to determine sequence number
+        position = self.get_position_by_id(position_id)
+        sequence_number = (position.get('rebalance_count') or 0) + 1
+
+        # Convert timestamps to datetime strings for DB
+        opening_timestamp_str = to_datetime_str(snapshot['opening_timestamp'])
+        closing_timestamp_str = to_datetime_str(snapshot['closing_timestamp'])
+
+        # Insert rebalance record
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            INSERT INTO position_rebalances (
+                rebalance_id, position_id, sequence_number,
+                opening_timestamp, closing_timestamp,
+                deployment_usd, L_A, B_A, L_B, B_B,
+                opening_lend_rate_1A, opening_borrow_rate_2A, opening_lend_rate_2B, opening_borrow_rate_3B,
+                opening_price_1A, opening_price_2A, opening_price_2B, opening_price_3B,
+                closing_lend_rate_1A, closing_borrow_rate_2A, closing_lend_rate_2B, closing_borrow_rate_3B,
+                closing_price_1A, closing_price_2A, closing_price_2B, closing_price_3B,
+                collateral_ratio_1A, collateral_ratio_2B,
+                entry_action_1A, entry_action_2A, entry_action_2B, entry_action_3B,
+                exit_action_1A, exit_action_2A, exit_action_2B, exit_action_3B,
+                entry_token_amount_1A, entry_token_amount_2A, entry_token_amount_2B, entry_token_amount_3B,
+                exit_token_amount_1A, exit_token_amount_2A, exit_token_amount_2B, exit_token_amount_3B,
+                entry_size_usd_1A, entry_size_usd_2A, entry_size_usd_2B, entry_size_usd_3B,
+                exit_size_usd_1A, exit_size_usd_2A, exit_size_usd_2B, exit_size_usd_3B,
+                realised_fees, realised_pnl, realised_lend_earnings, realised_borrow_costs,
+                rebalance_reason, rebalance_notes
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            rebalance_id, position_id, sequence_number,
+            opening_timestamp_str, closing_timestamp_str,
+            snapshot['deployment_usd'], snapshot['L_A'], snapshot['B_A'], snapshot['L_B'], snapshot['B_B'],
+            snapshot['opening_lend_rate_1A'], snapshot['opening_borrow_rate_2A'],
+            snapshot['opening_lend_rate_2B'], snapshot['opening_borrow_rate_3B'],
+            snapshot['opening_price_1A'], snapshot['opening_price_2A'],
+            snapshot['opening_price_2B'], snapshot['opening_price_3B'],
+            snapshot['closing_lend_rate_1A'], snapshot['closing_borrow_rate_2A'],
+            snapshot['closing_lend_rate_2B'], snapshot['closing_borrow_rate_3B'],
+            snapshot['closing_price_1A'], snapshot['closing_price_2A'],
+            snapshot['closing_price_2B'], snapshot['closing_price_3B'],
+            snapshot['collateral_ratio_1A'], snapshot['collateral_ratio_2B'],
+            snapshot['entry_action_1A'], snapshot['entry_action_2A'],
+            snapshot['entry_action_2B'], snapshot['entry_action_3B'],
+            snapshot['exit_action_1A'], snapshot['exit_action_2A'],
+            snapshot['exit_action_2B'], snapshot['exit_action_3B'],
+            snapshot['entry_token_amount_1A'], snapshot['entry_token_amount_2A'],
+            snapshot['entry_token_amount_2B'], snapshot['entry_token_amount_3B'],
+            snapshot['exit_token_amount_1A'], snapshot['exit_token_amount_2A'],
+            snapshot['exit_token_amount_2B'], snapshot['exit_token_amount_3B'],
+            snapshot['entry_size_usd_1A'], snapshot['entry_size_usd_2A'],
+            snapshot['entry_size_usd_2B'], snapshot['entry_size_usd_3B'],
+            snapshot['exit_size_usd_1A'], snapshot['exit_size_usd_2A'],
+            snapshot['exit_size_usd_2B'], snapshot['exit_size_usd_3B'],
+            snapshot['realised_fees'], snapshot['realised_pnl'],
+            snapshot['realised_lend_earnings'], snapshot['realised_borrow_costs'],
+            rebalance_reason, rebalance_notes
+        ))
+
+        # Update positions table
+        current_accumulated_pnl = position.get('accumulated_realised_pnl') or 0
+        cursor.execute("""
+            UPDATE positions
+            SET accumulated_realised_pnl = ?,
+                rebalance_count = ?,
+                last_rebalance_timestamp = ?,
+                entry_lend_rate_1A = ?,
+                entry_borrow_rate_2A = ?,
+                entry_lend_rate_2B = ?,
+                entry_borrow_rate_3B = ?,
+                entry_price_1A = ?,
+                entry_price_2A = ?,
+                entry_price_2B = ?,
+                entry_price_3B = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE position_id = ?
+        """, (
+            current_accumulated_pnl + snapshot['realised_pnl'],
+            sequence_number,
+            closing_timestamp_str,
+            snapshot['closing_lend_rate_1A'],
+            snapshot['closing_borrow_rate_2A'],
+            snapshot['closing_lend_rate_2B'],
+            snapshot['closing_borrow_rate_3B'],
+            snapshot['closing_price_1A'],
+            snapshot['closing_price_2A'],
+            snapshot['closing_price_2B'],
+            snapshot['closing_price_3B'],
+            position_id
+        ))
+
+        self.conn.commit()
+
+        return rebalance_id
+
+    def get_rebalance_history(
+        self,
+        position_id: str
+    ) -> pd.DataFrame:
+        """
+        Query all rebalance records for a position.
+
+        Returns: DataFrame ordered by sequence_number ASC
+        """
+        query = """
+        SELECT *
+        FROM position_rebalances
+        WHERE position_id = ?
+        ORDER BY sequence_number ASC
+        """
+        rebalances = pd.read_sql_query(query, self.conn, params=(position_id,))
+
+        return rebalances

@@ -185,6 +185,11 @@ CREATE TABLE IF NOT EXISTS positions (
     expected_slippage_bps DECIMAL(10, 2),
     actual_slippage_bps DECIMAL(10, 2),
 
+    -- Rebalance Tracking
+    accumulated_realised_pnl DECIMAL(20, 10) DEFAULT 0.0,
+    rebalance_count INTEGER DEFAULT 0,
+    last_rebalance_timestamp TIMESTAMP,
+
     -- Closure Tracking
     close_timestamp TIMESTAMP,
     close_reason TEXT,
@@ -211,3 +216,98 @@ CREATE INDEX IF NOT EXISTS idx_positions_user ON positions(user_id);
 CREATE INDEX IF NOT EXISTS idx_positions_protocols ON positions(protocol_A, protocol_B);
 CREATE INDEX IF NOT EXISTS idx_positions_tokens ON positions(token1, token2, token3);
 CREATE INDEX IF NOT EXISTS idx_positions_is_paper ON positions(is_paper_trade);
+
+
+-- Table 5: position_rebalances
+-- Stores historical position segments created through rebalancing
+-- Follows event sourcing pattern: records are immutable historical truth
+CREATE TABLE IF NOT EXISTS position_rebalances (
+    -- Rebalance Identification
+    rebalance_id TEXT PRIMARY KEY,
+    position_id TEXT NOT NULL,
+    sequence_number INTEGER NOT NULL,
+
+    -- Timing
+    opening_timestamp TIMESTAMP NOT NULL,
+    closing_timestamp TIMESTAMP NOT NULL,
+
+    -- Position State (multipliers - constant during segment)
+    deployment_usd DECIMAL(20, 10) NOT NULL,
+    L_A DECIMAL(10, 6) NOT NULL,
+    B_A DECIMAL(10, 6) NOT NULL,
+    L_B DECIMAL(10, 6) NOT NULL,
+    B_B DECIMAL(10, 6) NOT NULL,
+
+    -- Opening State (rates, prices)
+    opening_lend_rate_1A DECIMAL(10, 6) NOT NULL,
+    opening_borrow_rate_2A DECIMAL(10, 6) NOT NULL,
+    opening_lend_rate_2B DECIMAL(10, 6) NOT NULL,
+    opening_borrow_rate_3B DECIMAL(10, 6) NOT NULL,
+    opening_price_1A DECIMAL(20, 10) NOT NULL,
+    opening_price_2A DECIMAL(20, 10) NOT NULL,
+    opening_price_2B DECIMAL(20, 10) NOT NULL,
+    opening_price_3B DECIMAL(20, 10) NOT NULL,
+
+    -- Closing State (rates, prices)
+    closing_lend_rate_1A DECIMAL(10, 6) NOT NULL,
+    closing_borrow_rate_2A DECIMAL(10, 6) NOT NULL,
+    closing_lend_rate_2B DECIMAL(10, 6) NOT NULL,
+    closing_borrow_rate_3B DECIMAL(10, 6) NOT NULL,
+    closing_price_1A DECIMAL(20, 10) NOT NULL,
+    closing_price_2A DECIMAL(20, 10) NOT NULL,
+    closing_price_2B DECIMAL(20, 10) NOT NULL,
+    closing_price_3B DECIMAL(20, 10) NOT NULL,
+
+    -- Collateral Ratios
+    collateral_ratio_1A DECIMAL(10, 6) NOT NULL,
+    collateral_ratio_2B DECIMAL(10, 6) NOT NULL,
+
+    -- Rebalance Actions (text descriptions)
+    entry_action_1A TEXT,
+    entry_action_2A TEXT,
+    entry_action_2B TEXT,
+    entry_action_3B TEXT,
+    exit_action_1A TEXT,
+    exit_action_2A TEXT,
+    exit_action_2B TEXT,
+    exit_action_3B TEXT,
+
+    -- Token Amounts
+    entry_token_amount_1A DECIMAL(20, 10) NOT NULL,
+    entry_token_amount_2A DECIMAL(20, 10) NOT NULL,
+    entry_token_amount_2B DECIMAL(20, 10) NOT NULL,
+    entry_token_amount_3B DECIMAL(20, 10) NOT NULL,
+    exit_token_amount_1A DECIMAL(20, 10) NOT NULL,
+    exit_token_amount_2A DECIMAL(20, 10) NOT NULL,
+    exit_token_amount_2B DECIMAL(20, 10) NOT NULL,
+    exit_token_amount_3B DECIMAL(20, 10) NOT NULL,
+
+    -- USD Sizes
+    entry_size_usd_1A DECIMAL(20, 10) NOT NULL,
+    entry_size_usd_2A DECIMAL(20, 10) NOT NULL,
+    entry_size_usd_2B DECIMAL(20, 10) NOT NULL,
+    entry_size_usd_3B DECIMAL(20, 10) NOT NULL,
+    exit_size_usd_1A DECIMAL(20, 10) NOT NULL,
+    exit_size_usd_2A DECIMAL(20, 10) NOT NULL,
+    exit_size_usd_2B DECIMAL(20, 10) NOT NULL,
+    exit_size_usd_3B DECIMAL(20, 10) NOT NULL,
+
+    -- Realised Metrics (calculated once at rebalance time)
+    realised_fees DECIMAL(20, 10) NOT NULL,
+    realised_pnl DECIMAL(20, 10) NOT NULL,
+    realised_lend_earnings DECIMAL(20, 10) NOT NULL,
+    realised_borrow_costs DECIMAL(20, 10) NOT NULL,
+
+    -- Metadata
+    rebalance_reason TEXT,
+    rebalance_notes TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    FOREIGN KEY (position_id) REFERENCES positions(position_id) ON DELETE CASCADE,
+    UNIQUE (position_id, sequence_number)
+);
+
+-- Indexes for position_rebalances
+CREATE INDEX IF NOT EXISTS idx_rebalances_position ON position_rebalances(position_id);
+CREATE INDEX IF NOT EXISTS idx_rebalances_sequence ON position_rebalances(position_id, sequence_number);
+CREATE INDEX IF NOT EXISTS idx_rebalances_timestamps ON position_rebalances(opening_timestamp, closing_timestamp);

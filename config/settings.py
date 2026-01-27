@@ -28,5 +28,20 @@ SQLITE_PATH = "data/lending_rates.db"
 SUPABASE_URL = None  # Set this when ready: "postgresql://postgres.xxx:..."
 # Example: SUPABASE_URL = "postgresql://postgres.abc123:[password]@db.xxx.supabase.co:5432/postgres"
 
+# Rebalancing Settings
+# REBALANCE_THRESHOLD: Trigger auto-rebalance detection when liquidation distance changes by this amount
+#
+# Formula: abs(entry_liq_dist) - abs(current_liq_dist) < REBALANCE_THRESHOLD
+#
+# Example: 0.02 means the dashboard will show a warning when liq distance changes by more than 2%
+#
+# Note: Manual rebalance button does NOT check this threshold - user can rebalance anytime.
+# This threshold is only used for auto-detection warnings (Phase 5, future implementation).
+#
+# Recommended values:
+#   - Conservative: 0.01 (1%) - More frequent warnings
+#   - Moderate: 0.02 (2%) - Balanced approach (default)
+#   - Relaxed: 0.05 (5%) - Fewer warnings
+REBALANCE_THRESHOLD = 0.02
 # Database Settings
 SAVE_SNAPSHOTS = True  # Set to False to disable database tracking
