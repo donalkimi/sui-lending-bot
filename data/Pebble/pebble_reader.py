@@ -3,6 +3,9 @@ Pebble Protocol API Reader
 
 Pulls live pool data from Pebble's public API and builds a lending DataFrame
 with clearly separated base/reward APRs and USD liquidity metrics.
+
+When a token appears in multiple markets (MainMarket, XSuiMarket, AltCoinMarket),
+we pick the best rate for each operation type.
 """
 
 import pandas as pd
@@ -43,7 +46,7 @@ class PebbleReader:
         try:
             response = self.session.get(
                 self.MARKET_LIST_URL,
-                params={"marketType": market_type, "page": 1, "size": 100},
+                params={"marketType": market_type, "page": "1", "size": "100"},
                 timeout=10
             )
             response.raise_for_status()
@@ -60,7 +63,7 @@ class PebbleReader:
             print(f"\tFailed to fetch {market_type}: {e}")
             return []
 
-    def _fetch_rewards_data(self) -> Dict[str, Dict[str, float]]:
+    def _fetch_rewards_data(self) -> Dict[Tuple[str, str], Dict[str, float]]:
         """
         Fetch rewards data from Pebble API.
 
@@ -83,6 +86,11 @@ class PebbleReader:
                 
                 for summary in market.get("summaries", []):
                     token = summary.get("reserveCoinType", "")
+                    
+                    # Ensure 0x prefix for Sui contract addresses
+                    if token and not token.startswith("0x"):
+                        token = "0x" + token
+                    
                     reward_type = summary.get("rewardType")  # 0 = supply, 1 = borrow
                     
                     # Sum up all reward APRs for this token/type
@@ -109,6 +117,44 @@ class PebbleReader:
             print(f"\tFailed to fetch rewards data: {e}")
             return {}
 
+    def _dedupe_best_rates(
+        self,
+        lend_df: pd.DataFrame,
+        borrow_df: pd.DataFrame,
+        collateral_df: pd.DataFrame
+    ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+        """
+        When a token appears in multiple markets, pick the best rate:
+        - Lend: highest Supply_apr
+        - Borrow: lowest Borrow_apr
+        - Collateral: highest Collateralization_factor
+        """
+        if lend_df.empty:
+            return lend_df, borrow_df, collateral_df
+
+        # Lend: keep row with highest Supply_apr per token
+        lend_df = (
+            lend_df.sort_values("Supply_apr", ascending=False)
+            .drop_duplicates(subset=["Token_coin_type"], keep="first")
+            .reset_index(drop=True)
+        )
+
+        # Borrow: keep row with lowest Borrow_apr per token
+        borrow_df = (
+            borrow_df.sort_values("Borrow_apr", ascending=True)
+            .drop_duplicates(subset=["Token_coin_type"], keep="first")
+            .reset_index(drop=True)
+        )
+
+        # Collateral: keep row with highest LTV per token
+        collateral_df = (
+            collateral_df.sort_values("Collateralization_factor", ascending=False)
+            .drop_duplicates(subset=["Token_coin_type"], keep="first")
+            .reset_index(drop=True)
+        )
+
+        return lend_df, borrow_df, collateral_df
+
     def get_all_data(self) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         """
         Fetch all data from Pebble Protocol.
@@ -118,7 +164,6 @@ class PebbleReader:
 
         Lending DataFrame columns:
             - Token (symbol)
-            - Market (market name)
             - Supply_base_apr       (supplyAPY from API, decimal)
             - Supply_reward_apr     (from rewards endpoint, decimal)
             - Supply_apr            (calculated: base + reward)
@@ -133,22 +178,20 @@ class PebbleReader:
             - Available_borrow
             - Available_borrow_usd
             - Utilization
+            - Borrow_fee            (hardcoded 0.0)
             - Token_coin_type
-            - Market_type
-            - Market_id
         
         Borrow DataFrame columns:
             - Token
-            - Market
             - Borrow_apr            (calculated: base - reward)
             - Base_rate             (base APR)
             - Reward_rate           (reward APR)
             - Price                 (USD price)
+            - Borrow_fee            (hardcoded 0.0)
             - Token_coin_type       (contract address)
         
         Collateral DataFrame columns:
             - Token
-            - Market
             - Collateralization_factor  (maxLTV)
             - Liquidation_threshold     (liqLTV)
             - Token_coin_type           (contract address)
@@ -180,12 +223,14 @@ class PebbleReader:
                 token_symbol = token_info.get("symbol")
                 token_coin_type = pool.get("token") or token_info.get("address")
                 
+                # Ensure 0x prefix for Sui contract addresses
+                if token_coin_type and not token_coin_type.startswith("0x"):
+                    token_coin_type = "0x" + token_coin_type
+                
                 if not token_symbol:
                     continue
 
                 # Market info
-                market_name = pool.get("name", market_type)
-                market_id = pool.get("marketID", "")
                 full_market_type = pool.get("marketType", "")
 
                 # Price
@@ -260,7 +305,6 @@ class PebbleReader:
                 lend_rates_data.append(
                     {
                         "Token": token_symbol,
-                        "Market": market_name,
                         "Supply_base_apr": supply_base_apr,
                         "Supply_reward_apr": supply_reward_apr,
                         "Supply_apr": supply_base_apr + supply_reward_apr,
@@ -275,20 +319,19 @@ class PebbleReader:
                         "Available_borrow": available_borrow,
                         "Available_borrow_usd": available_borrow_usd,
                         "Utilization": utilization,
+                        "Borrow_fee": 0.0,  # Pebble has no borrow fees
                         "Token_coin_type": token_coin_type,
-                        "Market_type": full_market_type,
-                        "Market_id": market_id,
                     }
                 )
 
                 borrow_rates_data.append(
                     {
                         "Token": token_symbol,
-                        "Market": market_name,
                         "Borrow_apr": borrow_base_apr - borrow_reward_apr,
                         "Base_rate": borrow_base_apr,
                         "Reward_rate": borrow_reward_apr,
                         "Price": price,
+                        "Borrow_fee": 0.0,  # Pebble has no borrow fees
                         "Token_coin_type": token_coin_type,
                     }
                 )
@@ -296,7 +339,6 @@ class PebbleReader:
                 collateral_ratios_data.append(
                     {
                         "Token": token_symbol,
-                        "Market": market_name,
                         "Collateralization_factor": max_ltv,
                         "Liquidation_threshold": liq_ltv,
                         "Token_coin_type": token_coin_type,
@@ -310,7 +352,14 @@ class PebbleReader:
         lend_rates = pd.DataFrame(lend_rates_data)
         borrow_rates = pd.DataFrame(borrow_rates_data)
         collateral_ratios = pd.DataFrame(collateral_ratios_data)
-        
+
+        # Dedupe: pick best rate when token appears in multiple markets
+        lend_rates, borrow_rates, collateral_ratios = self._dedupe_best_rates(
+            lend_rates, borrow_rates, collateral_ratios
+        )
+
+        print(f"\tAfter dedup: {len(lend_rates)} unique tokens")
+
         return lend_rates, borrow_rates, collateral_ratios
 
 

@@ -1102,6 +1102,13 @@ def render_positions_table_tab(timestamp_seconds: int):
                 precision_2B = get_token_precision(live_price_2B)
                 precision_3B = get_token_precision(live_price_3B)
 
+                # Calculate dynamic precision for token amounts
+                # Stablecoins always get 6 decimal places, others use price-based calculation
+                precision_1A = 6 if position['token1'] in STABLECOIN_SYMBOLS else get_token_precision(live_price_1A)
+                precision_2A = 6 if position['token2'] in STABLECOIN_SYMBOLS else get_token_precision(live_price_2A)
+                precision_2B = 6 if position['token2'] in STABLECOIN_SYMBOLS else get_token_precision(live_price_2B)
+                precision_3B = 6 if position['token3'] in STABLECOIN_SYMBOLS else get_token_precision(live_price_3B)
+
                 # Calculate liquidation prices for all 4 legs
                 from analysis.position_calculator import PositionCalculator
                 calc = PositionCalculator(liquidation_distance=position['entry_liquidation_distance'])
@@ -1347,6 +1354,8 @@ def render_positions_table_tab(timestamp_seconds: int):
                     'Current Liq Price': format_liq_price(liq_1A),
                     'Liq Distance': format_liq_distance(liq_1A),
                     'Entry Liq Dist': format_liq_distance(entry_liq_1A),
+                    'Fee Rate': '',  # NEW: No fee for Lend
+                    'Entry Fees $$$': '',  # NEW: No entry fee for Lend
                 })
 
                 # Row 2: Protocol A - Borrow token2
@@ -1367,6 +1376,8 @@ def render_positions_table_tab(timestamp_seconds: int):
                     'Current Liq Price': format_liq_price(liq_2A),
                     'Liq Distance': format_liq_distance(liq_2A),
                     'Entry Liq Dist': format_liq_distance(entry_liq_2A),
+                    'Fee Rate': f"{borrow_fee_2A * 100:.2f}%" if borrow_fee_2A > 0 else '',  # NEW
+                    'Entry Fees $$$': f"${borrow_fee_2A*entry_token_amount_2B*position['entry_price_2A']:.2f}" if borrow_fee_2A*entry_token_amount_2B*position['entry_price_2A'] > 0 else '',  # NEW
                 })
 
                 # Row 3: Protocol B - Lend token2
@@ -1387,6 +1398,8 @@ def render_positions_table_tab(timestamp_seconds: int):
                     'Current Liq Price': format_liq_price(liq_2B),
                     'Liq Distance': format_liq_distance(liq_2B),
                     'Entry Liq Dist': format_liq_distance(entry_liq_2B),
+                    'Fee Rate': '',  # NEW: No fee for Lend
+                    'Entry Fees $$$': '',  # NEW: No entry fee for Lend
                 })
 
                 # Row 4: Protocol B - Borrow token3 (4th leg)
@@ -1407,6 +1420,8 @@ def render_positions_table_tab(timestamp_seconds: int):
                     'Current Liq Price': format_liq_price(liq_3B),
                     'Liq Distance': format_liq_distance(liq_3B),
                     'Entry Liq Dist': format_liq_distance(entry_liq_3B),
+                    'Fee Rate': f"{borrow_fee_3B * 100:.2f}%" if borrow_fee_3B > 0 else '',  # NEW
+                    'Entry Fees $$$': f"${borrow_fee_3B*entry_token_amount_3B*position['entry_price_3B']:.2f}" if borrow_fee_3B*entry_token_amount_3B*position['entry_price_3B'] > 0 else '',  # NEW
                 })
 
                 # Display detail table with styling
