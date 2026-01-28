@@ -135,6 +135,7 @@ def refresh_pipeline(
             lend_rates=lend_rates,
             borrow_rates=borrow_rates,
             collateral_ratios=collateral_ratios,
+            liquidation_thresholds=liquidation_thresholds,
             prices=prices,
             lend_rewards=lend_rewards,
             borrow_rewards=borrow_rewards,

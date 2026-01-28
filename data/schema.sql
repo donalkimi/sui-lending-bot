@@ -171,6 +171,10 @@ CREATE TABLE IF NOT EXISTS positions (
     entry_collateral_ratio_1A DECIMAL(10, 6) NOT NULL,
     entry_collateral_ratio_2B DECIMAL(10, 6) NOT NULL,
 
+    -- Entry Liquidation Thresholds
+    entry_liquidation_threshold_1A DECIMAL(10, 6) NOT NULL,
+    entry_liquidation_threshold_2B DECIMAL(10, 6) NOT NULL,
+
     -- Entry Strategy APRs (fee-adjusted for different time horizons)
     entry_net_apr DECIMAL(10, 6) NOT NULL,
     entry_apr5 DECIMAL(10, 6) NOT NULL,
@@ -268,6 +272,10 @@ CREATE TABLE IF NOT EXISTS position_rebalances (
     -- Collateral Ratios
     collateral_ratio_1A DECIMAL(10, 6) NOT NULL,
     collateral_ratio_2B DECIMAL(10, 6) NOT NULL,
+
+    -- Liquidation Thresholds
+    liquidation_threshold_1A DECIMAL(10, 6) NOT NULL,
+    liquidation_threshold_2B DECIMAL(10, 6) NOT NULL,
 
     -- Rebalance Actions (text descriptions)
     entry_action_1A TEXT,

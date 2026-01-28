@@ -114,6 +114,10 @@ class PositionService:
         entry_collateral_ratio_1A = strategy_row.get('collateral_ratio_1A', 0)
         entry_collateral_ratio_2B = strategy_row.get('collateral_ratio_2B', 0)
 
+        # Extract entry liquidation thresholds
+        entry_liquidation_threshold_1A = strategy_row.get('liquidation_threshold_1A', 0)
+        entry_liquidation_threshold_2B = strategy_row.get('liquidation_threshold_2B', 0)
+
         # Extract entry strategy APRs (already fee-adjusted)
         entry_net_apr = strategy_row.get('net_apr', 0)
         entry_apr5 = strategy_row.get('apr5', 0)
@@ -148,11 +152,12 @@ class PositionService:
                 entry_lend_rate_1A, entry_borrow_rate_2A, entry_lend_rate_2B, entry_borrow_rate_3B,
                 entry_price_1A, entry_price_2A, entry_price_2B, entry_price_3B,
                 entry_collateral_ratio_1A, entry_collateral_ratio_2B,
+                entry_liquidation_threshold_1A, entry_liquidation_threshold_2B,
                 entry_net_apr, entry_apr5, entry_apr30, entry_apr90, entry_days_to_breakeven, entry_liquidation_distance,
                 entry_max_size_usd, entry_borrow_fee_2A, entry_borrow_fee_3B,
                 entry_borrow_weight_2A, entry_borrow_weight_3B,
                 notes, wallet_address, transaction_hash_open, on_chain_position_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             position_id, 'active', 'recursive_lending',
             is_paper_trade, user_id,
@@ -164,6 +169,7 @@ class PositionService:
             entry_lend_rate_1A, entry_borrow_rate_2A, entry_lend_rate_2B, entry_borrow_rate_3B,
             entry_price_1A, entry_price_2A, entry_price_2B, entry_price_3B,
             entry_collateral_ratio_1A, entry_collateral_ratio_2B,
+            entry_liquidation_threshold_1A, entry_liquidation_threshold_2B,
             entry_net_apr, entry_apr5, entry_apr30, entry_apr90, entry_days_to_breakeven, entry_liquidation_distance,
             entry_max_size_usd, entry_borrow_fee_2A, entry_borrow_fee_3B,
             entry_borrow_weight_2A, entry_borrow_weight_3B,
@@ -681,6 +687,9 @@ class PositionService:
             # Collateral ratios
             'collateral_ratio_1A': position['entry_collateral_ratio_1A'],
             'collateral_ratio_2B': position['entry_collateral_ratio_2B'],
+            # Liquidation thresholds
+            'liquidation_threshold_1A': position['entry_liquidation_threshold_1A'],
+            'liquidation_threshold_2B': position['entry_liquidation_threshold_2B'],
             # Token amounts
             'entry_token_amount_1A': entry_token_amount_1A,
             'entry_token_amount_2A': entry_token_amount_2A,
@@ -739,7 +748,7 @@ class PositionService:
         query = """
         SELECT protocol, token_contract, lend_base_apr, lend_reward_apr,
                borrow_base_apr, borrow_reward_apr, price_usd, collateral_ratio,
-               borrow_weight
+               liquidation_threshold, borrow_weight
         FROM rates_snapshot
         WHERE timestamp = ?
           AND ((protocol = ? AND token_contract = ?) OR
@@ -769,6 +778,7 @@ class PositionService:
                     'borrow_rate': 0,
                     'price': 0,
                     'collateral_ratio': 0,
+                    'liquidation_threshold': 0,
                     'borrow_weight': 1.0
                 }
             row = row.iloc[0]
@@ -777,6 +787,7 @@ class PositionService:
                 'borrow_rate': (row['borrow_base_apr'] or 0) + (row['borrow_reward_apr'] or 0),
                 'price': row['price_usd'] or 0,
                 'collateral_ratio': row['collateral_ratio'] or 0,
+                'liquidation_threshold': row['liquidation_threshold'] or 0,
                 'borrow_weight': row.get('borrow_weight', 1.0) or 1.0
             }
 
@@ -796,6 +807,8 @@ class PositionService:
             'price_3B': leg_3B['price'],
             'collateral_ratio_1A': leg_1A['collateral_ratio'],
             'collateral_ratio_2B': leg_2B['collateral_ratio'],
+            'liquidation_threshold_1A': leg_1A['liquidation_threshold'],
+            'liquidation_threshold_2B': leg_2B['liquidation_threshold'],
             'borrow_weight_2A': leg_2A['borrow_weight'],
             'borrow_weight_3B': leg_3B['borrow_weight']
         }
@@ -877,6 +890,7 @@ class PositionService:
                 closing_lend_rate_1A, closing_borrow_rate_2A, closing_lend_rate_2B, closing_borrow_rate_3B,
                 closing_price_1A, closing_price_2A, closing_price_2B, closing_price_3B,
                 collateral_ratio_1A, collateral_ratio_2B,
+                liquidation_threshold_1A, liquidation_threshold_2B,
                 entry_action_1A, entry_action_2A, entry_action_2B, entry_action_3B,
                 exit_action_1A, exit_action_2A, exit_action_2B, exit_action_3B,
                 entry_token_amount_1A, entry_token_amount_2A, entry_token_amount_2B, entry_token_amount_3B,
@@ -885,7 +899,7 @@ class PositionService:
                 exit_size_usd_1A, exit_size_usd_2A, exit_size_usd_2B, exit_size_usd_3B,
                 realised_fees, realised_pnl, realised_lend_earnings, realised_borrow_costs,
                 rebalance_reason, rebalance_notes
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             rebalance_id, position_id, sequence_number,
             opening_timestamp_str, closing_timestamp_str,
@@ -899,6 +913,7 @@ class PositionService:
             snapshot['closing_price_1A'], snapshot['closing_price_2A'],
             snapshot['closing_price_2B'], snapshot['closing_price_3B'],
             snapshot['collateral_ratio_1A'], snapshot['collateral_ratio_2B'],
+            snapshot['liquidation_threshold_1A'], snapshot['liquidation_threshold_2B'],
             snapshot['entry_action_1A'], snapshot['entry_action_2A'],
             snapshot['entry_action_2B'], snapshot['entry_action_3B'],
             snapshot['exit_action_1A'], snapshot['exit_action_2A'],

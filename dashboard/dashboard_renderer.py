@@ -2119,11 +2119,13 @@ def render_dashboard(data_loader: DataLoader, mode: str):
             lend_rates=lend_rates,
             borrow_rates=borrow_rates,
             collateral_ratios=collateral_ratios,
+            liquidation_thresholds=liquidation_thresholds,
             prices=prices,
             lend_rewards=lend_rewards,
             borrow_rewards=borrow_rewards,
             available_borrow=available_borrow,
             borrow_fees=borrow_fees,
+            borrow_weights=borrow_weights,
             timestamp=timestamp_seconds,  # Pass Unix seconds (int)
             liquidation_distance=liquidation_distance
         )

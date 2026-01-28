@@ -23,6 +23,7 @@ class RateAnalyzer:
         lend_rates: pd.DataFrame,
         borrow_rates: pd.DataFrame,
         collateral_ratios: pd.DataFrame,
+        liquidation_thresholds: pd.DataFrame,
         prices: pd.DataFrame,                    # NEW
         lend_rewards: pd.DataFrame,              # NEW
         borrow_rewards: pd.DataFrame,            # NEW
@@ -39,6 +40,7 @@ class RateAnalyzer:
             lend_rates: DataFrame with lending rates (tokens x protocols)
             borrow_rates: DataFrame with borrow rates (tokens x protocols)
             collateral_ratios: DataFrame with collateral ratios (tokens x protocols)
+            liquidation_thresholds: DataFrame with liquidation thresholds (tokens x protocols)
             prices: DataFrame with prices (tokens x protocols)                    # NEW
             lend_rewards: DataFrame with lend reward APRs (tokens x protocols)    # NEW
             borrow_rewards: DataFrame with borrow reward APRs (tokens x protocols) # NEW
@@ -51,6 +53,7 @@ class RateAnalyzer:
         self.lend_rates = lend_rates
         self.borrow_rates = borrow_rates
         self.collateral_ratios = collateral_ratios
+        self.liquidation_thresholds = liquidation_thresholds
         self.prices = prices                      # NEW
         self.lend_rewards = lend_rewards          # NEW
         self.borrow_rewards = borrow_rewards      # NEW
@@ -119,6 +122,32 @@ class RateAnalyzer:
             if token in df_indexed.index and protocol in df_indexed.columns:
                 rate = df_indexed.loc[token, protocol]
                 return float(rate) if pd.notna(rate) else np.nan
+            else:
+                return np.nan
+        except:
+            return np.nan
+
+    def get_liquidation_threshold(self, token: str, protocol: str) -> float:
+        """
+        Safely get liquidation threshold from the liquidation_thresholds dataframe
+
+        Args:
+            token: Token name
+            protocol: Protocol name
+
+        Returns:
+            Liquidation threshold as decimal, or np.nan if not found
+        """
+        # Set the first column as index if it isn't already
+        if self.liquidation_thresholds.index.name != 'Token':
+            df_indexed = self.liquidation_thresholds.set_index('Token')
+        else:
+            df_indexed = self.liquidation_thresholds
+
+        try:
+            if token in df_indexed.index and protocol in df_indexed.columns:
+                threshold = df_indexed.loc[token, protocol]
+                return float(threshold) if pd.notna(threshold) else np.nan
             else:
                 return np.nan
         except:
@@ -462,6 +491,9 @@ class RateAnalyzer:
                             # Get collateral ratios
                             collateral_1A = self.get_rate(self.collateral_ratios, token1, protocol_A)
                             collateral_2B = self.get_rate(self.collateral_ratios, token2, protocol_B)
+                            # Get liquidation thresholds
+                            liquidation_threshold_1A = self.get_liquidation_threshold(token1, protocol_A)
+                            liquidation_threshold_2B = self.get_liquidation_threshold(token2, protocol_B)
                             # NEW: Get prices
                             price_1A = self.get_price(token1, protocol_A)
                             price_2A = self.get_price(token2, protocol_A)
@@ -483,6 +515,7 @@ class RateAnalyzer:
                             # Skip if any rates OR prices are missing
                             if any(np.isnan([lend_rate_1A, borrow_rate_2A, lend_rate_2B,
                                             borrow_rate_3B, collateral_1A, collateral_2B,
+                                            liquidation_threshold_1A, liquidation_threshold_2B,
                                             price_1A, price_2A, price_2B, price_3B])):  # Add prices to check
                                 continue
 
@@ -500,6 +533,8 @@ class RateAnalyzer:
                                 borrow_rate_token3_B=borrow_rate_3B,
                                 collateral_ratio_token1_A=collateral_1A,
                                 collateral_ratio_token2_B=collateral_2B,
+                                liquidation_threshold_token1_A=liquidation_threshold_1A,
+                                liquidation_threshold_token2_B=liquidation_threshold_2B,
                                 price_token1_A=price_1A,
                                 price_token2_A=price_2A,
                                 price_token2_B=price_2B,

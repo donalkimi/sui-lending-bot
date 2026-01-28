@@ -412,6 +412,8 @@ class PositionCalculator:
         borrow_rate_token3_B: float,
         collateral_ratio_token1_A: float,
         collateral_ratio_token2_B: float,
+        liquidation_threshold_token1_A: float,
+        liquidation_threshold_token2_B: float,
         price_token1_A: float,
         price_token2_A: float,
         price_token2_B: float,
@@ -528,6 +530,8 @@ class PositionCalculator:
                 'borrow_rate_3B': borrow_rate_token3_B,  # As decimal
                 'collateral_ratio_1A': collateral_ratio_token1_A,
                 'collateral_ratio_2B': collateral_ratio_token2_B,
+                'liquidation_threshold_1A': liquidation_threshold_token1_A,
+                'liquidation_threshold_2B': liquidation_threshold_token2_B,
                 'P1_A': price_token1_A,
                 'P2_A': price_token2_A,
                 'P2_B': price_token2_B,
