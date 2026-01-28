@@ -65,7 +65,9 @@ class RateTracker:
         lend_rewards: Optional[pd.DataFrame] = None,
         borrow_rewards: Optional[pd.DataFrame] = None,
         available_borrow: Optional[pd.DataFrame] = None,
-        borrow_fees: Optional[pd.DataFrame] = None
+        borrow_fees: Optional[pd.DataFrame] = None,
+        borrow_weights: Optional[pd.DataFrame] = None,
+        liquidation_thresholds: Optional[pd.DataFrame] = None
     ):
         """
         Save a complete snapshot of protocol data
@@ -86,7 +88,7 @@ class RateTracker:
             rows_saved = self._save_rates_snapshot(
                 conn, timestamp, lend_rates, borrow_rates,
                 collateral_ratios, prices, lend_rewards, borrow_rewards,
-                available_borrow, borrow_fees
+                available_borrow, borrow_fees, borrow_weights, liquidation_thresholds
             )
             
             # Save reward_token_prices (if data available)
@@ -124,7 +126,9 @@ class RateTracker:
         lend_rewards: Optional[pd.DataFrame] = None,
         borrow_rewards: Optional[pd.DataFrame] = None,
         available_borrow: Optional[pd.DataFrame] = None,
-        borrow_fees: Optional[pd.DataFrame] = None
+        borrow_fees: Optional[pd.DataFrame] = None,
+        borrow_weights: Optional[pd.DataFrame] = None,
+        liquidation_thresholds: Optional[pd.DataFrame] = None
     ) -> int:
         """Save to rates_snapshot table"""
         
@@ -145,6 +149,8 @@ class RateTracker:
             price_row = prices[prices['Contract'] == token_contract].iloc[0] if prices is not None and not prices.empty else None
             available_borrow_row = available_borrow[available_borrow['Contract'] == token_contract].iloc[0] if available_borrow is not None and not available_borrow.empty else None
             borrow_fee_row = borrow_fees[borrow_fees['Contract'] == token_contract].iloc[0] if borrow_fees is not None and not borrow_fees.empty else None
+            borrow_weight_row = borrow_weights[borrow_weights['Contract'] == token_contract].iloc[0] if borrow_weights is not None and not borrow_weights.empty else None
+            liquidation_threshold_row = liquidation_thresholds[liquidation_thresholds['Contract'] == token_contract].iloc[0] if liquidation_thresholds is not None and not liquidation_thresholds.empty else None
             lend_reward_row = lend_rewards[lend_rewards['Contract'] == token_contract].iloc[0] if lend_rewards is not None and not lend_rewards.empty else None
             borrow_reward_row = borrow_rewards[borrow_rewards['Contract'] == token_contract].iloc[0] if borrow_rewards is not None and not borrow_rewards.empty else None
 
@@ -159,6 +165,8 @@ class RateTracker:
                 price_usd = price_row.get(protocol) if price_row is not None and pd.notna(price_row.get(protocol)) else None
                 available_borrow_usd = available_borrow_row.get(protocol) if available_borrow_row is not None and pd.notna(available_borrow_row.get(protocol)) else None
                 borrow_fee = borrow_fee_row.get(protocol) if borrow_fee_row is not None and pd.notna(borrow_fee_row.get(protocol)) else None
+                borrow_weight = borrow_weight_row.get(protocol) if borrow_weight_row is not None and pd.notna(borrow_weight_row.get(protocol)) else 1.0
+                liquidation_threshold = liquidation_threshold_row.get(protocol) if liquidation_threshold_row is not None and pd.notna(liquidation_threshold_row.get(protocol)) else 0.0
 
                 # Get reward APRs (for separate storage)
                 lend_reward_apr = lend_reward_row.get(protocol) if lend_reward_row is not None and pd.notna(lend_reward_row.get(protocol)) else 0.0
@@ -186,13 +194,14 @@ class RateTracker:
                     'borrow_reward_apr': borrow_reward_apr,
                     'borrow_total_apr': borrow_total_apr,
                     'collateral_ratio': collateral_ratio,
-                    'liquidation_threshold': None,  # TODO: Add if available
+                    'liquidation_threshold': liquidation_threshold,
                     'price_usd': price_usd,
                     'utilization': None,  # Will add later
                     'total_supply_usd': None,  # Will add later
                     'total_borrow_usd': None,  # Will add later
                     'available_borrow_usd': available_borrow_usd,
                     'borrow_fee': borrow_fee,
+                    'borrow_weight': borrow_weight,
                 })
         
         # Insert rows
@@ -214,15 +223,15 @@ class RateTracker:
                     lend_base_apr, lend_reward_apr, lend_total_apr,
                     borrow_base_apr, borrow_reward_apr, borrow_total_apr,
                     collateral_ratio, liquidation_threshold, price_usd,
-                    utilization, total_supply_usd, total_borrow_usd, available_borrow_usd, borrow_fee)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    utilization, total_supply_usd, total_borrow_usd, available_borrow_usd, borrow_fee, borrow_weight)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 row['timestamp'], row['protocol'], row['token'], row['token_contract'],
                 row['lend_base_apr'], row['lend_reward_apr'], row['lend_total_apr'],
                 row['borrow_base_apr'], row['borrow_reward_apr'], row['borrow_total_apr'],
                 row['collateral_ratio'], row['liquidation_threshold'], row['price_usd'],
                 row['utilization'], row['total_supply_usd'], row['total_borrow_usd'],
-                row['available_borrow_usd'], row['borrow_fee']
+                row['available_borrow_usd'], row['borrow_fee'], row['borrow_weight']
             ))
 
     def _insert_rates_postgres(self, conn, rows):
@@ -236,8 +245,8 @@ class RateTracker:
                     lend_base_apr, lend_reward_apr, lend_total_apr,
                     borrow_base_apr, borrow_reward_apr, borrow_total_apr,
                     collateral_ratio, liquidation_threshold, price_usd,
-                    utilization, total_supply_usd, total_borrow_usd, available_borrow_usd, borrow_fee)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    utilization, total_supply_usd, total_borrow_usd, available_borrow_usd, borrow_fee, borrow_weight)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (timestamp, protocol, token_contract) DO NOTHING
             ''', (
                 row['timestamp'], row['protocol'], row['token'], row['token_contract'],
@@ -245,7 +254,7 @@ class RateTracker:
                 row['borrow_base_apr'], row['borrow_reward_apr'], row['borrow_total_apr'],
                 row['collateral_ratio'], row['liquidation_threshold'], row['price_usd'],
                 row['utilization'], row['total_supply_usd'], row['total_borrow_usd'],
-                row['available_borrow_usd'], row['borrow_fee']
+                row['available_borrow_usd'], row['borrow_fee'], row['borrow_weight']
             ))
 
     def _save_reward_prices(

@@ -81,12 +81,12 @@ def get_available_timestamps(conn: Optional[Any] = None) -> List[str]:
 
 def load_historical_snapshot(timestamp: str, conn: Optional[Any] = None) -> Tuple[
     pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame,
-    pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame
+    pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame
 ]:
     """
     Load historical snapshot data from rates_snapshot table and pivot to match live format
 
-    This function queries the database at a specific timestamp and returns 8 DataFrames
+    This function queries the database at a specific timestamp and returns 10 DataFrames
     in the exact same format as refresh_pipeline() from data/refresh_pipeline.py
 
     Args:
@@ -94,7 +94,7 @@ def load_historical_snapshot(timestamp: str, conn: Optional[Any] = None) -> Tupl
         conn: Optional database connection (will create if None)
 
     Returns:
-        Tuple of 8 DataFrames:
+        Tuple of 10 DataFrames:
             1. lend_rates: Token x Protocol lending rates (with 'Token' and 'Contract' columns)
             2. borrow_rates: Token x Protocol borrow rates
             3. collateral_ratios: Token x Protocol collateral ratios
@@ -103,6 +103,8 @@ def load_historical_snapshot(timestamp: str, conn: Optional[Any] = None) -> Tupl
             6. borrow_rewards: Token x Protocol borrow reward APRs
             7. available_borrow: Token x Protocol available borrow liquidity (USD)
             8. borrow_fees: Token x Protocol borrow fees (decimal)
+            9. borrow_weights: Token x Protocol borrow weights (multiplier, default 1.0)
+            10. liquidation_thresholds: Token x Protocol liquidation LTV thresholds (decimal)
 
     Example output format (lend_rates):
         Token    Contract                                 Navi    AlphaFi  Suilend
@@ -136,7 +138,9 @@ def load_historical_snapshot(timestamp: str, conn: Optional[Any] = None) -> Tupl
             lend_reward_apr,
             borrow_reward_apr,
             available_borrow_usd,
-            borrow_fee
+            borrow_fee,
+            borrow_weight,
+            liquidation_threshold
         FROM rates_snapshot
         WHERE timestamp = {ph}
         ORDER BY token, protocol
@@ -162,7 +166,7 @@ def load_historical_snapshot(timestamp: str, conn: Optional[Any] = None) -> Tupl
             pivoted.rename(columns={'token': 'Token', 'token_contract': 'Contract'}, inplace=True)
             return pivoted
 
-        # Create 8 DataFrames by pivoting
+        # Create 10 DataFrames by pivoting
         lend_rates = pivot_data(df, 'lend_total_apr')
         borrow_rates = pivot_data(df, 'borrow_total_apr')
         collateral_ratios = pivot_data(df, 'collateral_ratio')
@@ -171,9 +175,11 @@ def load_historical_snapshot(timestamp: str, conn: Optional[Any] = None) -> Tupl
         borrow_rewards = pivot_data(df, 'borrow_reward_apr')
         available_borrow = pivot_data(df, 'available_borrow_usd')
         borrow_fees = pivot_data(df, 'borrow_fee')
+        borrow_weights = pivot_data(df, 'borrow_weight')
+        liquidation_thresholds = pivot_data(df, 'liquidation_threshold')
 
         return (lend_rates, borrow_rates, collateral_ratios, prices,
-                lend_rewards, borrow_rewards, available_borrow, borrow_fees)
+                lend_rewards, borrow_rewards, available_borrow, borrow_fees, borrow_weights, liquidation_thresholds)
 
     finally:
         if should_close:

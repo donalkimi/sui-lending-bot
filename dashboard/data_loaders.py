@@ -16,11 +16,11 @@ class DataLoader(ABC):
 
     @abstractmethod
     def load_data(self) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame,
-                                   pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, datetime]:
+                                   pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, datetime]:
         """
-        Load data and return 9-tuple:
+        Load data and return 11-tuple:
         (lend_rates, borrow_rates, collateral_ratios, prices,
-         lend_rewards, borrow_rewards, available_borrow, borrow_fees, timestamp)
+         lend_rewards, borrow_rewards, available_borrow, borrow_fees, borrow_weights, liquidation_thresholds, timestamp)
 
         All DataFrames must have identical structure:
         - 'Token' column (e.g., 'USDC', 'SUI')
@@ -64,18 +64,18 @@ class UnifiedDataLoader(DataLoader):
         self._data = None
 
     def load_data(self) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame,
-                                   pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, datetime]:
+                                   pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, datetime]:
         """Load snapshot from database at the specified timestamp"""
         result = load_historical_snapshot(self._timestamp_str)
 
-        if result is None or len(result) != 8:
-            raise ValueError(f"load_historical_snapshot() did not return expected 8 DataFrames for timestamp {self._timestamp_str}")
+        if result is None or len(result) != 10:
+            raise ValueError(f"load_historical_snapshot() did not return expected 10 DataFrames for timestamp {self._timestamp_str}")
 
         (lend_rates, borrow_rates, collateral_ratios, prices,
-         lend_rewards, borrow_rewards, available_borrow, borrow_fees) = result
+         lend_rewards, borrow_rewards, available_borrow, borrow_fees, borrow_weights, liquidation_thresholds) = result
 
         return (lend_rates, borrow_rates, collateral_ratios, prices,
-                lend_rewards, borrow_rewards, available_borrow, borrow_fees, self._timestamp)
+                lend_rewards, borrow_rewards, available_borrow, borrow_fees, borrow_weights, liquidation_thresholds, self._timestamp)
 
     @property
     def timestamp(self) -> datetime:
@@ -107,19 +107,19 @@ class HistoricalDataLoader(DataLoader):
         self._data = None
 
     def load_data(self) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame,
-                                   pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, datetime]:
+                                   pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, datetime]:
         """Load historical snapshot from database"""
         # Pass string timestamp to load_historical_snapshot
         result = load_historical_snapshot(self._timestamp_str)
 
-        if result is None or len(result) != 8:
-            raise ValueError(f"load_historical_snapshot() did not return expected 8 DataFrames for timestamp {self._timestamp_str}")
+        if result is None or len(result) != 10:
+            raise ValueError(f"load_historical_snapshot() did not return expected 10 DataFrames for timestamp {self._timestamp_str}")
 
         (lend_rates, borrow_rates, collateral_ratios, prices,
-         lend_rewards, borrow_rewards, available_borrow, borrow_fees) = result
+         lend_rewards, borrow_rewards, available_borrow, borrow_fees, borrow_weights, liquidation_thresholds) = result
 
         return (lend_rates, borrow_rates, collateral_ratios, prices,
-                lend_rewards, borrow_rewards, available_borrow, borrow_fees, self._timestamp)
+                lend_rewards, borrow_rewards, available_borrow, borrow_fees, borrow_weights, liquidation_thresholds, self._timestamp)
 
     @property
     def timestamp(self) -> datetime:

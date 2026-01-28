@@ -236,6 +236,8 @@ class NaviReader:
                     "Available_borrow_usd": available_borrow_usd,
                     "Utilization": utilization,
                     "Borrow_fee": get_navi_borrow_fee(token_symbol=token_symbol, token_contract=token_coin_type),
+                    "Borrow_weight": 1.0,  # Navi does not have borrow weights
+                    "Liquidation_ltv": liquidation_threshold,
                     "Token_coin_type": token_coin_type,
                     "Reserve_id": reserve_id,
                     "Pool_id": pool_id,
@@ -251,6 +253,8 @@ class NaviReader:
                     "Borrow_apy": borrow_total_apy,
                     "Price": price,
                     "Borrow_fee": get_navi_borrow_fee(token_symbol=token_symbol, token_contract=token_coin_type),
+                    "Borrow_weight": 1.0,  # Navi does not have borrow weights
+                    "Liquidation_ltv": liquidation_threshold,
                     "Token_coin_type": token_coin_type,
                 }
             )

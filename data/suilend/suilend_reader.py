@@ -72,6 +72,10 @@ class SuilendReader:
             spread_fee_bps = self._to_float(r.get("spread_fee_bps"))
             borrow_fee = borrow_fee_bps / 10000.0 if borrow_fee_bps is not None else None
 
+            # Parse borrow weight (in basis points) and convert to decimal
+            borrow_weight_bps = self._to_float(r.get("borrow_weight_bps"))
+            borrow_weight = borrow_weight_bps / 10000.0 if borrow_weight_bps is not None else 1.0
+
             # Lend data
             lend_rows.append({
                 "Token": token,
@@ -83,6 +87,8 @@ class SuilendReader:
                 "Utilization": utilization,
                 "Available_borrow_usd": available_amount_usd,
                 "Borrow_fee": borrow_fee,
+                "Borrow_weight": borrow_weight,
+                "Liquidation_ltv": liquidation_threshold,
                 "Token_coin_type": coin_type,
             })
 
@@ -97,6 +103,8 @@ class SuilendReader:
                 "Utilization": utilization,
                 "Borrow_fee": borrow_fee,
                 "Spread_fee_bps": spread_fee_bps,
+                "Borrow_weight": borrow_weight,
+                "Liquidation_ltv": liquidation_threshold,
                 "Token_coin_type": coin_type,
             })
 

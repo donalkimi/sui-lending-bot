@@ -135,6 +135,9 @@ async function main() {
       // Extract borrow fee (already in decimal format from SDK)
       const borrowFee = poolData.borrowFee || 0;
 
+      // Extract borrow weight (default 1.0)
+      const borrowWeight = poolData.borrowWeight || 1.0;
+
       markets.push({
         token_symbol: coinName.toUpperCase(),
         token_contract: coinType,
@@ -152,6 +155,7 @@ async function main() {
         collateralization_factor: collateralizationFactor.toString(),
         liquidation_threshold: liquidationThreshold.toString(),
         borrow_fee: borrowFee.toString(),
+        borrow_weight: borrowWeight.toString(),
       });
     }
   }

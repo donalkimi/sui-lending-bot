@@ -600,7 +600,8 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
         lending_token_price=strategy['P1_A'],
         borrowing_token_price=strategy['P2_A'],
         lltv=strategy['collateral_ratio_1A'],
-        side='lending'
+        side='lending',
+        borrow_weight=strategy.get('borrow_weight_2A', 1.0)
     )
 
     # Calculate liquidation data for Row 2 (borrowing side - Protocol A)
@@ -610,7 +611,8 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
         lending_token_price=strategy['P1_A'],
         borrowing_token_price=strategy['P2_A'],
         lltv=strategy['collateral_ratio_1A'],
-        side='borrowing'
+        side='borrowing',
+        borrow_weight=strategy.get('borrow_weight_2A', 1.0)
     )
 
     # Calculate liquidation data for Row 3 (lending side - Protocol B)
@@ -620,7 +622,8 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
         lending_token_price=strategy['P2_B'],
         borrowing_token_price=strategy['P3_B'],
         lltv=strategy['collateral_ratio_2B'],
-        side='lending'
+        side='lending',
+        borrow_weight=strategy.get('borrow_weight_3B', 1.0)
     )
 
     # Calculate liquidation data for Row 4 (borrowing side - Protocol B)
@@ -630,7 +633,8 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
         lending_token_price=strategy['P2_B'],
         borrowing_token_price=strategy['P3_B'],
         lltv=strategy['collateral_ratio_2B'],
-        side='borrowing'
+        side='borrowing',
+        borrow_weight=strategy.get('borrow_weight_3B', 1.0)
     )
 
     # Build detail table
@@ -638,11 +642,14 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
     detail_data = []
 
     # Row 1: Protocol A - Lend token1
+    lltv_1A = strategy.get('liquidation_threshold_1A', 0.0)
     detail_data.append({
         'Protocol': strategy['protocol_A'],
         'Token': strategy['token1'],
         'Action': 'Lend',
-        'Entry CF': f"{strategy['collateral_ratio_1A']:.2%}",
+        'maxCF': f"{strategy['collateral_ratio_1A']:.2%}",
+        'LLTV': f"{lltv_1A:.2%}" if lltv_1A > 0 else "",
+        'Borrow Weight': f"{strategy.get('borrow_weight_2A', 1.0):.2f}",
         'Weight': f"{strategy['L_A']:.4f}",
         'Rate': f"{strategy['lend_rate_1A'] * 100:.2f}%" if strategy['lend_rate_1A'] > 0 else "",
         'Token Amount': f"{entry_token_amount_1A:,.{precision_1A}f}",
@@ -650,7 +657,6 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
         'Price': f"${strategy['P1_A']:.4f}",
         'Fees (%)': "",
         'Fees ($$$)': "",
-        'Collateral Factor': f"{strategy['collateral_ratio_1A'] * 100:.2f}%",
         'Liquidation Price': f"${liq_result_1['liq_price']:.4f}" if liq_result_1['liq_price'] != float('inf') and liq_result_1['liq_price'] > 0 else "N/A",
         'Liq Distance': f"{liq_result_1['pct_distance'] * 100:.2f}%" if liq_result_1['liq_price'] != float('inf') and liq_result_1['liq_price'] > 0 else "N/A",
         'Max Borrow': "",
@@ -661,34 +667,37 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
         'Protocol': strategy['protocol_A'],
         'Token': strategy['token2'],
         'Action': 'Borrow',
+        'maxCF': f"{strategy['collateral_ratio_1A']:.2%}",
+        'LLTV': f"{lltv_1A:.2%}" if lltv_1A > 0 else "",
+        'Borrow Weight': f"{strategy.get('borrow_weight_2A', 1.0):.2f}",
         'Weight': f"{strategy['B_A']:.4f}",
-        'Entry CF': f"{strategy['collateral_ratio_1A']:.2%}",
         'Rate': f"{strategy['borrow_rate_2A'] * 100:.2f}%" if strategy['borrow_rate_2A'] > 0 else "",
         'Token Amount': f"{entry_token_amount_2A:,.{precision_2A}f}",
         'Size ($$$)': f"${position_size_2A:,.2f}",
         'Price': f"${strategy['P2_A']:.4f}",
         'Fees (%)': f"{strategy['borrow_fee_2A'] * 100:.2f}%" if strategy['borrow_fee_2A'] > 0 else "",
         'Fees ($$$)': f"${fee_usd_2A:.2f}" if fee_usd_2A > 0 else "",
-        'Collateral Factor': "",
         'Liquidation Price': f"${liq_result_2['liq_price']:.4f}" if liq_result_2['liq_price'] != float('inf') and liq_result_2['liq_price'] > 0 else "N/A",
         'Liq Distance': f"{liq_result_2['pct_distance'] * 100:.2f}%" if liq_result_2['liq_price'] != float('inf') and liq_result_2['liq_price'] > 0 else "N/A",
         'Max Borrow': f"${strategy['available_borrow_2A']:,.2f}" if strategy['available_borrow_2A'] > 0 else "",
     })
 
     # Row 3: Protocol B - Lend token2
+    lltv_2B = strategy.get('liquidation_threshold_2B', 0.0)
     detail_data.append({
         'Protocol': strategy['protocol_B'],
         'Token': strategy['token2'],
         'Action': 'Lend',
+        'maxCF': f"{strategy['collateral_ratio_2B']:.2%}",
+        'LLTV': f"{lltv_2B:.2%}" if lltv_2B > 0 else "",
+        'Borrow Weight': f"{strategy.get('borrow_weight_3B', 1.0):.2f}",
         'Weight': f"{strategy['L_B']:.4f}",
-        'Entry CF': f"{strategy['collateral_ratio_2B']:.2%}",
         'Rate': f"{strategy['lend_rate_2B'] * 100:.2f}%" if strategy['lend_rate_2B'] > 0 else "",
         'Token Amount': f"{entry_token_amount_2B:,.{precision_2B}f}",
         'Size ($$$)': f"${position_size_2B:,.2f}",
         'Price': f"${strategy['P2_B']:.4f}",
         'Fees (%)': "",
         'Fees ($$$)': "",
-        'Collateral Factor': f"{strategy['collateral_ratio_2B'] * 100:.2f}%",
         'Liquidation Price': f"${liq_result_3['liq_price']:.4f}" if liq_result_3['liq_price'] != float('inf') and liq_result_3['liq_price'] > 0 else "N/A",
         'Liq Distance': f"{liq_result_3['pct_distance'] * 100:.2f}%" if liq_result_3['liq_price'] != float('inf') and liq_result_3['liq_price'] > 0 else "N/A",
         'Max Borrow': "",
@@ -699,15 +708,16 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
         'Protocol': strategy['protocol_B'],
         'Token': strategy['token3'],
         'Action': 'Borrow',
+        'maxCF': f"{strategy['collateral_ratio_2B']:.2%}",
+        'LLTV': f"{lltv_2B:.2%}" if lltv_2B > 0 else "",
+        'Borrow Weight': f"{strategy.get('borrow_weight_3B', 1.0):.2f}",
         'Weight': f"{strategy['B_B']:.4f}",
-        'Entry CF': f"{strategy['collateral_ratio_2B']:.2%}",
         'Rate': f"{strategy['borrow_rate_3B'] * 100:.2f}%" if strategy['borrow_rate_3B'] > 0 else "",
         'Token Amount': f"{entry_token_amount_3B:,.{precision_3B}f}",
         'Size ($$$)': f"${position_size_3B:,.2f}",
         'Price': f"${strategy['P3_B']:.4f}",
         'Fees (%)': f"{strategy['borrow_fee_3B'] * 100:.2f}%" if strategy['borrow_fee_3B'] > 0 else "",
         'Fees ($$$)': f"${fee_usd_3B:.2f}" if fee_usd_3B > 0 else "",
-        'Collateral Factor': "",
         'Liquidation Price': f"${liq_result_4['liq_price']:.4f}" if liq_result_4['liq_price'] != float('inf') and liq_result_4['liq_price'] > 0 else "N/A",
         'Liq Distance': f"{liq_result_4['pct_distance'] * 100:.2f}%" if liq_result_4['liq_price'] != float('inf') and liq_result_4['liq_price'] > 0 else "N/A",
         'Max Borrow': f"${strategy['available_borrow_3B']:,.2f}" if strategy['available_borrow_3B'] > 0 else "",
@@ -820,12 +830,13 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
 
 def render_rate_tables_tab(lend_rates: pd.DataFrame, borrow_rates: pd.DataFrame,
                            collateral_ratios: pd.DataFrame, prices: pd.DataFrame,
-                           available_borrow: pd.DataFrame, borrow_fees: pd.DataFrame):
+                           available_borrow: pd.DataFrame, borrow_fees: pd.DataFrame,
+                           borrow_weights: pd.DataFrame, liquidation_thresholds: pd.DataFrame):
     """
     Render the Rate Tables tab
 
     Args:
-        lend_rates, borrow_rates, etc.: DataFrames from data loader
+        lend_rates, borrow_rates, collateral_ratios, prices, available_borrow, borrow_fees, borrow_weights, liquidation_thresholds: DataFrames from data loader
     """
     # Helper to format contract address (show first 6 and last 4 chars)
     def format_contract(contract: str) -> str:
@@ -835,6 +846,7 @@ def render_rate_tables_tab(lend_rates: pd.DataFrame, borrow_rates: pd.DataFrame,
 
     st.header("📈 Current Rates")
 
+    # Row 1: Lending Rates | Borrow Rates
     col1, col2 = st.columns(2)
 
     col1.subheader("💵 Lending Rates")
@@ -857,7 +869,12 @@ def render_rate_tables_tab(lend_rates: pd.DataFrame, borrow_rates: pd.DataFrame,
         borrow_display = borrow_display[cols]
     col2.dataframe(borrow_display, width='stretch', hide_index=True)
 
-    st.subheader("🔒 Collateral Ratios")
+    st.markdown("---")
+
+    # Row 2: Collateral Ratios | LLTV (Liquidation Threshold)
+    col3, col4 = st.columns(2)
+
+    col3.subheader("🔒 Collateral Ratios (Max LTV)")
     collateral_display = collateral_ratios.copy()
     if 'Contract' in collateral_display.columns:
         # Format contract addresses to be more readable
@@ -865,24 +882,34 @@ def render_rate_tables_tab(lend_rates: pd.DataFrame, borrow_rates: pd.DataFrame,
         # Reorder columns to put Contract after Token
         cols = ['Token', 'Contract'] + [c for c in collateral_display.columns if c not in ['Token', 'Contract']]
         collateral_display = collateral_display[cols]
-    st.dataframe(collateral_display, width='stretch', hide_index=True)
+    col3.dataframe(collateral_display, width='stretch', hide_index=True)
 
-    st.subheader("💰 Prices")
-    prices_display = prices.drop(columns=['Contract']) if 'Contract' in prices.columns else prices
-    st.dataframe(prices_display, width='stretch', hide_index=True)
+    col4.subheader("⚠️ LLTV (Liquidation Threshold)")
+    lltv_display = liquidation_thresholds.copy()
+    if 'Contract' in lltv_display.columns:
+        # Format contract addresses to be more readable
+        lltv_display['Contract'] = lltv_display['Contract'].apply(format_contract)
+        # Reorder columns to put Contract after Token
+        cols = ['Token', 'Contract'] + [c for c in lltv_display.columns if c not in ['Token', 'Contract']]
+        lltv_display = lltv_display[cols]
+    col4.dataframe(lltv_display, width='stretch', hide_index=True)
 
-    st.subheader("💵 Available Borrow Liquidity")
-    available_borrow_display = available_borrow.copy()
-    if 'Contract' in available_borrow_display.columns:
-        available_borrow_display = available_borrow_display.drop(columns=['Contract'])
+    st.markdown("---")
 
-    for col in available_borrow_display.columns:
-        if col != 'Token':
-            available_borrow_display[col] = available_borrow_display[col].apply(format_usd_abbreviated)
+    # Row 3: Borrow Weights | Borrow Fees
+    col5, col6 = st.columns(2)
 
-    st.dataframe(available_borrow_display, width='stretch', hide_index=True)
+    col5.subheader("⚖️ Borrow Weights")
+    borrow_weights_display = borrow_weights.copy()
+    if 'Contract' in borrow_weights_display.columns:
+        # Format contract addresses to be more readable
+        borrow_weights_display['Contract'] = borrow_weights_display['Contract'].apply(format_contract)
+        # Reorder columns to put Contract after Token
+        cols = ['Token', 'Contract'] + [c for c in borrow_weights_display.columns if c not in ['Token', 'Contract']]
+        borrow_weights_display = borrow_weights_display[cols]
+    col5.dataframe(borrow_weights_display, width='stretch', hide_index=True)
 
-    st.subheader("💳 Borrow Fees")
+    col6.subheader("💳 Borrow Fees")
     borrow_fees_display = borrow_fees.copy()
     if 'Contract' in borrow_fees_display.columns:
         borrow_fees_display = borrow_fees_display.drop(columns=['Contract'])
@@ -893,7 +920,27 @@ def render_rate_tables_tab(lend_rates: pd.DataFrame, borrow_rates: pd.DataFrame,
                 lambda x: f"{x*100:.2f}%" if pd.notna(x) and x > 0 else ("0.00%" if x == 0 else "N/A")
             )
 
-    st.dataframe(borrow_fees_display, width='stretch', hide_index=True)
+    col6.dataframe(borrow_fees_display, width='stretch', hide_index=True)
+
+    st.markdown("---")
+
+    # Row 4: Available Borrow Liquidity | Prices
+    col7, col8 = st.columns(2)
+
+    col7.subheader("💵 Available Borrow Liquidity")
+    available_borrow_display = available_borrow.copy()
+    if 'Contract' in available_borrow_display.columns:
+        available_borrow_display = available_borrow_display.drop(columns=['Contract'])
+
+    for col in available_borrow_display.columns:
+        if col != 'Token':
+            available_borrow_display[col] = available_borrow_display[col].apply(format_usd_abbreviated)
+
+    col7.dataframe(available_borrow_display, width='stretch', hide_index=True)
+
+    col8.subheader("💰 Prices")
+    prices_display = prices.drop(columns=['Contract']) if 'Contract' in prices.columns else prices
+    col8.dataframe(prices_display, width='stretch', hide_index=True)
 
 
 def render_positions_table_tab(timestamp_seconds: int):
@@ -1196,7 +1243,8 @@ def render_positions_table_tab(timestamp_seconds: int):
                     lending_token_price=live_price_1A,
                     borrowing_token_price=live_price_2A,
                     lltv=position['entry_collateral_ratio_1A'],
-                    side='lending'
+                    side='lending',
+                    borrow_weight=position.get('entry_borrow_weight_2A', 1.0)
                 )
 
                 # Leg 2: Liquidation price for token2 (borrowing side - price must rise)
@@ -1206,7 +1254,8 @@ def render_positions_table_tab(timestamp_seconds: int):
                     lending_token_price=live_price_1A,
                     borrowing_token_price=live_price_2A,
                     lltv=position['entry_collateral_ratio_1A'],
-                    side='borrowing'
+                    side='borrowing',
+                    borrow_weight=position.get('entry_borrow_weight_2A', 1.0)
                 )
 
                 # Protocol B (Lend token2, Borrow token3)
@@ -1221,7 +1270,8 @@ def render_positions_table_tab(timestamp_seconds: int):
                     lending_token_price=live_price_2B,
                     borrowing_token_price=live_price_3B,
                     lltv=position['entry_collateral_ratio_2B'],
-                    side='lending'
+                    side='lending',
+                    borrow_weight=position.get('entry_borrow_weight_3B', 1.0)
                 )
 
                 # Leg 4: Liquidation price for token3 (borrowing side - price must rise)
@@ -1231,7 +1281,8 @@ def render_positions_table_tab(timestamp_seconds: int):
                     lending_token_price=live_price_2B,
                     borrowing_token_price=live_price_3B,
                     lltv=position['entry_collateral_ratio_2B'],
-                    side='borrowing'
+                    side='borrowing',
+                    borrow_weight=position.get('entry_borrow_weight_3B', 1.0)
                 )
 
                 # Calculate entry liquidation distances (using entry prices instead of live prices)
@@ -1245,7 +1296,8 @@ def render_positions_table_tab(timestamp_seconds: int):
                     lending_token_price=position['entry_price_1A'],
                     borrowing_token_price=position['entry_price_2A'],
                     lltv=position['entry_collateral_ratio_1A'],
-                    side='lending'
+                    side='lending',
+                    borrow_weight=position.get('entry_borrow_weight_2A', 1.0)
                 )
 
                 entry_liq_2A = calc.calculate_liquidation_price(
@@ -1254,7 +1306,8 @@ def render_positions_table_tab(timestamp_seconds: int):
                     lending_token_price=position['entry_price_1A'],
                     borrowing_token_price=position['entry_price_2A'],
                     lltv=position['entry_collateral_ratio_1A'],
-                    side='borrowing'
+                    side='borrowing',
+                    borrow_weight=position.get('entry_borrow_weight_2A', 1.0)
                 )
 
                 # Protocol B (using entry collateral and loan values)
@@ -1267,7 +1320,8 @@ def render_positions_table_tab(timestamp_seconds: int):
                     lending_token_price=position['entry_price_2B'],
                     borrowing_token_price=position['entry_price_3B'],
                     lltv=position['entry_collateral_ratio_2B'],
-                    side='lending'
+                    side='lending',
+                    borrow_weight=position.get('entry_borrow_weight_3B', 1.0)
                 )
 
                 entry_liq_3B = calc.calculate_liquidation_price(
@@ -1276,7 +1330,8 @@ def render_positions_table_tab(timestamp_seconds: int):
                     lending_token_price=position['entry_price_2B'],
                     borrowing_token_price=position['entry_price_3B'],
                     lltv=position['entry_collateral_ratio_2B'],
-                    side='borrowing'
+                    side='borrowing',
+                    borrow_weight=position.get('entry_borrow_weight_3B', 1.0)
                 )
 
                 # Helper function to format token rebalance display
@@ -2005,7 +2060,7 @@ def render_dashboard(data_loader: DataLoader, mode: str):
     print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] Loading data...")
     with st.spinner("Loading data..."):
         (lend_rates, borrow_rates, collateral_ratios, prices,
-         lend_rewards, borrow_rewards, available_borrow, borrow_fees, timestamp) = data_loader.load_data()
+         lend_rewards, borrow_rewards, available_borrow, borrow_fees, borrow_weights, liquidation_thresholds, timestamp) = data_loader.load_data()
 
     load_time = (time.time() - load_start) * 1000
     print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] Data loaded in {load_time:.1f}ms")
@@ -2222,7 +2277,7 @@ def render_dashboard(data_loader: DataLoader, mode: str):
         tab2_start = time.time()
         render_rate_tables_tab(
             lend_rates, borrow_rates, collateral_ratios, prices,
-            available_borrow, borrow_fees
+            available_borrow, borrow_fees, borrow_weights, liquidation_thresholds
         )
         tab2_time = (time.time() - tab2_start) * 1000
         print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] Tab2 (Rate Tables) rendered in {tab2_time:.1f}ms")

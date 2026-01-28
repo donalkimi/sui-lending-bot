@@ -40,6 +40,8 @@ class RefreshResult:
     borrow_rewards: pd.DataFrame
     available_borrow: pd.DataFrame
     borrow_fees: pd.DataFrame
+    borrow_weights: pd.DataFrame
+    liquidation_thresholds: pd.DataFrame
 
     # Strategy outputs
     protocol_A: Optional[str]
@@ -80,21 +82,23 @@ def refresh_pipeline(
 
     notifier = SlackNotifier()
     print("[FETCH] Starting protocol data fetch...")
-    lend_rates, borrow_rates, collateral_ratios, prices, lend_rewards, borrow_rewards, available_borrow, borrow_fees = merge_protocol_data(
+    lend_rates, borrow_rates, collateral_ratios, prices, lend_rewards, borrow_rewards, available_borrow, borrow_fees, borrow_weights, liquidation_thresholds = merge_protocol_data(
         stablecoin_contracts=stablecoin_contracts
     )
     print("[FETCH] Protocol data fetch complete")
 
     # Persist snapshot early, so even if analysis fails you still capture the raw state.
     token_summary = {"seen": 0, "inserted": 0, "updated": 0, "total": 0}  # Default if not saving
-    
+
+    # Create tracker instance (always needed for analysis cache)
+    tracker = RateTracker(
+        use_cloud=getattr(settings, "USE_CLOUD_DB", False),
+        db_path=getattr(settings, "SQLITE_PATH", "data/lending_rates.db"),
+        connection_url=getattr(settings, "SUPABASE_URL", None),
+    )
+
     if save_snapshots:
         print("[DB] Saving snapshot to database...")
-        tracker = RateTracker(
-            use_cloud=getattr(settings, "USE_CLOUD_DB", False),
-            db_path=getattr(settings, "SQLITE_PATH", "data/lending_rates.db"),
-            connection_url=getattr(settings, "SUPABASE_URL", None),
-        )
         tracker.save_snapshot(
             timestamp=ts,
             lend_rates=lend_rates,
@@ -105,6 +109,8 @@ def refresh_pipeline(
             borrow_rewards=borrow_rewards,
             available_borrow=available_borrow,
             borrow_fees=borrow_fees,
+            borrow_weights=borrow_weights,
+            liquidation_thresholds=liquidation_thresholds,
         )
         
         # Update token registry - just use lend_rates with simple rename
@@ -134,6 +140,7 @@ def refresh_pipeline(
             borrow_rewards=borrow_rewards,
             available_borrow=available_borrow,
             borrow_fees=borrow_fees,
+            borrow_weights=borrow_weights,
             timestamp=current_seconds,  # Pass Unix timestamp in seconds (integer)
             liquidation_distance=liquidation_distance
         )
@@ -176,6 +183,8 @@ def refresh_pipeline(
         borrow_rewards=borrow_rewards,
         available_borrow=available_borrow,
         borrow_fees=borrow_fees,
+        borrow_weights=borrow_weights,
+        liquidation_thresholds=liquidation_thresholds,
         protocol_A=protocol_A,
         protocol_B=protocol_B,
         all_results=all_results,

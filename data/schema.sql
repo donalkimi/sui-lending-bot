@@ -34,6 +34,9 @@ CREATE TABLE IF NOT EXISTS rates_snapshot (
     -- Fees
     borrow_fee DECIMAL(10,6),
 
+    -- Borrow weights (multiplier for borrowed assets, default 1.0)
+    borrow_weight DECIMAL(10,6),
+
     -- Reward token details (optional, per protocol)
     reward_token VARCHAR(50),
     reward_token_contract TEXT,
@@ -180,6 +183,10 @@ CREATE TABLE IF NOT EXISTS positions (
     entry_max_size_usd DECIMAL(20, 10),
     entry_borrow_fee_2A DECIMAL(10, 6),
     entry_borrow_fee_3B DECIMAL(10, 6),
+
+    -- Entry Borrow Weights (captured at entry, remain constant per assumption)
+    entry_borrow_weight_2A DECIMAL(10, 6),
+    entry_borrow_weight_3B DECIMAL(10, 6),
 
     -- Slippage Placeholders (for Phase 2)
     expected_slippage_bps DECIMAL(10, 2),

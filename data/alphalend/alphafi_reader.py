@@ -57,6 +57,10 @@ class AlphaFiReader:
             utilization = self._to_float(m.get("utilizationRate"))  # already 0..1 in output
             # Extract borrow fee (as decimal, e.g., 0.003 = 0.3%)
             borrow_fee = self._to_float(m.get("borrowFee"))
+            # Extract borrow weight (default 1.0)
+            borrow_weight = self._to_float(m.get("borrowWeight"))
+            if borrow_weight is None:
+                borrow_weight = 1.0
 
             # Derived USD (only if we have both pieces)
             total_supply_usd = (total_supply * price) if (total_supply is not None and price is not None) else None
@@ -74,6 +78,13 @@ class AlphaFiReader:
             supply_reward_apr = supply_rewards_pct / 100.0
             supply_apr = supply_base_apr + supply_reward_apr
 
+            # ----- Collateral (LTV/threshold) - extracted here for use in all DataFrames -----
+            ltv_pct = self._to_float(m.get("ltv"))
+            liq_thresh_pct = self._to_float(m.get("liquidationThreshold"))
+
+            # Convert liquidation threshold to decimal for use in lend/borrow DataFrames
+            liquidation_ltv = (liq_thresh_pct / 100.0) if liq_thresh_pct is not None else None
+
             lend_rows.append({
                 "Token": token,
                 "Supply_base_apr": supply_base_apr,
@@ -86,6 +97,8 @@ class AlphaFiReader:
                 "Available_borrow_usd": available_borrow_usd,
                 "Utilization": utilization,
                 "Borrow_fee": borrow_fee,  # Same fee applies to both lend and borrow
+                "Borrow_weight": borrow_weight,
+                "Liquidation_ltv": liquidation_ltv,
                 "Token_coin_type": coin_type,
             })
 
@@ -110,12 +123,10 @@ class AlphaFiReader:
                 "Available_borrow_usd": available_borrow_usd,
                 "Utilization": utilization,
                 "Borrow_fee": borrow_fee,  # Decimal format (0.003 = 0.3%)
+                "Borrow_weight": borrow_weight,
+                "Liquidation_ltv": liquidation_ltv,
                 "Token_coin_type": coin_type,
             })
-
-            # ----- Collateral (LTV/threshold) -----
-            ltv_pct = self._to_float(m.get("ltv"))
-            liq_thresh_pct = self._to_float(m.get("liquidationThreshold"))
 
             collateral_rows.append({
                 "Token": token,

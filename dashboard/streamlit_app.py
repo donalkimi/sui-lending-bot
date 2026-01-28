@@ -188,8 +188,8 @@ def main():
             st.error("❌ Failed to load data for selected timestamp")
             st.stop()
 
-        # Unpack the 9-tuple
-        lend_rates, borrow_rates, collateral_ratios, prices, lend_rewards, borrow_rewards, available_borrow, borrow_fees, timestamp = data_tuple
+        # Unpack the 10-tuple
+        lend_rates, borrow_rates, collateral_ratios, prices, lend_rewards, borrow_rewards, available_borrow, borrow_fees, borrow_weights, liquidation_thresholds, timestamp = data_tuple
 
         # Render dashboard
         render_dashboard(loader, mode='unified')

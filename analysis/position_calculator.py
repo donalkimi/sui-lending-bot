@@ -29,13 +29,15 @@ class PositionCalculator:
         self.liq_dist = liquidation_distance / (1 - liquidation_distance)
     
     def calculate_positions(
-        self, 
+        self,
         collateral_ratio_A: float,
-        collateral_ratio_B: float
+        collateral_ratio_B: float,
+        borrow_weight_A: float = 1.0,
+        borrow_weight_B: float = 1.0
     ) -> Dict[str, float]:
         """
         Calculate recursive position sizes that converge to steady state
-        
+
         The strategy (MARKET NEUTRAL - token1 must be a stablecoin):
         1. Lend L_A(0) = 1.0 of token1 (STABLECOIN) in Protocol A
         2. Borrow B_A(0) = L_A * r_A of token2 (HIGH-YIELD TOKEN) from Protocol A
@@ -43,20 +45,23 @@ class PositionCalculator:
         4. Borrow B_B(0) = L_B * r_B of token1 (STABLECOIN) from Protocol B
         5. Deposit B_B as L_A(1) back into Protocol A
         6. Repeat infinitely...
-        
+
         By starting with a stablecoin lend, you remain market neutral with no
         directional price exposure to the high-yield token.
-        
+
         Args:
             collateral_ratio_A: Max LTV for Protocol A (e.g., 0.75 for 75%)
             collateral_ratio_B: Max LTV for Protocol B (e.g., 0.80 for 80%)
-            
+            borrow_weight_A: Borrow weight multiplier for token2 (default 1.0)
+            borrow_weight_B: Borrow weight multiplier for token3 (default 1.0)
+
         Returns:
             Dictionary with position sizes: {L_A, B_A, L_B, B_B}
         """
-        # Adjusted collateral ratios with safety buffer
-        r_A = collateral_ratio_A / (1 + self.liq_dist)
-        r_B = collateral_ratio_B / (1 + self.liq_dist)
+        # Adjusted collateral ratios with safety buffer AND borrow weights
+        # Borrow weight reduces effective collateral (higher weight = less borrowing capacity)
+        r_A = (collateral_ratio_A / borrow_weight_A) / (1 + self.liq_dist)
+        r_B = (collateral_ratio_B / borrow_weight_B) / (1 + self.liq_dist)
 
         # Geometric series convergence
         # L_A = 1 + r_A*r_B + (r_A*r_B)^2 + ... = 1 / (1 - r_A*r_B)
@@ -72,6 +77,8 @@ class PositionCalculator:
             'B_B': B_B,  # Total borrowed token1 from Protocol B
             'r_A': r_A,  # Effective ratio for Protocol A
             'r_B': r_B,  # Effective ratio for Protocol B
+            'borrow_weight_A': borrow_weight_A,  # Borrow weight for token2
+            'borrow_weight_B': borrow_weight_B,  # Borrow weight for token3
             'liquidation_distance': self.liq_dist_input  # Original user input (for display)
         }
     
@@ -217,7 +224,8 @@ class PositionCalculator:
         lending_token_price: float,
         borrowing_token_price: float,
         lltv: float,
-        side: str
+        side: str,
+        borrow_weight: float = 1.0
     ) -> Dict[str, Union[float, str]]:
         """
         Calculate the token price at which a position would be liquidated.
@@ -274,11 +282,11 @@ class PositionCalculator:
         if lending_token_price <= 0 or borrowing_token_price <= 0:
             raise ValueError("Token prices must be positive")
 
-        # Calculate current LTV
+        # Calculate current LTV (including borrow weight)
         if collateral_value <= 0:
             current_ltv = float('inf')
         else:
-            current_ltv = loan_value / collateral_value
+            current_ltv = (loan_value * borrow_weight) / collateral_value
 
         # Determine current price based on side
         current_price = lending_token_price if side == 'lending' else borrowing_token_price
@@ -410,8 +418,10 @@ class PositionCalculator:
         price_token3_B: float,
         available_borrow_2A: float = None,
         available_borrow_3B: float = None,
-        borrow_fee_2A: float = None,  # NEW
-        borrow_fee_3B: float = None   # NEW
+        borrow_fee_2A: float = None,
+        borrow_fee_3B: float = None,
+        borrow_weight_2A: float = 1.0,
+        borrow_weight_3B: float = 1.0
     ) -> Dict:
         """a
         Complete analysis of a strategy combination
@@ -440,7 +450,9 @@ class PositionCalculator:
             # Calculate position sizes
             positions = self.calculate_positions(
                 collateral_ratio_token1_A,
-                collateral_ratio_token2_B
+                collateral_ratio_token2_B,
+                borrow_weight_2A,
+                borrow_weight_3B
             )
 
             # Calculate max deployable size based on liquidity constraints
@@ -529,6 +541,8 @@ class PositionCalculator:
                 'max_size': max_size,
                 'borrow_fee_2A': borrow_fee_2A if borrow_fee_2A is not None else 0.0,  # Default to 0
                 'borrow_fee_3B': borrow_fee_3B if borrow_fee_3B is not None else 0.0,  # Default to 0
+                'borrow_weight_2A': borrow_weight_2A,
+                'borrow_weight_3B': borrow_weight_3B,
                 'valid': True,
                 'error': None
             }

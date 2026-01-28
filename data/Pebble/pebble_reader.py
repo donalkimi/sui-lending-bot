@@ -179,8 +179,9 @@ class PebbleReader:
             - Available_borrow_usd
             - Utilization
             - Borrow_fee            (hardcoded 0.0)
+            - Borrow_weight         (weight multiplier for borrows, default 1.0)
             - Token_coin_type
-        
+
         Borrow DataFrame columns:
             - Token
             - Borrow_apr            (calculated: base - reward)
@@ -188,6 +189,7 @@ class PebbleReader:
             - Reward_rate           (reward APR)
             - Price                 (USD price)
             - Borrow_fee            (hardcoded 0.0)
+            - Borrow_weight         (weight multiplier for borrows, default 1.0)
             - Token_coin_type       (contract address)
         
         Collateral DataFrame columns:
@@ -301,6 +303,12 @@ class PebbleReader:
                 except (TypeError, ValueError):
                     liq_ltv = 0.0
 
+                # Borrow weight (default 1.0)
+                try:
+                    borrow_weight = float(pool.get("borrowWeight", 1.0))
+                except (TypeError, ValueError):
+                    borrow_weight = 1.0
+
                 # Store data
                 lend_rates_data.append(
                     {
@@ -320,6 +328,8 @@ class PebbleReader:
                         "Available_borrow_usd": available_borrow_usd,
                         "Utilization": utilization,
                         "Borrow_fee": 0.0,  # Pebble has no borrow fees
+                        "Borrow_weight": borrow_weight,
+                        "Liquidation_ltv": liq_ltv,
                         "Token_coin_type": token_coin_type,
                     }
                 )
@@ -332,6 +342,8 @@ class PebbleReader:
                         "Reward_rate": borrow_reward_apr,
                         "Price": price,
                         "Borrow_fee": 0.0,  # Pebble has no borrow fees
+                        "Borrow_weight": borrow_weight,
+                        "Liquidation_ltv": liq_ltv,
                         "Token_coin_type": token_coin_type,
                     }
                 )

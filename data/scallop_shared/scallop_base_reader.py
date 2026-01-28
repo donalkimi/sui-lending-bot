@@ -178,6 +178,7 @@ class ScallopBaseReader:
                 "collateralization_factor": str(collateral.get("collateralFactor", 0)),
                 "liquidation_threshold": str(collateral.get("liquidationFactor", 0)),
                 "borrow_fee": str(pool["borrowFee"]),
+                "borrow_weight": str(pool.get("borrowWeight", 1.0)),
             })
 
         return markets
@@ -221,6 +222,11 @@ class ScallopBaseReader:
             # Parse fee data (already decimal from JS)
             borrow_fee = self._to_float(m.get("borrow_fee"))
 
+            # Parse borrow weight (default 1.0)
+            borrow_weight = self._to_float(m.get("borrow_weight"))
+            if borrow_weight is None:
+                borrow_weight = 1.0
+
             # Lend data
             lend_rows.append(
                 {
@@ -233,6 +239,8 @@ class ScallopBaseReader:
                     "Utilization": utilization,
                     "Available_borrow_usd": available_amount_usd,
                     "Borrow_fee": borrow_fee,
+                    "Borrow_weight": borrow_weight,
+                    "Liquidation_ltv": liquidation_threshold,
                     "Token_coin_type": coin_type,
                 }
             )
@@ -248,6 +256,8 @@ class ScallopBaseReader:
                     "Total_borrow": total_borrowed,
                     "Utilization": utilization,
                     "Borrow_fee": borrow_fee,
+                    "Borrow_weight": borrow_weight,
+                    "Liquidation_ltv": liquidation_threshold,
                     "Token_coin_type": coin_type,
                 }
             )

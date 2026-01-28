@@ -207,6 +207,7 @@ async function main() {
       liquidation_threshold: reserve.config.closeLtvPct.toFixed(3),
       borrow_fee_bps: reserve.config.borrowFeeBps.toFixed(3),
       spread_fee_bps: reserve.config.spreadFeeBps.toFixed(3),
+      borrow_weight_bps: reserve.config.borrowWeightBps?.toString() || "10000",
       available_amount_usd: reserve.availableAmountUsd.toFixed(2)
     };
   });

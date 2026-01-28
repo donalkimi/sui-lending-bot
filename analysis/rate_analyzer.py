@@ -28,6 +28,7 @@ class RateAnalyzer:
         borrow_rewards: pd.DataFrame,            # NEW
         available_borrow: pd.DataFrame,          # NEW
         borrow_fees: pd.DataFrame,               # NEW
+        borrow_weights: pd.DataFrame,            # NEW
         timestamp: int,  # Unix timestamp in seconds
         liquidation_distance: Optional[float] = None
     ):
@@ -43,6 +44,7 @@ class RateAnalyzer:
             borrow_rewards: DataFrame with borrow reward APRs (tokens x protocols) # NEW
             available_borrow: DataFrame with available borrow USD (tokens x protocols) # NEW
             borrow_fees: DataFrame with borrow fees (tokens x protocols)          # NEW
+            borrow_weights: DataFrame with borrow weights (tokens x protocols)    # NEW
             timestamp: Unix timestamp in seconds (integer) - the "current" moment
             liquidation_distance: Safety buffer (default from settings)
         """
@@ -54,6 +56,7 @@ class RateAnalyzer:
         self.borrow_rewards = borrow_rewards      # NEW
         self.available_borrow = available_borrow  # NEW
         self.borrow_fees = borrow_fees            # NEW
+        self.borrow_weights = borrow_weights      # NEW
         self.liquidation_distance = liquidation_distance or settings.DEFAULT_LIQUIDATION_DISTANCE
         
         # Get list of protocols from column headers (excluding 'Token' and 'Contract' columns)
@@ -201,6 +204,33 @@ class RateAnalyzer:
                 return np.nan
         except:
             return np.nan
+
+    def get_borrow_weight(self, token: str, protocol: str) -> float:
+        """
+        Safely get borrow weight from the borrow_weights dataframe
+
+        Args:
+            token: Token name
+            protocol: Protocol name
+
+        Returns:
+            Borrow weight as float (default 1.0 if not found)
+        """
+        # Set the first column as index if it isn't already
+        if self.borrow_weights.index.name != 'Token':
+            df_indexed = self.borrow_weights.set_index('Token')
+        else:
+            df_indexed = self.borrow_weights
+
+        try:
+            # Get the borrow weight
+            if token in df_indexed.index and protocol in df_indexed.columns:
+                weight = df_indexed.loc[token, protocol]
+                return float(weight) if pd.notna(weight) else 1.0
+            else:
+                return 1.0
+        except:
+            return 1.0
 
     def get_contract(self, token: str, protocol: str) -> Optional[str]:
         """
@@ -446,6 +476,10 @@ class RateAnalyzer:
                             borrow_fee_2A = self.get_borrow_fee(token2, protocol_A)
                             borrow_fee_3B = self.get_borrow_fee(token3, protocol_B)
 
+                            # NEW: Get borrow weights (defaults to 1.0)
+                            borrow_weight_2A = self.get_borrow_weight(token2, protocol_A)
+                            borrow_weight_3B = self.get_borrow_weight(token3, protocol_B)
+
                             # Skip if any rates OR prices are missing
                             if any(np.isnan([lend_rate_1A, borrow_rate_2A, lend_rate_2B,
                                             borrow_rate_3B, collateral_1A, collateral_2B,
@@ -473,7 +507,9 @@ class RateAnalyzer:
                                 available_borrow_2A=available_borrow_2A,
                                 available_borrow_3B=available_borrow_3B,
                                 borrow_fee_2A=borrow_fee_2A,  # NEW
-                                borrow_fee_3B=borrow_fee_3B   # NEW
+                                borrow_fee_3B=borrow_fee_3B,  # NEW
+                                borrow_weight_2A=borrow_weight_2A,  # NEW
+                                borrow_weight_3B=borrow_weight_3B   # NEW
                             )
 
                             # Add contract addresses to result (for historical chart queries)

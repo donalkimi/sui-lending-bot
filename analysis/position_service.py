@@ -127,6 +127,10 @@ class PositionService:
         entry_borrow_fee_2A = strategy_row.get('borrow_fee_2A')
         entry_borrow_fee_3B = strategy_row.get('borrow_fee_3B')
 
+        # Extract entry borrow weights (default 1.0)
+        entry_borrow_weight_2A = strategy_row.get('borrow_weight_2A', 1.0)
+        entry_borrow_weight_3B = strategy_row.get('borrow_weight_3B', 1.0)
+
         # Convert timestamp to datetime string for DB
         entry_timestamp_str = to_datetime_str(entry_timestamp)
 
@@ -146,8 +150,9 @@ class PositionService:
                 entry_collateral_ratio_1A, entry_collateral_ratio_2B,
                 entry_net_apr, entry_apr5, entry_apr30, entry_apr90, entry_days_to_breakeven, entry_liquidation_distance,
                 entry_max_size_usd, entry_borrow_fee_2A, entry_borrow_fee_3B,
+                entry_borrow_weight_2A, entry_borrow_weight_3B,
                 notes, wallet_address, transaction_hash_open, on_chain_position_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             position_id, 'active', 'recursive_lending',
             is_paper_trade, user_id,
@@ -161,6 +166,7 @@ class PositionService:
             entry_collateral_ratio_1A, entry_collateral_ratio_2B,
             entry_net_apr, entry_apr5, entry_apr30, entry_apr90, entry_days_to_breakeven, entry_liquidation_distance,
             entry_max_size_usd, entry_borrow_fee_2A, entry_borrow_fee_3B,
+            entry_borrow_weight_2A, entry_borrow_weight_3B,
             notes, wallet_address, transaction_hash_open, on_chain_position_id
         ))
 
@@ -732,7 +738,8 @@ class PositionService:
         # Query rates for all 4 legs
         query = """
         SELECT protocol, token_contract, lend_base_apr, lend_reward_apr,
-               borrow_base_apr, borrow_reward_apr, price_usd, collateral_ratio
+               borrow_base_apr, borrow_reward_apr, price_usd, collateral_ratio,
+               borrow_weight
         FROM rates_snapshot
         WHERE timestamp = ?
           AND ((protocol = ? AND token_contract = ?) OR
@@ -761,14 +768,16 @@ class PositionService:
                     'lend_rate': 0,
                     'borrow_rate': 0,
                     'price': 0,
-                    'collateral_ratio': 0
+                    'collateral_ratio': 0,
+                    'borrow_weight': 1.0
                 }
             row = row.iloc[0]
             return {
                 'lend_rate': (row['lend_base_apr'] or 0) + (row['lend_reward_apr'] or 0),
                 'borrow_rate': (row['borrow_base_apr'] or 0) + (row['borrow_reward_apr'] or 0),
                 'price': row['price_usd'] or 0,
-                'collateral_ratio': row['collateral_ratio'] or 0
+                'collateral_ratio': row['collateral_ratio'] or 0,
+                'borrow_weight': row.get('borrow_weight', 1.0) or 1.0
             }
 
         leg_1A = get_leg_data(position['protocol_A'], position['token1_contract'])
@@ -786,7 +795,9 @@ class PositionService:
             'price_2B': leg_2B['price'],
             'price_3B': leg_3B['price'],
             'collateral_ratio_1A': leg_1A['collateral_ratio'],
-            'collateral_ratio_2B': leg_2B['collateral_ratio']
+            'collateral_ratio_2B': leg_2B['collateral_ratio'],
+            'borrow_weight_2A': leg_2A['borrow_weight'],
+            'borrow_weight_3B': leg_3B['borrow_weight']
         }
 
     def _determine_rebalance_action(

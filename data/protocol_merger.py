@@ -143,7 +143,9 @@ def merge_protocol_data(stablecoin_contracts: Set[str] = None) -> Tuple[
     pd.DataFrame,  # lend_rewards
     pd.DataFrame,  # borrow_rewards
     pd.DataFrame,  # available_borrow
-    pd.DataFrame   # borrow_fees
+    pd.DataFrame,  # borrow_fees
+    pd.DataFrame,  # borrow_weights
+    pd.DataFrame   # liquidation_thresholds
 ]:
     """
     Merge data from all protocols into unified DataFrames.
@@ -208,7 +210,9 @@ def merge_protocol_data(stablecoin_contracts: Set[str] = None) -> Tuple[
     borrow_reward_rows = []  # NEW
     available_borrow_rows = []  # NEW
     borrow_fee_rows = []  # NEW
-    
+    borrow_weight_rows = []  # NEW
+    liquidation_thresholds_rows = []  # NEW: LLTV tracking
+
     for contract, info in token_universe.items():
         symbol = info['symbol']
         
@@ -276,6 +280,22 @@ def merge_protocol_data(stablecoin_contracts: Set[str] = None) -> Tuple[
             borrow_fee_row[protocol] = fee
         borrow_fee_rows.append(borrow_fee_row)
 
+        # NEW: Build borrow weight row
+        borrow_weight_row = {'Token': symbol, 'Contract': contract}
+        for protocol in protocols:
+            df = protocol_data[protocol]['borrow']
+            weight = get_rate_for_contract(df, contract, 'Borrow_weight')
+            borrow_weight_row[protocol] = weight if not pd.isna(weight) else 1.0  # Default 1.0
+        borrow_weight_rows.append(borrow_weight_row)
+
+        # NEW: Build liquidation threshold row
+        liquidation_threshold_row = {'Token': symbol, 'Contract': contract}
+        for protocol in protocols:
+            df = protocol_data[protocol]['borrow']
+            ltv = get_rate_for_contract(df, contract, 'Liquidation_ltv')
+            liquidation_threshold_row[protocol] = ltv if not pd.isna(ltv) else 0.0  # Default 0.0
+        liquidation_thresholds_rows.append(liquidation_threshold_row)
+
     lend_df = pd.DataFrame(lend_rows)
     borrow_df = pd.DataFrame(borrow_rows)
     collateral_df = pd.DataFrame(collateral_rows)
@@ -284,7 +304,9 @@ def merge_protocol_data(stablecoin_contracts: Set[str] = None) -> Tuple[
     borrow_rewards_df = pd.DataFrame(borrow_reward_rows)  # NEW
     available_borrow_df = pd.DataFrame(available_borrow_rows)  # NEW
     borrow_fees_df = pd.DataFrame(borrow_fee_rows)  # NEW
-    
+    borrow_weights_df = pd.DataFrame(borrow_weight_rows)  # NEW
+    liquidation_thresholds_df = pd.DataFrame(liquidation_thresholds_rows)  # NEW: LLTV
+
     # Filter: Remove tokens that are only in one protocol (unless they're stablecoins)
     # Matching by CONTRACT ADDRESS (not symbol) for accuracy
     print(f"\n[FILTER] Token universe before filter: {len(lend_df)} tokens")
@@ -338,5 +360,7 @@ def merge_protocol_data(stablecoin_contracts: Set[str] = None) -> Tuple[
     borrow_rewards_df = borrow_rewards_df.loc[tokens_to_keep].reset_index(drop=True)  # NEW
     available_borrow_df = available_borrow_df.loc[tokens_to_keep].reset_index(drop=True)  # NEW
     borrow_fees_df = borrow_fees_df.loc[tokens_to_keep].reset_index(drop=True)  # NEW
+    borrow_weights_df = borrow_weights_df.loc[tokens_to_keep].reset_index(drop=True)  # NEW
+    liquidation_thresholds_df = liquidation_thresholds_df.loc[tokens_to_keep].reset_index(drop=True)  # NEW: LLTV
 
-    return lend_df, borrow_df, collateral_df, prices_df, lend_rewards_df, borrow_rewards_df, available_borrow_df, borrow_fees_df
+    return lend_df, borrow_df, collateral_df, prices_df, lend_rewards_df, borrow_rewards_df, available_borrow_df, borrow_fees_df, borrow_weights_df, liquidation_thresholds_df
