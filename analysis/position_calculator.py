@@ -582,6 +582,7 @@ if __name__ == "__main__":
     lend_rate_1A = 0.05027
     borrow_rate_2A = 0.1486
     collateral_1A = 0.7
+    liquidation_threshold_1A = 0.75  # Must be > collateral_1A (liquidation occurs at higher LTV)
     price_1A = 1.116726
     price_2A = 0.04458
     
@@ -589,6 +590,7 @@ if __name__ == "__main__":
     lend_rate_2B = 0.25906
     borrow_rate_3B = 0.5
     collateral_2B = 0.3
+    liquidation_threshold_2B = 0.35  # Must be > collateral_2B (liquidation occurs at higher LTV)
     price_2B = 0.04454
     price_3B = 1.11681
     
@@ -597,12 +599,13 @@ if __name__ == "__main__":
     print("\nFetching data from protocols...")
     
     # Check if all data is available
-    if None in [lend_rate_1A, borrow_rate_2A, lend_rate_2B, borrow_rate_3B, 
-                collateral_1A, collateral_2B, price_1A, price_2A, price_2B, price_3B]:
+    if None in [lend_rate_1A, borrow_rate_2A, lend_rate_2B, borrow_rate_3B,
+                collateral_1A, collateral_2B, liquidation_threshold_1A, liquidation_threshold_2B,
+                price_1A, price_2A, price_2B, price_3B]:
         print("❌ Error: Missing data for this token/protocol combination")
-        print(f"   {token1} in {protocol_A}: lend={lend_rate_1A}, collateral={collateral_1A}, price={price_1A}")
+        print(f"   {token1} in {protocol_A}: lend={lend_rate_1A}, collateral={collateral_1A}, lltv={liquidation_threshold_1A}, price={price_1A}")
         print(f"   {token2} in {protocol_A}: borrow={borrow_rate_2A}, price={price_2A}")
-        print(f"   {token2} in {protocol_B}: lend={lend_rate_2B}, collateral={collateral_2B}, price={price_2B}")
+        print(f"   {token2} in {protocol_B}: lend={lend_rate_2B}, collateral={collateral_2B}, lltv={liquidation_threshold_2B}, price={price_2B}")
         print(f"   {token3} in {protocol_B}: borrow={borrow_rate_3B}, price={price_3B}")
         import sys
         sys.exit(1)
@@ -622,6 +625,8 @@ if __name__ == "__main__":
         borrow_rate_token3_B=borrow_rate_3B,
         collateral_ratio_token1_A=collateral_1A,
         collateral_ratio_token2_B=collateral_2B,
+        liquidation_threshold_token1_A=liquidation_threshold_1A,
+        liquidation_threshold_token2_B=liquidation_threshold_2B,
         price_token1_A=price_1A,
         price_token2_A=price_2A,
         price_token2_B=price_2B,

@@ -269,8 +269,8 @@ entry_effective_ltv_2B = strategy_row.get('effective_ltv_2B', 0)
     'Rate': f"{strategy['lend_rate_1A'] * 100:.2f}%",
     'maxCF': f"{strategy['collateral_ratio_1A'] * 100:.1f}%",
     'LLTV': f"{strategy['liquidation_threshold_1A'] * 100:.1f}%",
-    'Borrow Weight': '-',
     'Effective LTV': f"{strategy['effective_ltv_1A'] * 100:.1f}%",  # NEW
+    'Borrow Weight': '-',
     'Weight': f"{strategy['L_A']:.2f}x"
 }
 ```

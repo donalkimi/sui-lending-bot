@@ -270,3 +270,80 @@ if token1 == token2:  # Are these symbols or contracts?
 - ✅ rate_analyzer.py: Uses symbols as iterators, stores contracts in results
 - ✅ dashboard_renderer.py: Symbol filtering only at UI layer (acceptable)
 - ✅ No critical bugs found where symbols are used for logic incorrectly
+
+### 10. Collateral Ratio and Liquidation Threshold Pairing
+
+**Core Principle:** Wherever collateral_ratio parameters are used, liquidation_threshold parameters MUST also be present.
+
+**Why:**
+- **Risk Management:** Both values define the safety boundaries of lending positions
+- **Completeness:** Collateral ratio without liquidation threshold is incomplete information
+- **Database Integrity:** Schema enforces storing both together
+
+**Enforcement:**
+- ✅ Function signatures require both as parameters
+- ✅ Database tables have both columns
+- ✅ Protocol readers fetch both together
+- ✅ Type hints cause IDE warnings if missing
+
+**Relationship:**
+- `collateral_ratio` (Max LTV): Maximum you can borrow (e.g., 0.70 = 70%)
+- `liquidation_threshold` (Liquidation LTV): Point at which liquidation occurs (e.g., 0.75 = 75%)
+- **Always: liquidation_threshold > collateral_ratio** (liquidation happens at higher LTV to provide safety buffer)
+
+**Correct patterns:**
+```python
+# ✅ CORRECT: Both parameters together, with correct relationship
+def analyze_strategy(
+    collateral_ratio_token1_A: float,          # e.g., 0.70 (70% max borrow)
+    collateral_ratio_token2_B: float,          # e.g., 0.30 (30% max borrow)
+    liquidation_threshold_token1_A: float,     # e.g., 0.75 (75% liquidation) > 0.70
+    liquidation_threshold_token2_B: float,     # e.g., 0.35 (35% liquidation) > 0.30
+    ...
+)
+
+# ❌ WRONG: Only collateral ratio
+def analyze_strategy(
+    collateral_ratio_token1_A: float,
+    collateral_ratio_token2_B: float,
+    ...
+)
+```
+
+**Architecture layers:**
+```
+┌──────────────────────┐
+│   Protocol APIs      │ Return: both collateral_ratio + liquidation_threshold
+└──────────┬───────────┘
+           │
+           ▼
+┌──────────────────────┐
+│  protocol_merger.py  │ Stores: both values together
+└──────────┬───────────┘
+           │
+           ▼
+┌──────────────────────┐
+│  rate_analyzer.py    │ Retrieves: both values together
+│                      │ Passes: both to calculator
+└──────────┬───────────┘
+           │
+           ▼
+┌──────────────────────┐
+│  Database (rates)    │ Stores: both collateral_ratio + liquidation_threshold
+└──────────┬───────────┘
+           │
+           ▼
+┌──────────────────────┐
+│  position_calculator │ Uses: collateral_ratio for calculations
+│                      │ Stores: both in result dictionary
+└──────────────────────┘
+```
+
+**Verification status (as of 2026-01-29):**
+- ✅ NaviReader: Fetches both together
+- ✅ PebbleReader: Fetches both together
+- ✅ RateTracker: Stores both in rates_snapshot table
+- ✅ RateAnalyzer: Retrieves and passes both to calculator
+- ✅ PositionCalculator: Requires both as parameters
+- ✅ PositionService: Stores both in positions table
+- ✅ All function signatures enforce pairing through type hints
