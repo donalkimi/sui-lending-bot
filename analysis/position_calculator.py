@@ -3,7 +3,7 @@ Position size calculator for recursive cross-protocol lending strategy
 """
 
 import numpy as np
-from typing import Dict, Tuple, Union
+from typing import Dict, Tuple, Union, Optional
 
 
 class PositionCalculator:
@@ -30,10 +30,16 @@ class PositionCalculator:
     
     def calculate_positions(
         self,
+        liquidation_threshold_A: float,
+        liquidation_threshold_B: float,
         collateral_ratio_A: float,
         collateral_ratio_B: float,
         borrow_weight_A: float = 1.0,
-        borrow_weight_B: float = 1.0
+        borrow_weight_B: float = 1.0,
+        protocol_A: Optional[str] = None,
+        protocol_B: Optional[str] = None,
+        token1: Optional[str] = None,
+        token2: Optional[str] = None
     ) -> Dict[str, float]:
         """
         Calculate recursive position sizes that converge to steady state
@@ -50,18 +56,20 @@ class PositionCalculator:
         directional price exposure to the high-yield token.
 
         Args:
-            collateral_ratio_A: Max LTV for Protocol A (e.g., 0.75 for 75%)
-            collateral_ratio_B: Max LTV for Protocol B (e.g., 0.80 for 80%)
+            liquidation_threshold_A: Liquidation LTV for Protocol A (e.g., 0.75 for 75%)
+            liquidation_threshold_B: Liquidation LTV for Protocol B (e.g., 0.80 for 80%)
+            collateral_ratio_A: Max LTV for Protocol A (e.g., 0.70 for 70%)
+            collateral_ratio_B: Max LTV for Protocol B (e.g., 0.75 for 75%)
             borrow_weight_A: Borrow weight multiplier for token2 (default 1.0)
             borrow_weight_B: Borrow weight multiplier for token3 (default 1.0)
 
         Returns:
             Dictionary with position sizes: {L_A, B_A, L_B, B_B}
         """
-        # Adjusted collateral ratios with safety buffer AND borrow weights
+        # Use liquidation threshold instead of collateral ratio with safety buffer AND borrow weights
         # Borrow weight reduces effective collateral (higher weight = less borrowing capacity)
-        r_A = (collateral_ratio_A / borrow_weight_A) / (1 + self.liq_dist)
-        r_B = (collateral_ratio_B / borrow_weight_B) / (1 + self.liq_dist)
+        r_A = (liquidation_threshold_A / borrow_weight_A) / (1 + self.liq_dist)
+        r_B = (liquidation_threshold_B / borrow_weight_B) / (1 + self.liq_dist)
 
         # Geometric series convergence
         # L_A = 1 + r_A*r_B + (r_A*r_B)^2 + ... = 1 / (1 - r_A*r_B)
@@ -69,7 +77,47 @@ class PositionCalculator:
         B_A = L_A * r_A
         L_B = B_A  # All borrowed token2 is lent in Protocol B
         B_B = L_B * r_B
-        
+
+        # Calculate effective LTV (on-the-fly, not stored in return dict)
+        effective_ltv_A = (B_A / L_A) * borrow_weight_A
+        effective_ltv_B = (B_B / L_B) * borrow_weight_B
+
+        # AUTO-ADJUSTMENT: Bring effective LTV down to 99.5% of maxCF if exceeded
+        adjusted_A = False
+        adjusted_B = False
+
+        # Build context strings for debug messages
+        context_A = f" [{protocol_A} - Lend {token1}]" if protocol_A and token1 else ""
+        context_B = f" [{protocol_B} - Lend {token2}]" if protocol_B and token2 else ""
+
+        if effective_ltv_A > collateral_ratio_A:
+            print(f"⚠️  Adjusting r_A{context_A}: effective_LTV_A ({effective_ltv_A:.4f}) > maxCF_A ({collateral_ratio_A:.4f})")
+            print(f"   Setting effective_LTV_A = {collateral_ratio_A * 0.995:.4f} (99.5% of maxCF)")
+            r_A = (collateral_ratio_A * 0.995) / borrow_weight_A
+            adjusted_A = True
+
+        if effective_ltv_B > collateral_ratio_B:
+            print(f"⚠️  Adjusting r_B{context_B}: effective_LTV_B ({effective_ltv_B:.4f}) > maxCF_B ({collateral_ratio_B:.4f})")
+            print(f"   Setting effective_LTV_B = {collateral_ratio_B * 0.995:.4f} (99.5% of maxCF)")
+            r_B = (collateral_ratio_B * 0.995) / borrow_weight_B
+            adjusted_B = True
+
+        # Recalculate positions if any adjustment was made
+        if adjusted_A or adjusted_B:
+            L_A = 1.0 / (1.0 - r_A * r_B)
+            B_A = L_A * r_A
+            L_B = B_A
+            B_B = L_B * r_B
+
+            # Recalculate effective LTV for verification and print only for adjusted parameters
+            effective_ltv_A = (B_A / L_A) * borrow_weight_A
+            effective_ltv_B = (B_B / L_B) * borrow_weight_B
+
+            if adjusted_A:
+                print(f"✓ Adjusted{context_A}: effective_LTV_A = {effective_ltv_A:.4f} (vs maxCF {collateral_ratio_A:.4f})")
+            if adjusted_B:
+                print(f"✓ Adjusted{context_B}: effective_LTV_B = {effective_ltv_B:.4f} (vs maxCF {collateral_ratio_B:.4f})")
+
         return {
             'L_A': L_A,  # Total lent token1 in Protocol A
             'B_A': B_A,  # Total borrowed token2 from Protocol A
@@ -77,6 +125,10 @@ class PositionCalculator:
             'B_B': B_B,  # Total borrowed token1 from Protocol B
             'r_A': r_A,  # Effective ratio for Protocol A
             'r_B': r_B,  # Effective ratio for Protocol B
+            'liquidation_threshold_A': liquidation_threshold_A,  # Store for reference
+            'liquidation_threshold_B': liquidation_threshold_B,  # Store for reference
+            'collateral_ratio_A': collateral_ratio_A,  # Store for reference
+            'collateral_ratio_B': collateral_ratio_B,  # Store for reference
             'borrow_weight_A': borrow_weight_A,  # Borrow weight for token2
             'borrow_weight_B': borrow_weight_B,  # Borrow weight for token3
             'liquidation_distance': self.liq_dist_input  # Original user input (for display)
@@ -276,9 +328,6 @@ class PositionCalculator:
         if side not in ['lending', 'borrowing']:
             raise ValueError(f"side must be 'lending' or 'borrowing', got '{side}'")
 
-        if lltv <= 0:
-            raise ValueError(f"lltv must be positive, got {lltv}")
-
         if lending_token_price <= 0 or borrowing_token_price <= 0:
             raise ValueError("Token prices must be positive")
 
@@ -290,6 +339,18 @@ class PositionCalculator:
 
         # Determine current price based on side
         current_price = lending_token_price if side == 'lending' else borrowing_token_price
+
+        # Special case: LLTV = 0 means asset cannot be used as collateral
+        # Any position would be immediately liquidated
+        if lltv <= 0:
+            return {
+                'liq_price': 0.0,
+                'current_price': current_price,
+                'pct_distance': -1.0,
+                'current_ltv': current_ltv,
+                'lltv': lltv,
+                'direction': 'liquidated'
+            }
 
         # Check for edge case: zero or negative values
         if collateral_value <= 0 or loan_value <= 0:
@@ -451,10 +512,16 @@ class PositionCalculator:
         try:
             # Calculate position sizes
             positions = self.calculate_positions(
+                liquidation_threshold_token1_A,
+                liquidation_threshold_token2_B,
                 collateral_ratio_token1_A,
                 collateral_ratio_token2_B,
                 borrow_weight_2A,
-                borrow_weight_3B
+                borrow_weight_3B,
+                protocol_A=protocol_A,
+                protocol_B=protocol_B,
+                token1=token1,
+                token2=token2
             )
 
             # Calculate max deployable size based on liquidity constraints

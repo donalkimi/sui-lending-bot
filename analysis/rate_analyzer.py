@@ -519,6 +519,20 @@ class RateAnalyzer:
                                             price_1A, price_2A, price_2B, price_3B])):  # Add prices to check
                                 continue
 
+                            # Skip if collateral ratios are zero or near-zero (causes division by zero)
+                            # A collateral ratio of 0 means the token cannot be used as collateral
+                            if collateral_1A <= 1e-9 or collateral_2B <= 1e-9:
+                                continue
+
+                            # Skip if liquidation thresholds are zero or near-zero
+                            # Zero liquidation threshold is invalid (position would be instantly liquidated)
+                            if liquidation_threshold_1A <= 1e-9 or liquidation_threshold_2B <= 1e-9:
+                                continue
+
+                            # Skip if any prices are zero or near-zero (causes division by zero in calculations)
+                            if any(p <= 1e-9 for p in [price_1A, price_2A, price_2B, price_3B]):
+                                continue
+
 
                             # Analyze this strategy
                             result = self.calculator.analyze_strategy(

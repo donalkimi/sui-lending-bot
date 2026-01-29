@@ -10,6 +10,7 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.time_helpers import to_datetime_str, to_seconds
+from analysis.position_calculator import PositionCalculator
 
 
 class PositionService:
@@ -268,11 +269,21 @@ class PositionService:
 
         self.conn.commit()
 
-    def get_active_positions(self) -> pd.DataFrame:
+    def get_active_positions(self, live_timestamp: Optional[int] = None) -> pd.DataFrame:
         """
-        Get all active positions.
+        Get all active positions, optionally filtered by timestamp.
 
         DESIGN PRINCIPLE: Always return timestamps as Unix seconds (int), not strings.
+        Implements the "timestamp as current time" principle - when live_timestamp is provided,
+        only returns positions where entry_timestamp <= live_timestamp.
+
+        Args:
+            live_timestamp: Optional Unix seconds timestamp representing "current time".
+                           If provided, only returns positions where entry_timestamp <= live_timestamp.
+                           If None, returns all active positions (backward compatible).
+
+        Returns:
+            DataFrame of active positions (may be empty if no positions match filter)
         """
         query = """
         SELECT *
@@ -284,26 +295,101 @@ class PositionService:
 
         # Convert timestamps to Unix seconds (DESIGN_NOTES principle)
         # IMPORTANT: Use Int64 dtype to handle nulls without converting to float64
+        def safe_to_seconds(value):
+            """Safely convert value to Unix seconds, handling bytes and other edge cases."""
+            if pd.isna(value):
+                return pd.NA
+            if isinstance(value, bytes):
+                # Skip bytes data - likely corrupted, treat as missing
+                return pd.NA
+            try:
+                return int(to_seconds(value))
+            except Exception:
+                # If conversion fails, treat as missing data
+                return pd.NA
+
         if not positions.empty:
             if 'entry_timestamp' in positions.columns:
-                positions['entry_timestamp'] = positions['entry_timestamp'].apply(
-                    lambda x: int(to_seconds(x))
-                )
+                positions['entry_timestamp'] = positions['entry_timestamp'].apply(safe_to_seconds)
+                # Remove rows with invalid entry_timestamp (critical field)
+                positions = positions[pd.notna(positions['entry_timestamp'])].copy()
+                # Convert to int after filtering out NAs
+                if not positions.empty:
+                    positions['entry_timestamp'] = positions['entry_timestamp'].astype(int)
+
             if 'close_timestamp' in positions.columns:
                 # Use Int64 (nullable integer) to prevent float64 conversion with NaN
-                positions['close_timestamp'] = positions['close_timestamp'].apply(
-                    lambda x: int(to_seconds(x)) if pd.notna(x) else pd.NA
-                ).astype('Int64')
+                positions['close_timestamp'] = positions['close_timestamp'].apply(safe_to_seconds).astype('Int64')
+
             if 'last_rebalance_timestamp' in positions.columns:
                 # Use Int64 (nullable integer) to prevent float64 conversion with NaN
-                positions['last_rebalance_timestamp'] = positions['last_rebalance_timestamp'].apply(
-                    lambda x: int(to_seconds(x)) if pd.notna(x) else pd.NA
-                ).astype('Int64')
+                positions['last_rebalance_timestamp'] = positions['last_rebalance_timestamp'].apply(safe_to_seconds).astype('Int64')
+
+            # Convert all numeric fields defensively (handle bytes/corrupted data)
+            def safe_to_int_df(value, default=0):
+                """Convert bytes, NaN, or string to int for DataFrame columns"""
+                if pd.isna(value):
+                    return default
+                if isinstance(value, bytes):
+                    try:
+                        return int.from_bytes(value, byteorder='little')
+                    except Exception:
+                        return default
+                try:
+                    return int(value)
+                except (TypeError, ValueError):
+                    return default
+
+            def safe_to_float_df(value, default=0.0):
+                """Convert bytes, NaN, or string to float for DataFrame columns"""
+                if pd.isna(value):
+                    return default
+                if isinstance(value, bytes):
+                    try:
+                        return float(int.from_bytes(value, byteorder='little'))
+                    except Exception:
+                        return default
+                try:
+                    return float(value)
+                except (TypeError, ValueError):
+                    return default
+
+            # Convert integer fields
+            integer_fields = ['rebalance_count']
+            for field in integer_fields:
+                if field in positions.columns:
+                    positions[field] = positions[field].apply(safe_to_int_df)
+
+            # Convert float fields
+            float_fields = [
+                'deployment_usd', 'L_A', 'B_A', 'L_B', 'B_B',
+                'entry_lend_rate_1A', 'entry_borrow_rate_2A', 'entry_lend_rate_2B', 'entry_borrow_rate_3B',
+                'entry_price_1A', 'entry_price_2A', 'entry_price_2B', 'entry_price_3B',
+                'entry_collateral_ratio_1A', 'entry_collateral_ratio_2B',
+                'entry_liquidation_threshold_1A', 'entry_liquidation_threshold_2B',
+                'entry_net_apr', 'entry_apr5', 'entry_apr30', 'entry_apr90', 'entry_days_to_breakeven',
+                'entry_liquidation_distance', 'entry_max_size_usd',
+                'entry_borrow_fee_2A', 'entry_borrow_fee_3B',
+                'entry_borrow_weight_2A', 'entry_borrow_weight_3B',
+                'accumulated_realised_pnl', 'expected_slippage_bps', 'actual_slippage_bps'
+            ]
+            for field in float_fields:
+                if field in positions.columns:
+                    positions[field] = positions[field].apply(safe_to_float_df)
+
+        # Apply timestamp filter if provided (Python-level filtering after conversion)
+        if live_timestamp is not None:
+            if not isinstance(live_timestamp, int):
+                raise TypeError(f"live_timestamp must be int (Unix seconds), got {type(live_timestamp).__name__}")
+
+            if not positions.empty:
+                # Filter: only include positions that existed at the selected timestamp
+                positions = positions[positions['entry_timestamp'] <= live_timestamp].copy()
 
         return positions
 
     def get_position_by_id(self, position_id: str) -> Optional[pd.Series]:
-        """Get position by ID"""
+        """Get position by ID with defensive bytes-to-numeric conversion"""
         query = """
         SELECT *
         FROM positions
@@ -316,13 +402,66 @@ class PositionService:
 
         position = result.iloc[0].copy()
 
+        # Helper function to safely convert bytes/corrupted data to int
+        def safe_to_int(value, default=0):
+            """Convert bytes, NaN, or string to int"""
+            if pd.isna(value):
+                return default
+            if isinstance(value, bytes):
+                try:
+                    return int.from_bytes(value, byteorder='little')
+                except Exception:
+                    return default
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return default
+
+        # Helper function to safely convert bytes/corrupted data to float
+        def safe_to_float(value, default=0.0):
+            """Convert bytes, NaN, or string to float"""
+            if pd.isna(value):
+                return default
+            if isinstance(value, bytes):
+                try:
+                    # Try interpreting as integer first, then convert to float
+                    return float(int.from_bytes(value, byteorder='little'))
+                except Exception:
+                    return default
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return default
+
         # Convert timestamps to Unix seconds
-        # IMPORTANT: Explicitly cast to int() to prevent pandas from converting to float64
         position['entry_timestamp'] = int(to_seconds(position['entry_timestamp']))
         if pd.notna(position.get('close_timestamp')):
             position['close_timestamp'] = int(to_seconds(position['close_timestamp']))
         if pd.notna(position.get('last_rebalance_timestamp')):
             position['last_rebalance_timestamp'] = int(to_seconds(position['last_rebalance_timestamp']))
+
+        # Convert all numeric fields (integer fields)
+        integer_fields = ['rebalance_count']
+        for field in integer_fields:
+            if field in position:
+                position[field] = safe_to_int(position[field])
+
+        # Convert all numeric fields (float fields)
+        float_fields = [
+            'deployment_usd', 'L_A', 'B_A', 'L_B', 'B_B',
+            'entry_lend_rate_1A', 'entry_borrow_rate_2A', 'entry_lend_rate_2B', 'entry_borrow_rate_3B',
+            'entry_price_1A', 'entry_price_2A', 'entry_price_2B', 'entry_price_3B',
+            'entry_collateral_ratio_1A', 'entry_collateral_ratio_2B',
+            'entry_liquidation_threshold_1A', 'entry_liquidation_threshold_2B',
+            'entry_net_apr', 'entry_apr5', 'entry_apr30', 'entry_apr90', 'entry_days_to_breakeven',
+            'entry_liquidation_distance', 'entry_max_size_usd',
+            'entry_borrow_fee_2A', 'entry_borrow_fee_3B',
+            'entry_borrow_weight_2A', 'entry_borrow_weight_3B',
+            'accumulated_realised_pnl', 'expected_slippage_bps', 'actual_slippage_bps'
+        ]
+        for field in float_fields:
+            if field in position:
+                position[field] = safe_to_float(position[field])
 
         return position
 
@@ -652,7 +791,63 @@ class PositionService:
         exit_size_usd_2B = exit_token_amount_2B * closing_rates['price_2B']
         exit_size_usd_3B = exit_token_amount_3B * closing_rates['price_3B']
 
-        # 6. Determine rebalance actions
+        # 6. Calculate liquidation prices and distances at time of rebalance
+        # Use entry token amounts with closing prices
+        calc = PositionCalculator(liquidation_distance=position['entry_liquidation_distance'])
+
+        # Protocol A collateral and loan values (using entry token amounts and closing prices)
+        closing_collateral_A = entry_token_amount_1A * closing_rates['price_1A']
+        closing_loan_A = entry_token_amount_2A * closing_rates['price_2A']
+
+        # Leg 1: Protocol A - Lend token1 (lending side)
+        liq_result_1A = calc.calculate_liquidation_price(
+            collateral_value=closing_collateral_A,
+            loan_value=closing_loan_A,
+            lending_token_price=closing_rates['price_1A'],
+            borrowing_token_price=closing_rates['price_2A'],
+            lltv=position.get('entry_liquidation_threshold_1A', position['entry_collateral_ratio_1A']),
+            side='lending',
+            borrow_weight=position.get('entry_borrow_weight_2A', 1.0)
+        )
+
+        # Leg 2: Protocol A - Borrow token2 (borrowing side)
+        liq_result_2A = calc.calculate_liquidation_price(
+            collateral_value=closing_collateral_A,
+            loan_value=closing_loan_A,
+            lending_token_price=closing_rates['price_1A'],
+            borrowing_token_price=closing_rates['price_2A'],
+            lltv=position.get('entry_liquidation_threshold_1A', position['entry_collateral_ratio_1A']),
+            side='borrowing',
+            borrow_weight=position.get('entry_borrow_weight_2A', 1.0)
+        )
+
+        # Protocol B collateral and loan values (using entry token amounts and closing prices)
+        closing_collateral_B = entry_token_amount_2B * closing_rates['price_2B']
+        closing_loan_B = entry_token_amount_3B * closing_rates['price_3B']
+
+        # Leg 3: Protocol B - Lend token2 (lending side)
+        liq_result_2B = calc.calculate_liquidation_price(
+            collateral_value=closing_collateral_B,
+            loan_value=closing_loan_B,
+            lending_token_price=closing_rates['price_2B'],
+            borrowing_token_price=closing_rates['price_3B'],
+            lltv=position.get('entry_liquidation_threshold_2B', position['entry_collateral_ratio_2B']),
+            side='lending',
+            borrow_weight=position.get('entry_borrow_weight_3B', 1.0)
+        )
+
+        # Leg 4: Protocol B - Borrow token3 (borrowing side)
+        liq_result_3B = calc.calculate_liquidation_price(
+            collateral_value=closing_collateral_B,
+            loan_value=closing_loan_B,
+            lending_token_price=closing_rates['price_2B'],
+            borrowing_token_price=closing_rates['price_3B'],
+            lltv=position.get('entry_liquidation_threshold_2B', position['entry_collateral_ratio_2B']),
+            side='borrowing',
+            borrow_weight=position.get('entry_borrow_weight_3B', 1.0)
+        )
+
+        # 7. Determine rebalance actions
         entry_action_1A = "Initial deployment"
         entry_action_2A = "Initial deployment"
         entry_action_2B = "Initial deployment"
@@ -684,6 +879,16 @@ class PositionService:
             'closing_price_2A': closing_rates['price_2A'],
             'closing_price_2B': closing_rates['price_2B'],
             'closing_price_3B': closing_rates['price_3B'],
+            # Liquidation prices at rebalance time (using entry token amounts + closing prices)
+            'closing_liq_price_1A': liq_result_1A.get('liq_price'),
+            'closing_liq_price_2A': liq_result_2A.get('liq_price'),
+            'closing_liq_price_2B': liq_result_2B.get('liq_price'),
+            'closing_liq_price_3B': liq_result_3B.get('liq_price'),
+            # Liquidation distances at rebalance time
+            'closing_liq_dist_1A': liq_result_1A.get('pct_distance'),
+            'closing_liq_dist_2A': liq_result_2A.get('pct_distance'),
+            'closing_liq_dist_2B': liq_result_2B.get('pct_distance'),
+            'closing_liq_dist_3B': liq_result_3B.get('pct_distance'),
             # Collateral ratios
             'collateral_ratio_1A': position['entry_collateral_ratio_1A'],
             'collateral_ratio_2B': position['entry_collateral_ratio_2B'],
@@ -889,6 +1094,8 @@ class PositionService:
                 opening_price_1A, opening_price_2A, opening_price_2B, opening_price_3B,
                 closing_lend_rate_1A, closing_borrow_rate_2A, closing_lend_rate_2B, closing_borrow_rate_3B,
                 closing_price_1A, closing_price_2A, closing_price_2B, closing_price_3B,
+                closing_liq_price_1A, closing_liq_price_2A, closing_liq_price_2B, closing_liq_price_3B,
+                closing_liq_dist_1A, closing_liq_dist_2A, closing_liq_dist_2B, closing_liq_dist_3B,
                 collateral_ratio_1A, collateral_ratio_2B,
                 liquidation_threshold_1A, liquidation_threshold_2B,
                 entry_action_1A, entry_action_2A, entry_action_2B, entry_action_3B,
@@ -899,7 +1106,7 @@ class PositionService:
                 exit_size_usd_1A, exit_size_usd_2A, exit_size_usd_2B, exit_size_usd_3B,
                 realised_fees, realised_pnl, realised_lend_earnings, realised_borrow_costs,
                 rebalance_reason, rebalance_notes
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             rebalance_id, position_id, sequence_number,
             opening_timestamp_str, closing_timestamp_str,
@@ -912,6 +1119,10 @@ class PositionService:
             snapshot['closing_lend_rate_2B'], snapshot['closing_borrow_rate_3B'],
             snapshot['closing_price_1A'], snapshot['closing_price_2A'],
             snapshot['closing_price_2B'], snapshot['closing_price_3B'],
+            snapshot['closing_liq_price_1A'], snapshot['closing_liq_price_2A'],
+            snapshot['closing_liq_price_2B'], snapshot['closing_liq_price_3B'],
+            snapshot['closing_liq_dist_1A'], snapshot['closing_liq_dist_2A'],
+            snapshot['closing_liq_dist_2B'], snapshot['closing_liq_dist_3B'],
             snapshot['collateral_ratio_1A'], snapshot['collateral_ratio_2B'],
             snapshot['liquidation_threshold_1A'], snapshot['liquidation_threshold_2B'],
             snapshot['entry_action_1A'], snapshot['entry_action_2A'],
@@ -985,3 +1196,149 @@ class PositionService:
         rebalances = pd.read_sql_query(query, self.conn, params=(position_id,))
 
         return rebalances
+
+    def get_position_state_at_timestamp(
+        self,
+        position_id: str,
+        selected_timestamp: int
+    ) -> Optional[Dict]:
+        """
+        Retrieve position state as it existed at a specific timestamp.
+
+        Handles rebalanced positions by checking historical segments in position_rebalances table.
+        Implements the "timestamp as current time" design principle for time-travel functionality.
+
+        DESIGN PRINCIPLE: Timestamps are Unix seconds (int) internally.
+
+        Args:
+            position_id: Position ID to query
+            selected_timestamp: Unix seconds timestamp representing "current time"
+
+        Returns:
+            Dictionary containing position state (L_A, B_A, L_B, B_B, rates, prices) as it
+            existed at selected_timestamp. Returns None if position doesn't exist.
+
+        Logic:
+            - If position has never been rebalanced (rebalance_count == 0):
+              Use current state from positions table
+            - If position has been rebalanced:
+              Query position_rebalances for segment covering selected_timestamp
+              (opening_timestamp <= selected_timestamp < closing_timestamp)
+            - If no segment matches: use current state from positions table
+              (selected_timestamp is before first rebalance or at/after last rebalance)
+        """
+        # Get current position
+        position = self.get_position_by_id(position_id)
+        if position is None:
+            return None
+
+        # Check if position has been rebalanced
+        # Note: get_position_by_id() already converts bytes to proper types
+        rebalance_count = position.get('rebalance_count', 0)
+
+        if pd.isna(rebalance_count) or rebalance_count == 0:
+            # Never rebalanced - use current state from positions table
+            return position.to_dict()
+
+        # Query for historical segment covering selected_timestamp
+        # Convert selected_timestamp to datetime string for DB query
+        selected_timestamp_str = to_datetime_str(selected_timestamp)
+
+        query = """
+        SELECT *
+        FROM position_rebalances
+        WHERE position_id = ?
+        AND opening_timestamp <= ?
+        AND closing_timestamp > ?
+        ORDER BY sequence_number DESC
+        LIMIT 1
+        """
+        segments = pd.read_sql_query(
+            query,
+            self.conn,
+            params=(position_id, selected_timestamp_str, selected_timestamp_str)
+        )
+
+        if not segments.empty:
+            # Found historical segment - use its state
+            segment = segments.iloc[0]
+
+            # Build state dictionary combining segment data with position metadata
+            state = {
+                'position_id': position_id,
+                'token1': position['token1'],
+                'token2': position['token2'],
+                'token3': position['token3'],
+                'token1_contract': position['token1_contract'],
+                'token2_contract': position['token2_contract'],
+                'token3_contract': position['token3_contract'],
+                'protocol_A': position['protocol_A'],
+                'protocol_B': position['protocol_B'],
+                'deployment_usd': segment['deployment_usd'],
+                'L_A': segment['L_A'],
+                'B_A': segment['B_A'],
+                'L_B': segment['L_B'],
+                'B_B': segment['B_B'],
+                # Use opening rates/prices as the "current" state during this segment
+                'entry_lend_rate_1A': segment['opening_lend_rate_1A'],
+                'entry_borrow_rate_2A': segment['opening_borrow_rate_2A'],
+                'entry_lend_rate_2B': segment['opening_lend_rate_2B'],
+                'entry_borrow_rate_3B': segment['opening_borrow_rate_3B'],
+                'entry_price_1A': segment['opening_price_1A'],
+                'entry_price_2A': segment['opening_price_2A'],
+                'entry_price_2B': segment['opening_price_2B'],
+                'entry_price_3B': segment['opening_price_3B'],
+                'entry_collateral_ratio_1A': segment['collateral_ratio_1A'],
+                'entry_collateral_ratio_2B': segment['collateral_ratio_2B'],
+                'entry_liquidation_threshold_1A': segment['liquidation_threshold_1A'],
+                'entry_liquidation_threshold_2B': segment['liquidation_threshold_2B'],
+                'entry_timestamp': to_seconds(segment['opening_timestamp']),
+                'is_historical_segment': True,  # Flag to indicate this is from a segment
+            }
+            return state
+        else:
+            # No segment covers this timestamp - use current state from positions table
+            # This occurs when:
+            # - selected_timestamp is before first rebalance, OR
+            # - selected_timestamp is at/after last rebalance
+            state = position.to_dict()
+            state['is_historical_segment'] = False
+            return state
+
+    def has_future_rebalances(
+        self,
+        position_id: str,
+        selected_timestamp: int
+    ) -> bool:
+        """
+        Check if position has any rebalances that occurred AFTER the selected timestamp.
+
+        This prevents time-travel paradoxes: if viewing Wednesday but position was
+        rebalanced on Thursday, user cannot rebalance at Wednesday (would break the timeline).
+
+        DESIGN PRINCIPLE: Timestamps are Unix seconds (int) internally.
+
+        Args:
+            position_id: Position ID to check
+            selected_timestamp: Unix seconds timestamp representing "current time"
+
+        Returns:
+            True if there are rebalances with opening_timestamp > selected_timestamp,
+            False otherwise (safe to rebalance at selected_timestamp)
+        """
+        # Convert to datetime string for DB query
+        selected_timestamp_str = to_datetime_str(selected_timestamp)
+
+        query = """
+        SELECT COUNT(*) as count
+        FROM position_rebalances
+        WHERE position_id = ?
+        AND opening_timestamp > ?
+        """
+        result = pd.read_sql_query(
+            query,
+            self.conn,
+            params=(position_id, selected_timestamp_str)
+        )
+
+        return result['count'].iloc[0] > 0 if not result.empty else False

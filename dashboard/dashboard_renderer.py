@@ -483,9 +483,9 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
     def get_token_precision(price: float, target_usd: float = 10.0) -> int:
         """Calculate decimal places to show ~$10 worth of precision."""
         if price <= 0:
-            return 3
+            return 5
         decimal_places = math.ceil(-math.log10(price / target_usd))
-        return max(3, min(8, decimal_places))
+        return max(5, min(8, decimal_places))
 
     # ========================================
     # HEADER SECTION
@@ -599,7 +599,7 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
         loan_value=position_size_2A,
         lending_token_price=strategy['P1_A'],
         borrowing_token_price=strategy['P2_A'],
-        lltv=strategy['collateral_ratio_1A'],
+        lltv=strategy.get('liquidation_threshold_1A', strategy['collateral_ratio_1A']),
         side='lending',
         borrow_weight=strategy.get('borrow_weight_2A', 1.0)
     )
@@ -610,7 +610,7 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
         loan_value=position_size_2A,
         lending_token_price=strategy['P1_A'],
         borrowing_token_price=strategy['P2_A'],
-        lltv=strategy['collateral_ratio_1A'],
+        lltv=strategy.get('liquidation_threshold_1A', strategy['collateral_ratio_1A']),
         side='borrowing',
         borrow_weight=strategy.get('borrow_weight_2A', 1.0)
     )
@@ -621,7 +621,7 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
         loan_value=position_size_3B,
         lending_token_price=strategy['P2_B'],
         borrowing_token_price=strategy['P3_B'],
-        lltv=strategy['collateral_ratio_2B'],
+        lltv=strategy.get('liquidation_threshold_2B', strategy['collateral_ratio_2B']),
         side='lending',
         borrow_weight=strategy.get('borrow_weight_3B', 1.0)
     )
@@ -632,7 +632,7 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
         loan_value=position_size_3B,
         lending_token_price=strategy['P2_B'],
         borrowing_token_price=strategy['P3_B'],
-        lltv=strategy['collateral_ratio_2B'],
+        lltv=strategy.get('liquidation_threshold_2B', strategy['collateral_ratio_2B']),
         side='borrowing',
         borrow_weight=strategy.get('borrow_weight_3B', 1.0)
     )
@@ -640,6 +640,10 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
     # Build detail table
     st.markdown("**Position Details:**")
     detail_data = []
+
+    # Calculate effective LTV on-the-fly
+    effective_ltv_1A = (strategy['B_A'] / strategy['L_A']) * strategy.get('borrow_weight_2A', 1.0)
+    effective_ltv_2B = (strategy['B_B'] / strategy['L_B']) * strategy.get('borrow_weight_3B', 1.0)
 
     # Row 1: Protocol A - Lend token1
     lltv_1A = strategy.get('liquidation_threshold_1A', 0.0)
@@ -649,7 +653,8 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
         'Action': 'Lend',
         'maxCF': f"{strategy['collateral_ratio_1A']:.2%}",
         'LLTV': f"{lltv_1A:.2%}" if lltv_1A > 0 else "",
-        'Borrow Weight': f"{strategy.get('borrow_weight_2A', 1.0):.2f}",
+        'Effective LTV': f"{effective_ltv_1A:.2%}",
+        'Borrow Weight': "-",
         'Weight': f"{strategy['L_A']:.4f}",
         'Rate': f"{strategy['lend_rate_1A'] * 100:.2f}%",
         'Token Amount': f"{entry_token_amount_1A:,.{precision_1A}f}",
@@ -667,9 +672,10 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
         'Protocol': strategy['protocol_A'],
         'Token': strategy['token2'],
         'Action': 'Borrow',
-        'maxCF': f"{strategy['collateral_ratio_1A']:.2%}",
-        'LLTV': f"{lltv_1A:.2%}" if lltv_1A > 0 else "",
-        'Borrow Weight': f"{strategy.get('borrow_weight_2A', 1.0):.2f}",
+        'maxCF': "-",
+        'LLTV': "-",
+        'Effective LTV': "-",
+        'Borrow Weight': f"{strategy.get('borrow_weight_2A', 1.0):.2f}x",
         'Weight': f"{strategy['B_A']:.4f}",
         'Rate': f"{strategy['borrow_rate_2A'] * 100:.2f}%",
         'Token Amount': f"{entry_token_amount_2A:,.{precision_2A}f}",
@@ -690,7 +696,8 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
         'Action': 'Lend',
         'maxCF': f"{strategy['collateral_ratio_2B']:.2%}",
         'LLTV': f"{lltv_2B:.2%}" if lltv_2B > 0 else "",
-        'Borrow Weight': f"{strategy.get('borrow_weight_3B', 1.0):.2f}",
+        'Effective LTV': f"{effective_ltv_2B:.2%}",
+        'Borrow Weight': "-",
         'Weight': f"{strategy['L_B']:.4f}",
         'Rate': f"{strategy['lend_rate_2B'] * 100:.2f}%",
         'Token Amount': f"{entry_token_amount_2B:,.{precision_2B}f}",
@@ -708,9 +715,10 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
         'Protocol': strategy['protocol_B'],
         'Token': strategy['token3'],
         'Action': 'Borrow',
-        'maxCF': f"{strategy['collateral_ratio_2B']:.2%}",
-        'LLTV': f"{lltv_2B:.2%}" if lltv_2B > 0 else "",
-        'Borrow Weight': f"{strategy.get('borrow_weight_3B', 1.0):.2f}",
+        'maxCF': "-",
+        'LLTV': "-",
+        'Effective LTV': "-",
+        'Borrow Weight': f"{strategy.get('borrow_weight_3B', 1.0):.2f}x",
         'Weight': f"{strategy['B_B']:.4f}",
         'Rate': f"{strategy['borrow_rate_3B'] * 100:.2f}%",
         'Token Amount': f"{entry_token_amount_3B:,.{precision_3B}f}",
@@ -957,11 +965,27 @@ def render_positions_table_tab(timestamp_seconds: int):
         conn = get_db_connection()
         service = PositionService(conn)
 
-        # Get active positions
-        active_positions = service.get_active_positions()
+        # Get active positions (filtered by selected timestamp)
+        active_positions = service.get_active_positions(live_timestamp=timestamp_seconds)
 
         if active_positions.empty:
-            st.info("📭 No active positions. Deploy a strategy from the All Strategies tab to get started!")
+            # Provide context-aware messaging based on whether viewing historical timestamp
+            latest_ts_query = "SELECT MAX(timestamp) FROM rates_snapshot"
+            latest_ts_result = pd.read_sql_query(latest_ts_query, conn)
+
+            if not latest_ts_result.empty and latest_ts_result.iloc[0, 0] is not None:
+                latest_ts = to_seconds(latest_ts_result.iloc[0, 0])
+
+                if timestamp_seconds < latest_ts:
+                    # Historical view with no positions
+                    st.info(f"📭 No active positions at {to_datetime_str(timestamp_seconds)}. "
+                           "Positions may have been deployed later, or you can view a different timestamp.")
+                else:
+                    # Current view with no positions
+                    st.info("📭 No active positions. Deploy a strategy from the All Strategies tab to get started!")
+            else:
+                st.info("📭 No active positions. Deploy a strategy from the All Strategies tab to get started!")
+
             conn.close()
             return
 
@@ -1011,24 +1035,39 @@ def render_positions_table_tab(timestamp_seconds: int):
                 target_usd: Target USD value for precision (default $10)
 
             Returns:
-                Number of decimal places to display (minimum 3)
+                Number of decimal places to display (minimum 5)
 
             Examples:
-                - BTC @ $100,000 → 4 decimals (0.0001 BTC = $10)
-                - ETH @ $3,000 → 3 decimals (0.001 ETH = $3)
-                - SUI @ $1 → 3 decimals (minimum)
-                - DEEP @ $0.01 → 3 decimals (1.000 DEEP = $0.01)
+                - BTC @ $100,000 → 5 decimals (0.00010 BTC = $10)
+                - ETH @ $3,000 → 5 decimals (0.00333 ETH = $10)
+                - SUI @ $1 → 5 decimals (minimum)
+                - DEEP @ $0.01 → 5 decimals (1.00000 DEEP = $0.01)
             """
             import math
 
             if price <= 0:
-                return 3  # Default fallback (minimum 3)
+                return 5  # Default fallback (minimum 5)
 
             # Calculate: decimal_places = ceil(-log10(price / target_usd))
             decimal_places = math.ceil(-math.log10(price / target_usd))
 
-            # Clamp between 3 and 8 (minimum 3 decimals, maximum 8)
-            return max(3, min(8, decimal_places))
+            # Clamp between 5 and 8 (minimum 5 decimals, maximum 8)
+            return max(5, min(8, decimal_places))
+
+        def safe_float(value, default=0.0):
+            """Safely convert value to float, handling bytes and other edge cases."""
+            if pd.isna(value):
+                return default
+            if isinstance(value, bytes):
+                # Try to convert bytes to int first, then to float
+                try:
+                    return float(int.from_bytes(value, byteorder='little'))
+                except Exception:
+                    return default
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return default
 
         # Render expandable rows (Stages 1-4)
         for _, position in active_positions.iterrows():
@@ -1048,17 +1087,36 @@ def render_positions_table_tab(timestamp_seconds: int):
             borrow_fee_2A = get_borrow_fee(position['token2'], position['protocol_A'])
             borrow_fee_3B = get_borrow_fee(position['token3'], position['protocol_B'])
 
+            # Safely extract position multipliers and numeric fields (handle bytes/corrupted data)
+            L_A = safe_float(position['L_A'])
+            B_A = safe_float(position['B_A'])
+            L_B = safe_float(position['L_B'])
+            B_B = safe_float(position['B_B'])
+            deployment_usd = safe_float(position['deployment_usd'])
+
+            # Safely extract entry rates
+            entry_lend_rate_1A = safe_float(position['entry_lend_rate_1A'])
+            entry_borrow_rate_2A = safe_float(position['entry_borrow_rate_2A'])
+            entry_lend_rate_2B = safe_float(position['entry_lend_rate_2B'])
+            entry_borrow_rate_3B = safe_float(position['entry_borrow_rate_3B'])
+
+            # Safely extract entry prices
+            entry_price_1A = safe_float(position['entry_price_1A'])
+            entry_price_2A = safe_float(position['entry_price_2A'])
+            entry_price_2B = safe_float(position['entry_price_2B'])
+            entry_price_3B = safe_float(position['entry_price_3B'])
+
             # Calculate GROSS APR using position multipliers
             # Rates are already in decimal format (0.05 = 5%)
             gross_apr = (
-                (position['L_A'] * lend_1A) +
-                (position['L_B'] * lend_2B) -
-                (position['B_A'] * borrow_2A) -
-                (position['B_B'] * borrow_3B)
+                (L_A * lend_1A) +
+                (L_B * lend_2B) -
+                (B_A * borrow_2A) -
+                (B_B * borrow_3B)
             )
 
             # Calculate fee cost (keep as decimal per DESIGN_NOTES.md Rule #7)
-            fee_cost = position['B_A'] * borrow_fee_2A + position['B_B'] * borrow_fee_3B
+            fee_cost = B_A * borrow_fee_2A + B_B * borrow_fee_3B
 
             # Calculate NET APR (in decimal)
             current_net_apr_decimal = gross_apr - fee_cost
@@ -1074,7 +1132,7 @@ def render_positions_table_tab(timestamp_seconds: int):
             with st.expander(title, expanded=False):
                 # Summary table (1 row with key metrics)
                 # Calculate PnL (ex fees) = current_value - start_capital + fees
-                pnl_ex_fees = pv_result['current_value'] - position['deployment_usd'] + pv_result['fees']
+                pnl_ex_fees = pv_result['current_value'] - deployment_usd + pv_result['fees']
 
                 # Determine entry time label (show last rebalance or original entry)
                 if pd.notna(position.get('last_rebalance_timestamp')):
@@ -1085,14 +1143,16 @@ def render_positions_table_tab(timestamp_seconds: int):
                 # Get accumulated realised PnL (from previous rebalances)
                 accumulated_realised_pnl = position.get('accumulated_realised_pnl', 0.0) or 0.0
 
+                entry_net_apr = safe_float(position['entry_net_apr'])
+
                 summary_data = [{
                     'Entry Time': entry_time_label,
                     'Token Flow': token_flow,
                     'Protocols': protocol_pair,
-                    'Entry APR': f"{position['entry_net_apr'] * 100:.2f}%",
+                    'Entry APR': f"{entry_net_apr * 100:.2f}%",
                     'Realized APR': f"{realized_apr * 100:.2f}%",
                     'Current APR': f"{current_net_apr_decimal * 100:.2f}%",
-                    'Start Capital': f"${position['deployment_usd']:,.2f}",
+                    'Start Capital': f"${deployment_usd:,.2f}",
                     'Unrealised PnL': f"${pnl_ex_fees:,.2f}",
                     'Accumulated Realised PnL': f"${accumulated_realised_pnl:,.2f}",
                     'Fees': f"${pv_result['fees']:,.2f}",
@@ -1143,13 +1203,13 @@ def render_positions_table_tab(timestamp_seconds: int):
                 detail_data = []
 
                 # Calculate entry token amounts (Stage 3) with zero-division protection
-                entry_token_amount_1A = (position['L_A'] * position['deployment_usd']) / position['entry_price_1A'] if position['entry_price_1A'] > 0 else 0
+                entry_token_amount_1A = (L_A * deployment_usd) / entry_price_1A if entry_price_1A > 0 else 0
                 # Token 2: Calculate using Protocol A price (source of borrowed tokens)
                 # This ensures the same token quantity is used for both Protocol A and Protocol B
-                entry_token_amount_2 = (position['B_A'] * position['deployment_usd']) / position['entry_price_2A'] if position['entry_price_2A'] > 0 else 0
+                entry_token_amount_2 = (B_A * deployment_usd) / entry_price_2A if entry_price_2A > 0 else 0
                 entry_token_amount_2A = entry_token_amount_2  # Borrowed from Protocol A
                 entry_token_amount_2B = entry_token_amount_2  # Same tokens lent to Protocol B
-                entry_token_amount_3B = (position['B_B'] * position['deployment_usd']) / position['entry_price_3B'] if position['entry_price_3B'] > 0 else 0
+                entry_token_amount_3B = (B_B * deployment_usd) / entry_price_3B if entry_price_3B > 0 else 0
 
                 # STAGE 4: Get live prices for all tokens
                 live_price_1A = get_price(position['token1'], position['protocol_A'])
@@ -1212,22 +1272,35 @@ def render_positions_table_tab(timestamp_seconds: int):
                         liq_max = target_liq_dist_input / (1 - target_liq_dist_input)
                         return f"{liq_max * 100:.2f}%"
 
+                # Check if position has required fields for new calculation
+                has_lltv = 'entry_liquidation_threshold_1A' in position and position['entry_liquidation_threshold_1A'] is not None
+                has_borrow_weights = 'entry_borrow_weight_2A' in position and position['entry_borrow_weight_2A'] is not None and position['entry_borrow_weight_2A'] > 0
+
+                if not has_lltv or not has_borrow_weights:
+                    st.error(f"⚠️ Position created before LLTV switch - missing required fields. Please close and redeploy this position.")
+                    conn.close()
+                    return
+
                 # Calculate target weights using PositionCalculator with entry liquidation distance
                 target_calc = PositionCalculator(liquidation_distance=position['entry_liquidation_distance'])
                 target_positions = target_calc.calculate_positions(
+                    liquidation_threshold_A=position['entry_liquidation_threshold_1A'],
+                    liquidation_threshold_B=position['entry_liquidation_threshold_2B'],
                     collateral_ratio_A=position['entry_collateral_ratio_1A'],
-                    collateral_ratio_B=position['entry_collateral_ratio_2B']
+                    collateral_ratio_B=position['entry_collateral_ratio_2B'],
+                    borrow_weight_A=position['entry_borrow_weight_2A'],
+                    borrow_weight_B=position['entry_borrow_weight_3B']
                 )
 
                 # Calculate CURRENT token amounts using TARGET weights and LIVE prices
                 # This shows what the position SHOULD be at current market conditions
-                current_token_amount_1A = (target_positions['L_A'] * position['deployment_usd']) / live_price_1A if live_price_1A > 0 else 0
+                current_token_amount_1A = (target_positions['L_A'] * deployment_usd) / live_price_1A if live_price_1A > 0 else 0
                 # Token 2: Calculate using Protocol A price and TARGET weight
                 # This ensures the same token quantity is used for both Protocol A and Protocol B
-                current_token_amount_2 = (target_positions['B_A'] * position['deployment_usd']) / live_price_2A if live_price_2A > 0 else 0
+                current_token_amount_2 = (target_positions['B_A'] * deployment_usd) / live_price_2A if live_price_2A > 0 else 0
                 current_token_amount_2A = current_token_amount_2  # Borrowed from Protocol A
                 current_token_amount_2B = current_token_amount_2  # Same tokens lent to Protocol B
-                current_token_amount_3B = (target_positions['B_B'] * position['deployment_usd']) / live_price_3B if live_price_3B > 0 else 0
+                current_token_amount_3B = (target_positions['B_B'] * deployment_usd) / live_price_3B if live_price_3B > 0 else 0
 
                 # Calculate current collateral and loan values using ENTRY token amounts and LIVE PRICES
                 # Token amounts don't change - only prices change
@@ -1242,7 +1315,7 @@ def render_positions_table_tab(timestamp_seconds: int):
                     loan_value=current_loan_A,
                     lending_token_price=live_price_1A,
                     borrowing_token_price=live_price_2A,
-                    lltv=position['entry_collateral_ratio_1A'],
+                    lltv=position.get('entry_liquidation_threshold_1A', position['entry_collateral_ratio_1A']),
                     side='lending',
                     borrow_weight=position.get('entry_borrow_weight_2A', 1.0)
                 )
@@ -1253,7 +1326,7 @@ def render_positions_table_tab(timestamp_seconds: int):
                     loan_value=current_loan_A,
                     lending_token_price=live_price_1A,
                     borrowing_token_price=live_price_2A,
-                    lltv=position['entry_collateral_ratio_1A'],
+                    lltv=position.get('entry_liquidation_threshold_1A', position['entry_collateral_ratio_1A']),
                     side='borrowing',
                     borrow_weight=position.get('entry_borrow_weight_2A', 1.0)
                 )
@@ -1269,7 +1342,7 @@ def render_positions_table_tab(timestamp_seconds: int):
                     loan_value=current_loan_B,
                     lending_token_price=live_price_2B,
                     borrowing_token_price=live_price_3B,
-                    lltv=position['entry_collateral_ratio_2B'],
+                    lltv=position.get('entry_liquidation_threshold_2B', position['entry_collateral_ratio_2B']),
                     side='lending',
                     borrow_weight=position.get('entry_borrow_weight_3B', 1.0)
                 )
@@ -1280,7 +1353,7 @@ def render_positions_table_tab(timestamp_seconds: int):
                     loan_value=current_loan_B,
                     lending_token_price=live_price_2B,
                     borrowing_token_price=live_price_3B,
-                    lltv=position['entry_collateral_ratio_2B'],
+                    lltv=position.get('entry_liquidation_threshold_2B', position['entry_collateral_ratio_2B']),
                     side='borrowing',
                     borrow_weight=position.get('entry_borrow_weight_3B', 1.0)
                 )
@@ -1295,7 +1368,7 @@ def render_positions_table_tab(timestamp_seconds: int):
                     loan_value=entry_loan_A,
                     lending_token_price=position['entry_price_1A'],
                     borrowing_token_price=position['entry_price_2A'],
-                    lltv=position['entry_collateral_ratio_1A'],
+                    lltv=position.get('entry_liquidation_threshold_1A', position['entry_collateral_ratio_1A']),
                     side='lending',
                     borrow_weight=position.get('entry_borrow_weight_2A', 1.0)
                 )
@@ -1305,7 +1378,7 @@ def render_positions_table_tab(timestamp_seconds: int):
                     loan_value=entry_loan_A,
                     lending_token_price=position['entry_price_1A'],
                     borrowing_token_price=position['entry_price_2A'],
-                    lltv=position['entry_collateral_ratio_1A'],
+                    lltv=position.get('entry_liquidation_threshold_1A', position['entry_collateral_ratio_1A']),
                     side='borrowing',
                     borrow_weight=position.get('entry_borrow_weight_2A', 1.0)
                 )
@@ -1319,7 +1392,7 @@ def render_positions_table_tab(timestamp_seconds: int):
                     loan_value=entry_loan_B,
                     lending_token_price=position['entry_price_2B'],
                     borrowing_token_price=position['entry_price_3B'],
-                    lltv=position['entry_collateral_ratio_2B'],
+                    lltv=position.get('entry_liquidation_threshold_2B', position['entry_collateral_ratio_2B']),
                     side='lending',
                     borrow_weight=position.get('entry_borrow_weight_3B', 1.0)
                 )
@@ -1329,7 +1402,7 @@ def render_positions_table_tab(timestamp_seconds: int):
                     loan_value=entry_loan_B,
                     lending_token_price=position['entry_price_2B'],
                     borrowing_token_price=position['entry_price_3B'],
-                    lltv=position['entry_collateral_ratio_2B'],
+                    lltv=position.get('entry_liquidation_threshold_2B', position['entry_collateral_ratio_2B']),
                     side='borrowing',
                     borrow_weight=position.get('entry_borrow_weight_3B', 1.0)
                 )
@@ -1376,6 +1449,66 @@ def render_positions_table_tab(timestamp_seconds: int):
                 rebalance_usd_2B = token_rebalance_2B * live_price_2B
                 rebalance_usd_3B = token_rebalance_3B * live_price_3B
 
+                # Calculate rebalanced token amounts (only token2 changes - rows 2 and 3)
+                rebalanced_token_amount_1A = entry_token_amount_1A  # No change
+                rebalanced_token_amount_2A = entry_token_amount_2A + token_rebalance_2A  # Changed
+                rebalanced_token_amount_2B = entry_token_amount_2B + token_rebalance_2B  # Changed
+                rebalanced_token_amount_3B = entry_token_amount_3B  # No change
+
+                # Calculate rebalanced collateral and loan values
+                # Protocol A (with rebalanced token2 borrow amount)
+                rebalanced_collateral_A = rebalanced_token_amount_1A * live_price_1A
+                rebalanced_loan_A = rebalanced_token_amount_2A * live_price_2A
+
+                # Protocol B (with rebalanced token2 lend amount)
+                rebalanced_collateral_B = rebalanced_token_amount_2B * live_price_2B
+                rebalanced_loan_B = rebalanced_token_amount_3B * live_price_3B
+
+                # Calculate rebalanced liquidation distances for all 4 legs
+                # Leg 1: Protocol A - Lend token1 (lending side)
+                rebalanced_liq_1A = calc.calculate_liquidation_price(
+                    collateral_value=rebalanced_collateral_A,
+                    loan_value=rebalanced_loan_A,
+                    lending_token_price=live_price_1A,
+                    borrowing_token_price=live_price_2A,
+                    lltv=position.get('entry_liquidation_threshold_1A', position['entry_collateral_ratio_1A']),
+                    side='lending',
+                    borrow_weight=position.get('entry_borrow_weight_2A', 1.0)
+                )
+
+                # Leg 2: Protocol A - Borrow token2 (borrowing side)
+                rebalanced_liq_2A = calc.calculate_liquidation_price(
+                    collateral_value=rebalanced_collateral_A,
+                    loan_value=rebalanced_loan_A,
+                    lending_token_price=live_price_1A,
+                    borrowing_token_price=live_price_2A,
+                    lltv=position.get('entry_liquidation_threshold_1A', position['entry_collateral_ratio_1A']),
+                    side='borrowing',
+                    borrow_weight=position.get('entry_borrow_weight_2A', 1.0)
+                )
+
+                # Leg 3: Protocol B - Lend token2 (lending side)
+                rebalanced_liq_2B = calc.calculate_liquidation_price(
+                    collateral_value=rebalanced_collateral_B,
+                    loan_value=rebalanced_loan_B,
+                    lending_token_price=live_price_2B,
+                    borrowing_token_price=live_price_3B,
+                    lltv=position.get('entry_liquidation_threshold_2B', position['entry_collateral_ratio_2B']),
+                    side='lending',
+                    borrow_weight=position.get('entry_borrow_weight_3B', 1.0)
+                )
+
+                # Leg 4: Protocol B - Borrow token3 (borrowing side)
+                rebalanced_liq_3B = calc.calculate_liquidation_price(
+                    collateral_value=rebalanced_collateral_B,
+                    loan_value=rebalanced_loan_B,
+                    lending_token_price=live_price_2B,
+                    borrowing_token_price=live_price_3B,
+                    lltv=position.get('entry_liquidation_threshold_2B', position['entry_collateral_ratio_2B']),
+                    side='borrowing',
+                    borrow_weight=position.get('entry_borrow_weight_3B', 1.0)
+                )
+
                 # Helper function to format rebalance size in USD
                 def format_rebalance_usd(rebalance_usd: float, action: str) -> str:
                     """
@@ -1410,19 +1543,18 @@ def render_positions_table_tab(timestamp_seconds: int):
                     'Protocol': position['protocol_A'],
                     'Token': position['token1'],
                     'Action': 'Lend',
-                    'Weight': f"{position['L_A']:.4f}",
-                    'Target Weight': f"{target_positions['L_A']:.4f}",
-                    'Entry Rate': f"{position['entry_lend_rate_1A'] * 100:.2f}%",
-                    'Entry Token Amount': f"{entry_token_amount_1A:,.{precision_1A}f}",
-                    'Current Token Amount': f"{current_token_amount_1A:,.{precision_1A}f}",
+                    'Weight': f"{L_A:.4f}",
+                    'Entry Rate': f"{entry_lend_rate_1A * 100:.2f}%",
+                    'Live Rate': f"{lend_1A * 100:.2f}%",
+                    'Entry Price': f"${entry_price_1A:.4f}",
+                    'Live Price': f"${live_price_1A:.4f}",
+                    'Liquidation Price': format_liq_price(liq_1A),
+                    'Token Amount': f"{entry_token_amount_1A:,.{precision_1A}f}",
                     'Token Rebalance': format_token_rebalance(token_rebalance_1A, 'Lend', precision_1A),
                     'Rebalance Size $$$': format_rebalance_usd(rebalance_usd_1A, 'Lend'),
-                    'Entry Price': f"${position['entry_price_1A']:.4f}",
-                    'Live Price': f"${live_price_1A:.4f}",
-                    'Live Rate': f"{lend_1A * 100:.2f}%",
-                    'Current Liq Price': format_liq_price(liq_1A),
-                    'Liq Distance': format_liq_distance(liq_1A),
                     'Entry Liq Dist': format_liq_distance(entry_liq_1A),
+                    'Live Liq Dist': format_liq_distance(liq_1A),
+                    'Rebalance Liq Dist': format_liq_distance(rebalanced_liq_1A),
                     'Fee Rate': '',  # NEW: No fee for Lend
                     'Entry Fees $$$': '',  # NEW: No entry fee for Lend
                 })
@@ -1432,21 +1564,20 @@ def render_positions_table_tab(timestamp_seconds: int):
                     'Protocol': position['protocol_A'],
                     'Token': position['token2'],
                     'Action': 'Borrow',
-                    'Weight': f"{position['B_A']:.4f}",
-                    'Target Weight': f"{target_positions['B_A']:.4f}",
-                    'Entry Rate': f"{position['entry_borrow_rate_2A'] * 100:.2f}%",
-                    'Entry Token Amount': f"{entry_token_amount_2A:,.{precision_2A}f}",
-                    'Current Token Amount': f"{current_token_amount_2A:,.{precision_2A}f}",
+                    'Weight': f"{B_A:.4f}",
+                    'Entry Rate': f"{entry_borrow_rate_2A * 100:.2f}%",
+                    'Live Rate': f"{borrow_2A * 100:.2f}%",
+                    'Entry Price': f"${entry_price_2A:.4f}",
+                    'Live Price': f"${live_price_2A:.4f}",
+                    'Liquidation Price': format_liq_price(liq_2A),
+                    'Token Amount': f"{entry_token_amount_2A:,.{precision_2A}f}",
                     'Token Rebalance': format_token_rebalance(token_rebalance_2A, 'Borrow', precision_2A),
                     'Rebalance Size $$$': format_rebalance_usd(rebalance_usd_2A, 'Borrow'),
-                    'Entry Price': f"${position['entry_price_2A']:.4f}",
-                    'Live Price': f"${live_price_2A:.4f}",
-                    'Live Rate': f"{borrow_2A * 100:.2f}%",
-                    'Current Liq Price': format_liq_price(liq_2A),
-                    'Liq Distance': format_liq_distance(liq_2A),
                     'Entry Liq Dist': format_liq_distance(entry_liq_2A),
+                    'Live Liq Dist': format_liq_distance(liq_2A),
+                    'Rebalance Liq Dist': format_liq_distance(rebalanced_liq_2A),
                     'Fee Rate': f"{borrow_fee_2A * 100:.2f}%" if borrow_fee_2A > 0 else '',  # NEW
-                    'Entry Fees $$$': f"${borrow_fee_2A*entry_token_amount_2B*position['entry_price_2A']:.2f}" if borrow_fee_2A*entry_token_amount_2B*position['entry_price_2A'] > 0 else '',  # NEW
+                    'Entry Fees $$$': f"${borrow_fee_2A*entry_token_amount_2B*entry_price_2A:.2f}" if borrow_fee_2A*entry_token_amount_2B*entry_price_2A > 0 else '',  # NEW
                 })
 
                 # Row 3: Protocol B - Lend token2
@@ -1454,19 +1585,18 @@ def render_positions_table_tab(timestamp_seconds: int):
                     'Protocol': position['protocol_B'],
                     'Token': position['token2'],
                     'Action': 'Lend',
-                    'Weight': f"{position['L_B']:.4f}",
-                    'Target Weight': f"{target_positions['L_B']:.4f}",
-                    'Entry Rate': f"{position['entry_lend_rate_2B'] * 100:.2f}%",
-                    'Entry Token Amount': f"{entry_token_amount_2B:,.{precision_2B}f}",
-                    'Current Token Amount': f"{current_token_amount_2B:,.{precision_2B}f}",
+                    'Weight': f"{L_B:.4f}",
+                    'Entry Rate': f"{entry_lend_rate_2B * 100:.2f}%",
+                    'Live Rate': f"{lend_2B * 100:.2f}%",
+                    'Entry Price': f"${entry_price_2B:.4f}",
+                    'Live Price': f"${live_price_2B:.4f}",
+                    'Liquidation Price': format_liq_price(liq_2B),
+                    'Token Amount': f"{entry_token_amount_2B:,.{precision_2B}f}",
                     'Token Rebalance': format_token_rebalance(token_rebalance_2B, 'Lend', precision_2B),
                     'Rebalance Size $$$': format_rebalance_usd(rebalance_usd_2B, 'Lend'),
-                    'Entry Price': f"${position['entry_price_2B']:.4f}",
-                    'Live Price': f"${live_price_2B:.4f}",
-                    'Live Rate': f"{lend_2B * 100:.2f}%",
-                    'Current Liq Price': format_liq_price(liq_2B),
-                    'Liq Distance': format_liq_distance(liq_2B),
                     'Entry Liq Dist': format_liq_distance(entry_liq_2B),
+                    'Live Liq Dist': format_liq_distance(liq_2B),
+                    'Rebalance Liq Dist': format_liq_distance(rebalanced_liq_2B),
                     'Fee Rate': '',  # NEW: No fee for Lend
                     'Entry Fees $$$': '',  # NEW: No entry fee for Lend
                 })
@@ -1476,21 +1606,20 @@ def render_positions_table_tab(timestamp_seconds: int):
                     'Protocol': position['protocol_B'],
                     'Token': position['token3'],
                     'Action': 'Borrow',
-                    'Weight': f"{position['B_B']:.4f}",
-                    'Target Weight': f"{target_positions['B_B']:.4f}",
-                    'Entry Rate': f"{position['entry_borrow_rate_3B'] * 100:.2f}%",
-                    'Entry Token Amount': f"{entry_token_amount_3B:,.{precision_3B}f}",
-                    'Current Token Amount': f"{current_token_amount_3B:,.{precision_3B}f}",
+                    'Weight': f"{B_B:.4f}",
+                    'Entry Rate': f"{entry_borrow_rate_3B * 100:.2f}%",
+                    'Live Rate': f"{borrow_3B * 100:.2f}%",
+                    'Entry Price': f"${entry_price_3B:.4f}",
+                    'Live Price': f"${live_price_3B:.4f}",
+                    'Liquidation Price': format_liq_price(liq_3B),
+                    'Token Amount': f"{entry_token_amount_3B:,.{precision_3B}f}",
                     'Token Rebalance': format_token_rebalance(token_rebalance_3B, 'Borrow', precision_3B),
                     'Rebalance Size $$$': format_rebalance_usd(rebalance_usd_3B, 'Borrow'),
-                    'Entry Price': f"${position['entry_price_3B']:.4f}",
-                    'Live Price': f"${live_price_3B:.4f}",
-                    'Live Rate': f"{borrow_3B * 100:.2f}%",
-                    'Current Liq Price': format_liq_price(liq_3B),
-                    'Liq Distance': format_liq_distance(liq_3B),
                     'Entry Liq Dist': format_liq_distance(entry_liq_3B),
+                    'Live Liq Dist': format_liq_distance(liq_3B),
+                    'Rebalance Liq Dist': format_liq_distance(rebalanced_liq_3B),
                     'Fee Rate': f"{borrow_fee_3B * 100:.2f}%" if borrow_fee_3B > 0 else '',  # NEW
-                    'Entry Fees $$$': f"${borrow_fee_3B*entry_token_amount_3B*position['entry_price_3B']:.2f}" if borrow_fee_3B*entry_token_amount_3B*position['entry_price_3B'] > 0 else '',  # NEW
+                    'Entry Fees $$$': f"${borrow_fee_3B*entry_token_amount_3B*entry_price_3B:.2f}" if borrow_fee_3B*entry_token_amount_3B*entry_price_3B > 0 else '',  # NEW
                 })
 
                 # Display detail table with styling
@@ -1547,13 +1676,16 @@ def render_positions_table_tab(timestamp_seconds: int):
                     subset=['Entry Rate', 'Live Rate']
                 ).map(
                     color_liq_price,
-                    subset=['Current Liq Price']
-                ).map(
-                    color_liq_distance,
-                    subset=['Liq Distance']
+                    subset=['Liquidation Price']
                 ).map(
                     color_liq_distance,
                     subset=['Entry Liq Dist']
+                ).map(
+                    color_liq_distance,
+                    subset=['Live Liq Dist']
+                ).map(
+                    color_liq_distance,
+                    subset=['Rebalance Liq Dist']
                 ).map(
                     color_rebalance,
                     subset=['Token Rebalance']
@@ -1573,23 +1705,41 @@ def render_positions_table_tab(timestamp_seconds: int):
                 has_pending_close = ('pending_close' in st.session_state and
                                     st.session_state.pending_close.get('position_id') == position['position_id'])
 
+                # Check if viewing a historical timestamp with future rebalances
+                has_future_rebalances = service.has_future_rebalances(
+                    position['position_id'],
+                    latest_timestamp
+                )
+
                 # Only show buttons if NO pending action for this position
                 if not has_pending_rebalance and not has_pending_close:
                     # Buttons for rebalance and close
                     col1, col2 = st.columns(2)
 
                     with col1:
-                        if st.button(
-                            "🔄 Rebalance Position",
-                            key=f"rebalance_{position['position_id']}",
-                            help="Snapshot current PnL and adjust token2 amounts to restore liquidation distance to target",
-                            use_container_width=True
-                        ):
-                            st.session_state.pending_rebalance = {
-                                'position_id': position['position_id'],
-                                'timestamp': latest_timestamp
-                            }
-                            st.rerun()
+                        # Show warning if time-traveling with future rebalances
+                        if has_future_rebalances:
+                            st.button(
+                                "🔄 Rebalance Position",
+                                key=f"rebalance_{position['position_id']}",
+                                disabled=True,
+                                use_container_width=True
+                            )
+                            st.caption("⏰ Cannot rebalance: You are viewing a historical timestamp, "
+                                     "and this position was already rebalanced in the future. "
+                                     "Time-traveling rebalances would break the universe! 🌌")
+                        else:
+                            if st.button(
+                                "🔄 Rebalance Position",
+                                key=f"rebalance_{position['position_id']}",
+                                help="Snapshot current PnL and adjust token2 amounts to restore liquidation distance to target",
+                                use_container_width=True
+                            ):
+                                st.session_state.pending_rebalance = {
+                                    'position_id': position['position_id'],
+                                    'timestamp': latest_timestamp
+                                }
+                                st.rerun()
 
                     with col2:
                         if st.button(
@@ -1619,22 +1769,32 @@ def render_positions_table_tab(timestamp_seconds: int):
                     col1, col2 = st.columns(2)
                     with col1:
                         if st.button("✅ Confirm Rebalance", key=f"confirm_rebalance_{position['position_id']}"):
-                            try:
-                                rebalance_id = service.rebalance_position(
-                                    position_id=pending['position_id'],
-                                    live_timestamp=pending['timestamp'],
-                                    rebalance_reason='manual'
-                                )
-                                st.success(f"✅ Position rebalanced successfully! Rebalance ID: {rebalance_id[:8]}...")
+                            # Double-check for time-travel paradox before executing
+                            if service.has_future_rebalances(pending['position_id'], pending['timestamp']):
+                                st.error("❌ Cannot rebalance: This position has already been rebalanced in the future. "
+                                        "Time-traveling rebalances would break the universe! 🌌")
                                 del st.session_state.pending_rebalance
-                                st.session_state.skip_modal_reopen = True  # Prevent strategy modal from appearing
+                                st.session_state.skip_modal_reopen = True
                                 import time
-                                time.sleep(1)
+                                time.sleep(2)
                                 st.rerun()
-                            except Exception as e:
-                                st.error(f"❌ Error: {e}")
-                                import traceback
-                                st.code(traceback.format_exc())
+                            else:
+                                try:
+                                    rebalance_id = service.rebalance_position(
+                                        position_id=pending['position_id'],
+                                        live_timestamp=pending['timestamp'],
+                                        rebalance_reason='manual'
+                                    )
+                                    st.success(f"✅ Position rebalanced successfully! Rebalance ID: {rebalance_id[:8]}...")
+                                    del st.session_state.pending_rebalance
+                                    st.session_state.skip_modal_reopen = True  # Prevent strategy modal from appearing
+                                    import time
+                                    time.sleep(1)
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"❌ Error: {e}")
+                                    import traceback
+                                    st.code(traceback.format_exc())
 
                     with col2:
                         if st.button("❌ Cancel", key=f"cancel_rebalance_{position['position_id']}"):
@@ -1727,6 +1887,20 @@ def render_positions_table_tab(timestamp_seconds: int):
                                 else:  # '2A', '3B'
                                     return 'Borrow'
 
+                            # Helper to format liquidation price
+                            def format_rebalance_liq_price(liq_price):
+                                """Format liquidation price from rebalance record"""
+                                if pd.isna(liq_price) or liq_price is None:
+                                    return ""
+                                return f"${liq_price:.4f}"
+
+                            # Helper to format liquidation distance
+                            def format_rebalance_liq_dist(liq_dist):
+                                """Format liquidation distance from rebalance record"""
+                                if pd.isna(liq_dist) or liq_dist is None:
+                                    return ""
+                                return f"{liq_dist * 100:.2f}%"
+
                             # Build rows for all 4 legs
                             for leg in ['1A', '2A', '2B', '3B']:
                                 action = get_action_for_leg(leg)
@@ -1751,10 +1925,12 @@ def render_positions_table_tab(timestamp_seconds: int):
                                     'Close Rate': f"{rebalance[closing_rate_col] * 100:.2f}%",
                                     'Entry Price': f"${rebalance[f'opening_price_{leg}']:.4f}",
                                     'Close Price': f"${rebalance[f'closing_price_{leg}']:.4f}",
+                                    'Exit Liq Price': format_rebalance_liq_price(rebalance.get(f'closing_liq_price_{leg}')),
                                     'Entry Token Amt': f"{rebalance[f'entry_token_amount_{leg}']:,.4f}",
                                     'Exit Token Amt': f"{rebalance[f'exit_token_amount_{leg}']:,.4f}",
                                     'Entry $$$ Size': f"${rebalance[f'entry_size_usd_{leg}']:,.2f}",
                                     'Exit $$$ Size': f"${rebalance[f'exit_size_usd_{leg}']:,.2f}",
+                                    'Exit Liq Dist': format_rebalance_liq_dist(rebalance.get(f'closing_liq_dist_{leg}')),
                                     'Entry Action': rebalance[f'entry_action_{leg}'] or '',
                                     'Exit Action': rebalance[f'exit_action_{leg}'] or ''
                                 }
@@ -2240,6 +2416,11 @@ def render_dashboard(data_loader: DataLoader, mode: str):
                 st.rerun()
 
         st.markdown("---")
+
+    # === TIMESTAMP DISPLAY ===
+    # Show current "live" timestamp being viewed (from internal data source)
+    timestamp_display = to_datetime_str(timestamp_seconds)
+    st.markdown(f"**Viewing data as of:** `{timestamp_display}`")
 
     # === TABS ===
     tabs_start = time.time()
