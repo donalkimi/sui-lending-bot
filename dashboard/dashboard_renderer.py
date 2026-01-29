@@ -1847,7 +1847,7 @@ def render_positions_table_tab(timestamp_seconds: int):
                     st.markdown("---")
                     st.markdown("### 📊 Rebalance History")
 
-                    for _, rebalance in rebalances.iterrows():
+                    for idx, rebalance in rebalances.iterrows():
                         # Build expander title with PnL indicator
                         realised_pnl = rebalance['realised_pnl']
                         pnl_indicator = "🟢" if realised_pnl >= 0 else "🔴"
@@ -1861,6 +1861,16 @@ def render_positions_table_tab(timestamp_seconds: int):
                         )
 
                         with st.expander(rebalance_title, expanded=False):
+                            # Get previous rebalance for comparison (if exists)
+                            current_seq = int(rebalance['sequence_number'])
+                            prev_rebalance = None
+                            if current_seq > 1:
+                                prev_rebalance = rebalances[rebalances['sequence_number'] == current_seq - 1]
+                                if not prev_rebalance.empty:
+                                    prev_rebalance = prev_rebalance.iloc[0]
+                                else:
+                                    prev_rebalance = None
+
                             # Build rebalance detail table with all 4 legs
                             rebalance_data = []
 
@@ -1915,6 +1925,31 @@ def render_positions_table_tab(timestamp_seconds: int):
                                     closing_rate_col = f'closing_borrow_rate_{leg}'
                                     weight_col = f'B_{"A" if leg in ["1A", "2A"] else "B"}'
 
+                                # Token Rebalance Action: Only show for token2 (legs 2A and 2B)
+                                # Compare current entry_token_amount to previous rebalance's entry_token_amount
+                                token_rebalance_action = ''
+                                if leg in ['2A', '2B']:
+                                    if prev_rebalance is not None:
+                                        current_amount = rebalance[f'entry_token_amount_{leg}']
+                                        prev_amount = prev_rebalance[f'entry_token_amount_{leg}']
+                                        delta = current_amount - prev_amount
+
+                                        if abs(delta) > 0.0001:  # Ignore tiny differences
+                                            # Format action based on leg type and direction
+                                            if leg == '2A':  # Borrow leg
+                                                if delta > 0:
+                                                    token_rebalance_action = f"Borrow {abs(delta):,.4f}"
+                                                else:
+                                                    token_rebalance_action = f"Repay {abs(delta):,.4f}"
+                                            else:  # '2B' - Lend leg
+                                                if delta > 0:
+                                                    token_rebalance_action = f"Add {abs(delta):,.4f}"
+                                                else:
+                                                    token_rebalance_action = f"Withdraw {abs(delta):,.4f}"
+                                    else:
+                                        # First rebalance - no previous to compare
+                                        token_rebalance_action = "Initial"
+
                                 row = {
                                     'Protocol': get_protocol_for_leg(leg),
                                     'Token': get_token_for_leg(leg),
@@ -1927,12 +1962,10 @@ def render_positions_table_tab(timestamp_seconds: int):
                                     'Close Price': f"${rebalance[f'closing_price_{leg}']:.4f}",
                                     'Exit Liq Price': format_rebalance_liq_price(rebalance.get(f'closing_liq_price_{leg}')),
                                     'Entry Token Amt': f"{rebalance[f'entry_token_amount_{leg}']:,.4f}",
-                                    'Exit Token Amt': f"{rebalance[f'exit_token_amount_{leg}']:,.4f}",
+                                    'Token Rebalance Action': token_rebalance_action,
                                     'Entry $$$ Size': f"${rebalance[f'entry_size_usd_{leg}']:,.2f}",
                                     'Exit $$$ Size': f"${rebalance[f'exit_size_usd_{leg}']:,.2f}",
-                                    'Exit Liq Dist': format_rebalance_liq_dist(rebalance.get(f'closing_liq_dist_{leg}')),
-                                    'Entry Action': rebalance[f'entry_action_{leg}'] or '',
-                                    'Exit Action': rebalance[f'exit_action_{leg}'] or ''
+                                    'Exit Liq Dist': format_rebalance_liq_dist(rebalance.get(f'closing_liq_dist_{leg}'))
                                 }
                                 rebalance_data.append(row)
 
