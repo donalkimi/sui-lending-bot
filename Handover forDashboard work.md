@@ -55,6 +55,135 @@ The Sui Lending Bot is a dashboard application for analyzing and executing recur
 
 ---
 
+## Recent Enhancements (January 2026)
+
+### Enhanced Segment Summary Display
+
+The Positions Tab now shows detailed PnL breakdown for each rebalance segment and the live position:
+
+**5-Metric Summary Format:**
+- **Realised PnL:** Total profit/loss for the segment
+- **Total Earnings:** Net earnings (Lend Earnings - Borrow Costs)
+- **Base Earnings:** Earnings from base APRs (lend_base_apr - borrow_base_apr)
+- **Reward Earnings:** Earnings from reward APRs (lend_reward_apr - borrow_reward_apr)
+- **Fees:** Upfront borrow fees (full fees for first segment, delta fees for rebalances)
+
+Each metric displays both USD amount and percentage of deployment: `$X,XXX.XX (Y.YY%)`
+
+**Example:**
+```
+Segment Summary
+Realised PnL: $125.50 (1.26%)
+Total Earnings: $180.25 (1.80%)
+Base Earnings: $140.10 (1.40%)
+Reward Earnings: $40.15 (0.40%)
+Fees: $54.75 (0.55%)
+```
+
+### Base/Reward APR Breakdown in Token Tables
+
+Token tables now show per-leg earnings split between base and reward APRs:
+
+**New Columns:**
+- **Lend/Borrow Base $$$:** USD earnings from base rates (lend_base_apr or borrow_base_apr)
+- **Reward $$$:** USD earnings from reward rates (lend_reward_apr or borrow_reward_apr)
+
+**Implementation:**
+- New helper method: `calculate_leg_earnings_split()` in [position_service.py](analysis/position_service.py)
+- Queries rates_snapshot table for `lend_base_apr`, `lend_reward_apr`, `borrow_base_apr`, `borrow_reward_apr`
+- Calculates earnings period-by-period using forward-looking rate principle
+- **Critical Fix:** Queries use `token_contract` not `token` symbol to ensure correct rate lookups
+
+**Algorithm:**
+```python
+# For each timestamp period [t_i, t_{i+1})
+period_years = (t_next - t_current) / (365.25 * 86400)
+
+# Query rates at t_current
+base_apr, reward_apr = get_rates_at_timestamp(t_current, token_contract, protocol)
+
+# Calculate earnings for period
+if action == 'Lend':
+    base_earnings += deployment * weight * base_apr * period_years
+    reward_earnings += deployment * weight * reward_apr * period_years
+else:  # Borrow
+    base_costs += deployment * weight * base_apr * period_years
+    reward_savings -= deployment * weight * reward_apr * period_years  # Reduces costs
+```
+
+### Strategy Summary (Real + Unreal)
+
+New summary section combining ALL segments (live + all rebalances):
+
+**Location:** Above live position display, below APR summary table
+
+**Metrics:** Same 5-metric format as Segment Summaries
+- Sums each metric across all segments
+- Live segment + sum of all rebalance segments
+- Shows total strategy performance to date
+
+**Calculation:**
+```python
+# For each segment (live + all rebalances):
+#   1. Query token table data for that segment
+#   2. Calculate base_earnings and reward_earnings per leg
+#   3. Sum across legs: total_earnings = sum(base + reward)
+#   4. Calculate: pnl = total_earnings - fees
+# Then sum across all segments
+```
+
+### Timestamp Fixes for Segment Calculations
+
+**Problem:** All segments (including live) were calculating earnings from entry → stored `closing_timestamp`, causing incorrect earnings for latest segment when viewing past timestamps.
+
+**Solution:**
+- **Latest segment:** Use dashboard-selected `timestamp_seconds` as end time (not stored `closing_timestamp`)
+- **Live position (rebalanced):** Use `last_rebalance_timestamp` as start time (not original `entry_timestamp`)
+- **Historical segments:** Continue using stored `opening_timestamp` → `closing_timestamp`
+
+**Impact:** Earnings now correctly reflect the time period the user is viewing, enabling accurate time-travel functionality.
+
+### Delta Fees Calculation
+
+**Problem:** Live position showed total strategy fees instead of delta fees from most recent rebalance.
+
+**Solution:**
+- **First segment:** Show full upfront borrow fees
+- **After rebalance:** Show only fees on INCREMENTAL borrowing since last rebalance
+- **Display format:** `$XX.XX (Δ)` for delta fees, `$XX.XX` for full fees
+
+**Logic:**
+```python
+if prev_rebalance exists:
+    delta_borrow = current_borrow_amount - prev_borrow_amount
+    if delta_borrow > 0:
+        # Additional borrowing - pay fees on delta only
+        delta_fees = borrow_fee_rate * delta_borrow * price
+        display = f"${delta_fees:.2f} (Δ)"
+    else:
+        # Repayment or no change
+        display = "$0.00"
+else:
+    # First segment - full fees
+    full_fees = borrow_fee_rate * borrow_amount * price
+    display = f"${full_fees:.2f}"
+```
+
+### Live Position Summary
+
+**New Section:** Added summary metrics display above the live position token table
+
+**Format:** Matches Rebalance Segment Summary format (5 metrics with percentages)
+
+**Calculation:** Sums values from the 4-leg token table:
+- Total Earnings = sum of all "Lend/Borrow Base $$$" + "Reward $$$" columns
+- Base Earnings = sum of "Lend/Borrow Base $$$"
+- Reward Earnings = sum of "Reward $$$"
+- Fees = sum of borrow leg fees
+- PnL = Total Earnings - Fees
+
+---
+
 ## Positions Tab: Deep Dive
 
 ### Purpose
@@ -138,7 +267,7 @@ When viewing historical timestamps, retrieve the position state that existed at 
 #### Key Functions:
 
 ##### `render_positions_table_tab(timestamp_seconds: int)`
-**Location:** Lines 960-1901
+**Location:** Lines 960-2200+
 **Purpose:** Main entry point for Positions Tab
 
 **Flow:**
@@ -150,9 +279,13 @@ When viewing historical timestamps, retrieve the position state that existed at 
 4. Query rates/prices at selected timestamp
 5. For each position:
    - Display summary row (expandable)
-   - When expanded: show detailed 4-leg breakdown
+   - When expanded:
+     a. Display Strategy Summary (Real + Unreal) - combines all segments
+     b. Display Live Position Summary - 5 metrics with percentages
+     c. Display 4-leg token table with base/reward columns
+     d. Display rebalance history with segment summaries
 6. Calculate position value using calculate_position_value()
-7. Display rebalance history
+7. Calculate per-leg base/reward split using calculate_leg_earnings_split()
 ```
 
 **Key Features:**
@@ -160,6 +293,12 @@ When viewing historical timestamps, retrieve the position state that existed at 
 - **Context-Aware Messaging:** Different messages for historical vs current views
 - **Expandable Rows:** Summary → Detailed breakdown with token details
 - **Time-Travel Paradox Prevention:** Disables rebalance button when viewing past timestamps with future rebalances
+- **Enhanced Summaries (January 2026):**
+  - Strategy Summary (Real + Unreal): Overall performance across all segments
+  - Live Position Summary: 5-metric breakdown of current unrealized PnL
+  - Segment Summaries: 5-metric breakdown for each rebalance segment
+- **Base/Reward APR Split:** Per-leg breakdown of earnings from base vs reward rates
+- **Delta Fees:** Shows incremental fees for rebalanced positions
 
 ##### Helper Functions (Lines 1004-1054)
 ```python
@@ -286,6 +425,57 @@ def safe_to_float(value, default=0.0):
 **Purpose:** Check if position has been rebalanced AFTER selected timestamp
 
 **Use Case:** Prevent time-travel paradoxes - disable rebalance button when viewing past timestamps with future rebalances.
+
+##### `calculate_leg_earnings_split(position, leg, action, start_timestamp, end_timestamp) -> Tuple[float, float]`
+**Location:** Lines 1212-1358
+**Purpose:** Calculate base and reward earnings for a single leg over a time period
+
+**Parameters:**
+- `position` (pd.Series): Position record with deployment, multipliers, tokens, protocols
+- `leg` (str): Leg identifier ('1A', '2A', '2B', '3B')
+- `action` (str): 'Lend' or 'Borrow'
+- `start_timestamp` (int): Start of period (Unix seconds)
+- `end_timestamp` (int): End of period (Unix seconds)
+
+**Returns:** `(base_amount, reward_amount)` as tuple of floats in USD
+
+**Algorithm:**
+1. Get leg details: token contract, protocol, weight
+2. Query all timestamps between start and end
+3. For each period `[t_i, t_{i+1})`:
+   - Query `lend_base_apr`, `lend_reward_apr` (or borrow equivalents) from rates_snapshot
+   - **Critical:** Query by `token_contract`, not `token` symbol
+   - Calculate period duration in years
+   - Calculate earnings: `deployment * weight * apr * period_years`
+4. Accumulate base and reward earnings separately
+5. For borrow legs: Reward APR REDUCES costs (negative contribution)
+
+**Use Case:** Powers the "Lend/Borrow Base $$$" and "Reward $$$" columns in token tables
+
+##### Leg Helper Methods
+**Location:** Lines 1360-1412
+**Purpose:** Extract leg-specific details from position record
+
+```python
+def _get_token_for_leg(position, leg) -> str:
+    """Get token symbol for leg (for display)"""
+    # Returns: token1 (1A), token2 (2A/2B), token3 (3B)
+
+def _get_token_contract_for_leg(position, leg) -> str:
+    """Get token contract address for leg (for queries)"""
+    # Returns: token1_contract, token2_contract, token3_contract
+    # CRITICAL: Use this for database queries, not symbol
+
+def _get_protocol_for_leg(position, leg) -> str:
+    """Get protocol for leg"""
+    # Returns: protocol_A (1A/2A), protocol_B (2B/3B)
+
+def _get_weight_for_leg(position, leg) -> float:
+    """Get position weight/multiplier for leg"""
+    # Returns: L_A (1A), B_A (2A), L_B (2B), B_B (3B)
+```
+
+**Why These Exist:** Centralize leg-to-field mapping logic, reduce code duplication, ensure consistency across dashboard and calculations.
 
 ##### `create_position(...) -> str`
 **Location:** Lines 32-181
@@ -418,6 +608,8 @@ if any(p <= 1e-9 for p in [price_1A, price_2A, price_2B, price_3B]):
 - `token` (VARCHAR): Human-readable token symbol
 - `token_contract` (TEXT): Full Sui coin type (unique identifier)
 - `lend_total_apr`, `borrow_total_apr` (DECIMAL): Total APRs (base + rewards)
+- `lend_base_apr`, `borrow_base_apr` (DECIMAL): Base APRs (protocol native rates)
+- `lend_reward_apr`, `borrow_reward_apr` (DECIMAL): Reward APRs (incentive programs)
 - `price_usd` (DECIMAL): Token price in USD
 - `collateral_ratio` (DECIMAL): Max LTV (e.g., 0.70 = 70%)
 - `liquidation_threshold` (DECIMAL): Liquidation LTV (e.g., 0.75 = 75%)
@@ -428,6 +620,11 @@ if any(p <= 1e-9 for p in [price_1A, price_2A, price_2B, price_3B]):
 **Primary Key:** `(timestamp, protocol, token_contract)`
 
 **Critical:** Timestamp precision MUST be exactly 19 characters. Use [Scripts/truncate_timestamps.py](Scripts/truncate_timestamps.py) if microseconds exist.
+
+**APR Relationship:**
+- `lend_total_apr = lend_base_apr + lend_reward_apr`
+- `borrow_total_apr = borrow_base_apr - borrow_reward_apr` (rewards reduce borrow costs)
+- Base/reward columns used by dashboard for earnings breakdown (January 2026 enhancement)
 
 #### `positions`
 **Purpose:** Active and closed positions (current state)
@@ -862,17 +1059,100 @@ class UnifiedDataLoader:
 
 ---
 
+## Recent Code Changes (January 2026)
+
+### Files Modified
+
+#### 1. [dashboard/dashboard_renderer.py](dashboard/dashboard_renderer.py)
+
+**Strategy Summary (Real + Unreal) - Lines ~1718-1820**
+- Added comprehensive summary combining all segments (live + rebalanced)
+- Iterates through each segment and calculates 5 metrics
+- Sums across all segments for total strategy performance
+
+**Live Position Summary - Lines ~1753-1781**
+- Added 5-metric summary above live token table
+- Calculates metrics from token table columns
+- Matches format of Rebalance Segment Summaries
+
+**Live Position Token Table - Lines ~1564-1710**
+- Added "Lend/Borrow Base $$$" and "Reward $$$" columns
+- Calls `calculate_leg_earnings_split()` for each leg
+- Fixed timestamp calculation: uses `last_rebalance_timestamp` for rebalanced positions
+- Fixed fees calculation: shows delta fees from last rebalance
+
+**Rebalance Segment Summary - Lines ~2115-2145**
+- Modified from 4 metrics to 5 metrics
+- Added Base Earnings and Reward Earnings breakdown
+- Changed Total Earnings to net value (Lend - Borrow)
+- Added percentage display for all metrics
+
+**Rebalance History Token Table - Lines ~2024-2100**
+- Added "Lend/Borrow Base $$$" and "Reward $$$" columns
+- Calls `calculate_leg_earnings_split()` for each segment/leg
+- Fixed timestamp: latest segment uses `timestamp_seconds` not stored `closing_timestamp`
+- Fixed fees: shows delta with "(Δ)" indicator for rebalanced segments
+
+#### 2. [analysis/position_service.py](analysis/position_service.py)
+
+**New Method: `calculate_leg_earnings_split()` - Lines 1212-1358**
+- Calculates base and reward earnings for a single leg over time period
+- Queries `lend_base_apr`, `lend_reward_apr`, `borrow_base_apr`, `borrow_reward_apr`
+- Uses forward-looking rate principle
+- **Critical fix:** Queries by `token_contract` not `token` symbol
+
+**New Helper Methods - Lines 1360-1412**
+- `_get_token_for_leg()`: Get token symbol for leg
+- `_get_token_contract_for_leg()`: Get token contract for leg (for queries)
+- `_get_protocol_for_leg()`: Get protocol for leg
+- `_get_weight_for_leg()`: Get position multiplier for leg
+
+### Key Bug Fixes
+
+#### Bug: Base/Reward Earnings Showing $0.00
+**Root Cause:** Rate queries were using `token` symbols instead of `token_contract` addresses
+**Fix:** Added `_get_token_contract_for_leg()` helper and changed queries to use contracts
+**Impact:** Base/Reward columns now display correct earnings
+
+#### Bug: Incorrect Timestamp for Latest Segment
+**Root Cause:** All segments (including live) were using stored `closing_timestamp`
+**Fix:** Latest segment now uses dashboard-selected `timestamp_seconds`
+**Impact:** Time-travel functionality now works correctly for earnings calculations
+
+#### Bug: Wrong Start Time for Live Position Earnings
+**Root Cause:** Live position was calculating from `entry_timestamp` even after rebalances
+**Fix:** Use `last_rebalance_timestamp` as start if position has been rebalanced
+**Impact:** Live position earnings now show delta since last rebalance, not total since entry
+
+#### Bug: Live Position Fees Showing Total Instead of Delta
+**Root Cause:** Fees were calculated from entry, not from last rebalance
+**Fix:** Added logic to calculate delta fees on incremental borrowing since last rebalance
+**Impact:** Fees column now matches rebalance segment logic
+
+#### Bug: Strategy Summary Using Wrong Calculation
+**Root Cause:** Was summing stored database values instead of calculating from token tables
+**Fix:** Calculate each segment's summary using same logic as display, then sum
+**Impact:** Strategy Summary now accurately reflects sum of all segment summaries
+
+---
+
 ## Key Takeaways
 
 1. **Timestamp is Sacred:** The selected timestamp represents "now" for ALL operations. Never use `datetime.now()` except when collecting fresh data.
 
 2. **Event Sourcing:** `positions` table = current state (mutable). `position_rebalances` table = historical segments (immutable). Time-travel queries the rebalances table.
 
-3. **Contract Addresses:** Use contracts for ALL logic. Symbols are ONLY for display.
+3. **Contract Addresses:** Use contracts for ALL logic. Symbols are ONLY for display. **Critical for rate queries** - always use `token_contract` column, never `token` symbol.
 
 4. **Defensive Programming:** Always convert numeric fields when reading from database (bytes issue). Always validate timestamps are exactly 19 characters.
 
 5. **Forward-Looking Calculation:** Position value is calculated by summing earnings/costs over all time periods from entry to live timestamp. Each timestamp's rates apply to the NEXT period.
+
+6. **Base/Reward APR Split (January 2026):** Dashboard now shows separate earnings from base rates vs reward rates for each leg. Queries must use `token_contract` to correctly match rates.
+
+7. **Delta Fees for Rebalances:** After rebalancing, fees shown are only for INCREMENTAL borrowing, not total position fees. First segment shows full fees.
+
+8. **Segment-Based PnL:** Each rebalance creates a new immutable segment with calculated PnL. Live position shows unrealized PnL. Strategy Summary combines all segments (realized + unrealized).
 
 ---
 
