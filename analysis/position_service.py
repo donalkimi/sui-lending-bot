@@ -804,6 +804,156 @@ class PositionService:
         # Realized APR = ANNUAL_NET_EARNINGS / deployment_usd
         return annual_net_earnings / position['deployment_usd']
 
+    # ==================== Per-Leg Earnings Calculation ====================
+
+    def _get_token_for_leg(self, position: pd.Series, leg: str) -> str:
+        """Get token symbol for a specific leg."""
+        leg_token_map = {
+            '1A': 'token1',
+            '2A': 'token2',
+            '2B': 'token2',
+            '3B': 'token3'
+        }
+        return position[leg_token_map[leg]]
+
+    def _get_token_contract_for_leg(self, position: pd.Series, leg: str) -> str:
+        """Get token contract address for a specific leg."""
+        leg_token_contract_map = {
+            '1A': 'token1_contract',
+            '2A': 'token2_contract',
+            '2B': 'token2_contract',
+            '3B': 'token3_contract'
+        }
+        return position[leg_token_contract_map[leg]]
+
+    def _get_protocol_for_leg(self, position: pd.Series, leg: str) -> str:
+        """Get protocol for a specific leg."""
+        leg_protocol_map = {
+            '1A': 'protocol_A',
+            '2A': 'protocol_A',
+            '2B': 'protocol_B',
+            '3B': 'protocol_B'
+        }
+        return position[leg_protocol_map[leg]]
+
+    def _get_weight_for_leg(self, position: pd.Series, leg: str) -> float:
+        """Get weight multiplier for a specific leg."""
+        leg_weight_map = {
+            '1A': 'L_A',
+            '2A': 'B_A',
+            '2B': 'L_B',
+            '3B': 'B_B'
+        }
+        return position[leg_weight_map[leg]]
+
+    def calculate_leg_earnings_split(
+        self,
+        position: pd.Series,
+        leg: str,
+        action: str,
+        start_timestamp: int,
+        end_timestamp: int
+    ) -> Tuple[float, float]:
+        """
+        Calculate base and reward earnings for a single leg over a time period.
+
+        Args:
+            position: Position record with deployment_usd, weights, tokens, protocols
+            leg: Leg identifier ('1A', '2A', '2B', '3B')
+            action: 'Lend' or 'Borrow'
+            start_timestamp: Start of period (Unix seconds)
+            end_timestamp: End of period (Unix seconds)
+
+        Returns:
+            Tuple of (base_amount, reward_amount) in USD
+            - For Lend legs: both positive (earnings)
+            - For Borrow legs: base positive (cost), reward negative (reduces cost)
+        """
+        # Input validation
+        if not isinstance(start_timestamp, int):
+            raise TypeError(f"start_timestamp must be int (Unix seconds), got {type(start_timestamp).__name__}")
+        if not isinstance(end_timestamp, int):
+            raise TypeError(f"end_timestamp must be int (Unix seconds), got {type(end_timestamp).__name__}")
+
+        if end_timestamp < start_timestamp:
+            raise ValueError("end_timestamp cannot be before start_timestamp")
+
+        # Extract leg parameters
+        deployment = position['deployment_usd']
+        token_contract = self._get_token_contract_for_leg(position, leg)
+        protocol = self._get_protocol_for_leg(position, leg)
+        weight = self._get_weight_for_leg(position, leg)
+
+        # Handle zero-duration period
+        if end_timestamp == start_timestamp:
+            return 0.0, 0.0
+
+        # Query all timestamps in period
+        start_str = to_datetime_str(start_timestamp)
+        end_str = to_datetime_str(end_timestamp)
+
+        query_timestamps = """
+        SELECT DISTINCT timestamp
+        FROM rates_snapshot
+        WHERE timestamp >= ? AND timestamp <= ?
+        ORDER BY timestamp ASC
+        """
+        timestamps_df = pd.read_sql_query(query_timestamps, self.conn, params=(start_str, end_str))
+
+        if timestamps_df.empty:
+            # No rate data available, return zeros
+            return 0.0, 0.0
+
+        base_total = 0.0
+        reward_total = 0.0
+
+        # For each period, calculate earnings using forward-looking rate principle
+        for i in range(len(timestamps_df) - 1):
+            ts_current = to_seconds(timestamps_df.iloc[i]['timestamp'])
+            ts_next = to_seconds(timestamps_df.iloc[i + 1]['timestamp'])
+            period_years = (ts_next - ts_current) / (365.25 * 86400)
+
+            # Query rates at current timestamp
+            # DESIGN PRINCIPLE: Use token_contract for lookups, not token symbol
+            if action == 'Lend':
+                rate_query = """
+                SELECT lend_base_apr, lend_reward_apr
+                FROM rates_snapshot
+                WHERE timestamp = ? AND protocol = ? AND token_contract = ?
+                """
+            else:  # Borrow
+                rate_query = """
+                SELECT borrow_base_apr, borrow_reward_apr
+                FROM rates_snapshot
+                WHERE timestamp = ? AND protocol = ? AND token_contract = ?
+                """
+
+            ts_str = to_datetime_str(ts_current)
+            rates = pd.read_sql_query(rate_query, self.conn, params=(ts_str, protocol, token_contract))
+
+            if not rates.empty:
+                if action == 'Lend':
+                    base_apr = rates.iloc[0]['lend_base_apr']
+                    reward_apr = rates.iloc[0]['lend_reward_apr']
+                    # Handle None/NULL values
+                    base_apr = float(base_apr) if base_apr is not None else 0.0
+                    reward_apr = float(reward_apr) if reward_apr is not None else 0.0
+                    # Lend earnings are positive
+                    base_total += deployment * weight * base_apr * period_years
+                    reward_total += deployment * weight * reward_apr * period_years
+                else:  # Borrow
+                    base_apr = rates.iloc[0]['borrow_base_apr']
+                    reward_apr = rates.iloc[0]['borrow_reward_apr']
+                    # Handle None/NULL values
+                    base_apr = float(base_apr) if base_apr is not None else 0.0
+                    reward_apr = float(reward_apr) if reward_apr is not None else 0.0
+                    # Borrow costs are positive
+                    base_total += deployment * weight * base_apr * period_years
+                    # Borrow rewards REDUCE costs, so subtract (making reward_total negative)
+                    reward_total -= deployment * weight * reward_apr * period_years
+
+        return base_total, reward_total
+
     # ==================== Rebalance Management ====================
 
     def rebalance_position(
