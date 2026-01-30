@@ -1122,8 +1122,31 @@ def render_positions_table_tab(timestamp_seconds: int):
             current_net_apr_decimal = gross_apr - fee_cost
 
             # Calculate position value and realized APR
-            pv_result = service.calculate_position_value(position, latest_timestamp)
+            # Use last rebalance timestamp if available (for unrealized PnL of current segment only)
+            if pd.notna(position.get('last_rebalance_timestamp')):
+                start_ts = to_seconds(position['last_rebalance_timestamp'])
+            else:
+                start_ts = to_seconds(position['entry_timestamp'])
+            pv_result = service.calculate_position_value(position, start_ts, latest_timestamp)
             realized_apr = service.calculate_realized_apr(position, latest_timestamp)
+
+            # Display data quality info if rates were forward-filled
+            if pv_result.get('has_forward_filled_data', False):
+                filled_count = pv_result['forward_filled_count']
+                st.info(f"""
+ℹ️ **Forward-filled rates**: {filled_count} period(s) used forward-filled rates.
+
+When a rate was missing, the previous valid rate was carried forward (following forward-looking rate logic).
+                """)
+
+                # Expandable details
+                with st.expander("View forward-filled periods"):
+                    filled_log = pv_result.get('forward_filled_log', [])
+                    if filled_log:
+                        filled_df = pd.DataFrame(filled_log)
+                        st.dataframe(filled_df, width="stretch")
+                    else:
+                        st.write("No details available")
 
             # STAGE 1: Build summary title for expander
             title = f"▶ {to_datetime_str(position['entry_timestamp'])} | {token_flow} | {protocol_pair} | Entry {position['entry_net_apr'] * 100:.2f}% | Current {current_net_apr_decimal * 100:.2f}% | Realized {realized_apr * 100:.2f}% | Value ${pv_result['current_value']:.2f}"
@@ -1987,7 +2010,6 @@ def render_positions_table_tab(timestamp_seconds: int):
 
                             # Calculate holding days
                             # DESIGN PRINCIPLE: Convert datetime strings to Unix seconds for arithmetic
-                            from utils.time_helpers import to_seconds
                             holding_seconds = (
                                 to_seconds(rebalance['closing_timestamp']) -
                                 to_seconds(rebalance['opening_timestamp'])

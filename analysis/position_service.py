@@ -470,10 +470,12 @@ class PositionService:
     def calculate_position_value(
         self,
         position: pd.Series,
-        live_timestamp: int
+        start_timestamp: int,
+        end_timestamp: int,
+        include_initial_fees: bool = True
     ) -> Dict:
         """
-        Calculate current position value and PnL breakdown.
+        Calculate position value and PnL breakdown between two timestamps.
 
         Queries rates_snapshot directly for all historical rates and calculates:
         - LE(T): Total lend earnings
@@ -486,8 +488,9 @@ class PositionService:
         the period [timestamp, next_timestamp).
 
         Args:
-            position: Position record from database
-            live_timestamp: Dashboard selected timestamp in Unix seconds (int)
+            position: Position record from database (contains deployment_usd, L_A, B_A, L_B, B_B, etc.)
+            start_timestamp: Unix seconds - start of period
+            end_timestamp: Unix seconds - end of period
 
         Returns:
             Dict with:
@@ -498,16 +501,20 @@ class PositionService:
                 - net_earnings: NET$$$ = LE(T) - BC(T) - FEES
                 - holding_days: Actual holding period in days
                 - periods_count: Number of time periods
+
+        Note: This allows calculating PnL for:
+            - Entire position: (entry_timestamp, live_timestamp)
+            - Rebalance segment: (rebalance_opening_timestamp, rebalance_closing_timestamp)
+            - Any arbitrary period for analysis
         """
         # Input validation
-        if not isinstance(live_timestamp, int):
-            raise TypeError(f"live_timestamp must be int (Unix seconds), got {type(live_timestamp).__name__}")
+        if not isinstance(start_timestamp, int):
+            raise TypeError(f"start_timestamp must be int (Unix seconds), got {type(start_timestamp).__name__}")
+        if not isinstance(end_timestamp, int):
+            raise TypeError(f"end_timestamp must be int (Unix seconds), got {type(end_timestamp).__name__}")
 
-        # Convert entry_timestamp from DB (string) to Unix seconds (int)
-        entry_ts = to_seconds(position['entry_timestamp'])
-
-        if live_timestamp < entry_ts:
-            raise ValueError("live_timestamp cannot be before entry_timestamp")
+        if end_timestamp < start_timestamp:
+            raise ValueError("end_timestamp cannot be before start_timestamp")
 
         # Extract position parameters
         deployment = position['deployment_usd']
@@ -526,7 +533,7 @@ class PositionService:
         protocol_B = position['protocol_B']
 
         # Calculate holding period
-        total_seconds = live_timestamp - entry_ts
+        total_seconds = end_timestamp - start_timestamp
         holding_days = total_seconds / 86400
 
         if total_seconds == 0:
@@ -541,8 +548,8 @@ class PositionService:
             }
 
         # Query all unique timestamps from rates_snapshot
-        entry_str = to_datetime_str(entry_ts)
-        live_str = to_datetime_str(live_timestamp)
+        start_str = to_datetime_str(start_timestamp)
+        end_str = to_datetime_str(end_timestamp)
 
         query_timestamps = """
         SELECT DISTINCT timestamp
@@ -550,10 +557,10 @@ class PositionService:
         WHERE timestamp >= ? AND timestamp <= ?
         ORDER BY timestamp ASC
         """
-        timestamps_df = pd.read_sql_query(query_timestamps, self.conn, params=(entry_str, live_str))
+        timestamps_df = pd.read_sql_query(query_timestamps, self.conn, params=(start_str, end_str))
 
         if timestamps_df.empty:
-            raise ValueError(f"No rate data found between {entry_str} and {live_str}")
+            raise ValueError(f"No rate data found between {start_str} and {end_str}")
 
         # For each timestamp, get rates for all 4 legs
         rates_data = []
@@ -579,18 +586,123 @@ class PositionService:
 
             rates_data.append({
                 'timestamp': to_seconds(ts_str),
+                'timestamp_str': ts_str,
                 'rates': leg_rates
             })
 
         # Helper to get rate
         def get_rate(df, protocol, token, rate_type):
-            """Get total rate (base + reward) for a protocol/token/type"""
+            """
+            Get rate from dataframe, returning NaN if missing.
+
+            Returns:
+                Dict with:
+                    - 'base': base APR (float or np.nan)
+                    - 'reward': reward APR (float or np.nan)
+                    - 'total': base + reward (float or np.nan if either is NaN)
+            """
+            import numpy as np
+
             row = df[(df['protocol'] == protocol) & (df['token'] == token)]
+
             if row.empty:
-                return 0
-            base = row[f'{rate_type}_base_apr'].iloc[0] or 0
-            reward = row[f'{rate_type}_reward_apr'].iloc[0] or 0
-            return base + reward
+                # Protocol/token not found - return all NaN
+                return {
+                    'base': np.nan,
+                    'reward': np.nan,
+                    'total': np.nan
+                }
+
+            row = row.iloc[0]
+            base = row[f'{rate_type}_base_apr']
+            reward = row[f'{rate_type}_reward_apr']
+
+            # Convert None to NaN for consistency
+            if base is None:
+                base = np.nan
+            if reward is None:
+                reward = np.nan
+
+            # Calculate total (NaN if either component is NaN)
+            if pd.isna(base) or pd.isna(reward):
+                total = np.nan
+            else:
+                total = float(base) + float(reward)
+
+            return {
+                'base': float(base) if not pd.isna(base) else np.nan,
+                'reward': float(reward) if not pd.isna(reward) else np.nan,
+                'total': total
+            }
+
+        # Helper to forward-fill NaN rates
+        def forward_fill_rates(rates_data_input):
+            """
+            Forward-fill NaN rates using previous valid rate.
+
+            Logic: If rate at timestamp T_i is NaN, use rate from T_{i-1}.
+            This follows forward-looking rate principle: previous rate continues to apply.
+
+            Args:
+                rates_data_input: List of dicts with 'timestamp', 'timestamp_str', 'rates' (DataFrame)
+
+            Returns:
+                Same structure with NaN rates replaced by forward-filled values
+                Adds 'forward_filled_flags' dict to each entry showing which rates were filled
+            """
+            import numpy as np
+
+            # Track last valid rate for each leg
+            last_valid_rates = {
+                'lend_1A': {'base': None, 'reward': None},
+                'borrow_2A': {'base': None, 'reward': None},
+                'lend_2B': {'base': None, 'reward': None},
+                'borrow_3B': {'base': None, 'reward': None}
+            }
+
+            for i, period_data in enumerate(rates_data_input):
+                rates_df = period_data['rates']
+                forward_filled = {}
+
+                # Process each leg
+                for leg_key, (prot, tok, r_type) in [
+                    ('lend_1A', (protocol_A, token1, 'lend')),
+                    ('borrow_2A', (protocol_A, token2, 'borrow')),
+                    ('lend_2B', (protocol_B, token2, 'lend')),
+                    ('borrow_3B', (protocol_B, token3, 'borrow'))
+                ]:
+                    rate_dict = get_rate(rates_df, prot, tok, r_type)
+
+                    # Check if NaN
+                    if pd.isna(rate_dict['total']):
+                        # Forward-fill from last valid rate
+                        if last_valid_rates[leg_key]['base'] is not None:
+                            rate_dict['base'] = last_valid_rates[leg_key]['base']
+                            rate_dict['reward'] = last_valid_rates[leg_key]['reward']
+                            rate_dict['total'] = rate_dict['base'] + rate_dict['reward']
+                            forward_filled[leg_key] = True
+                        else:
+                            # No previous valid rate - use 0 as last resort
+                            rate_dict['base'] = 0.0
+                            rate_dict['reward'] = 0.0
+                            rate_dict['total'] = 0.0
+                            forward_filled[leg_key] = 'no_previous_rate'
+                    else:
+                        # Valid rate - update last valid
+                        last_valid_rates[leg_key]['base'] = rate_dict['base']
+                        last_valid_rates[leg_key]['reward'] = rate_dict['reward']
+                        forward_filled[leg_key] = False
+
+                    # Store rate back
+                    period_data[f'rate_{leg_key}'] = rate_dict
+
+                period_data['forward_filled_flags'] = forward_filled
+
+            return rates_data_input
+
+        # Apply forward-fill to handle NaN rates
+        rates_data = forward_fill_rates(rates_data)
+        missing_data_log = []
 
         # Calculate LE(T) - Total Lend Earnings
         lend_earnings = 0
@@ -604,15 +716,21 @@ class PositionService:
             time_delta_seconds = next_data['timestamp'] - current['timestamp']
             time_years = time_delta_seconds / (365 * 86400)
 
-            # Get forward-looking rates from current timestamp
-            current_rates = current['rates']
-            lend_rate_1A = get_rate(current_rates, protocol_A, token1, 'lend')
-            lend_rate_2B = get_rate(current_rates, protocol_B, token2, 'lend')
+            # Use pre-filled rates from forward_fill_rates()
+            rate_1A = current['rate_lend_1A']
+            rate_2B = current['rate_lend_2B']
 
-            # Lend earnings for this period
-            period_lend = deployment * (L_A * lend_rate_1A + L_B * lend_rate_2B) * time_years
+            # Lend earnings for this period (no NaN checks needed - already forward-filled)
+            period_lend = deployment * (L_A * rate_1A['total'] + L_B * rate_2B['total']) * time_years
             lend_earnings += period_lend
             periods_count += 1
+
+            # Track if this period used forward-filled rates
+            if any(current['forward_filled_flags'].values()):
+                missing_data_log.append({
+                    'timestamp': current['timestamp_str'],
+                    'forward_filled_legs': [k for k, v in current['forward_filled_flags'].items() if v]
+                })
 
         # Calculate BC(T) - Total Borrow Costs
         borrow_costs = 0
@@ -624,16 +742,20 @@ class PositionService:
             time_delta_seconds = next_data['timestamp'] - current['timestamp']
             time_years = time_delta_seconds / (365 * 86400)
 
-            current_rates = current['rates']
-            borrow_rate_2A = get_rate(current_rates, protocol_A, token2, 'borrow')
-            borrow_rate_3B = get_rate(current_rates, protocol_B, token3, 'borrow')
+            # Use pre-filled rates from forward_fill_rates()
+            rate_2A = current['rate_borrow_2A']
+            rate_3B = current['rate_borrow_3B']
 
-            # Borrow costs for this period
-            period_borrow = deployment * (B_A * borrow_rate_2A + B_B * borrow_rate_3B) * time_years
+            # Borrow costs for this period (no NaN checks needed - already forward-filled)
+            period_borrow = deployment * (B_A * rate_2A['total'] + B_B * rate_3B['total']) * time_years
             borrow_costs += period_borrow
 
         # Calculate FEES - One-Time Upfront Fees
-        fees = deployment * (B_A * entry_fee_2A + B_B * entry_fee_3B)
+        # For rebalance segments, fees are calculated separately based on token deltas
+        if include_initial_fees:
+            fees = deployment * (B_A * entry_fee_2A + B_B * entry_fee_3B)
+        else:
+            fees = 0
 
         # Calculate NET$$$ and Current Value
         net_earnings = lend_earnings - borrow_costs - fees
@@ -646,7 +768,11 @@ class PositionService:
             'fees': fees,
             'net_earnings': net_earnings,
             'holding_days': holding_days,
-            'periods_count': periods_count
+            'periods_count': periods_count,
+            # Data quality tracking
+            'forward_filled_count': len(missing_data_log),
+            'forward_filled_log': missing_data_log,
+            'has_forward_filled_data': len(missing_data_log) > 0
         }
 
     def calculate_realized_apr(self, position: pd.Series, live_timestamp: int) -> float:
@@ -662,7 +788,12 @@ class PositionService:
         Returns:
             Realized APR as decimal (e.g., 0.05 = 5%)
         """
-        pv_result = self.calculate_position_value(position, live_timestamp)
+        # Use last rebalance timestamp if available (for current segment APR only)
+        if pd.notna(position.get('last_rebalance_timestamp')):
+            start_ts = to_seconds(position['last_rebalance_timestamp'])
+        else:
+            start_ts = to_seconds(position['entry_timestamp'])
+        pv_result = self.calculate_position_value(position, start_ts, live_timestamp)
 
         if pv_result['holding_days'] == 0:
             return 0
@@ -747,13 +878,21 @@ class PositionService:
             Dict with complete snapshot including realised PnL
         """
         # 1. Determine segment opening time
-        if pd.notna(position.get('last_rebalance_timestamp')):
+        is_rebalance_segment = pd.notna(position.get('last_rebalance_timestamp'))
+        if is_rebalance_segment:
             opening_timestamp = to_seconds(position['last_rebalance_timestamp'])
         else:
             opening_timestamp = to_seconds(position['entry_timestamp'])
 
         # 2. Calculate realised PnL for entire position (all 4 legs)
-        pv_result = self.calculate_position_value(position, live_timestamp)
+        # Use opening_timestamp as start, live_timestamp as end
+        # For rebalance segments, exclude initial fees (calculate separately based on deltas)
+        pv_result = self.calculate_position_value(
+            position,
+            opening_timestamp,
+            live_timestamp,
+            include_initial_fees=not is_rebalance_segment
+        )
 
         # 3. Query closing rates & prices from rates_snapshot
         closing_rates = self._query_rates_at_timestamp(position, live_timestamp)
@@ -858,6 +997,31 @@ class PositionService:
         exit_action_2B = self._determine_rebalance_action('2B', entry_token_amount_2B, exit_token_amount_2B, 'Lend')
         exit_action_3B = self._determine_rebalance_action('3B', entry_token_amount_3B, exit_token_amount_3B, 'Borrow')
 
+        # 8. Calculate fees for rebalance segments
+        # For first segment: pv_result already includes full initial fees
+        # For rebalance segments: calculate fees on additional borrowing only
+        if is_rebalance_segment:
+            rebalance_fees = 0
+
+            # Token2@A: Only pay fees on ADDITIONAL borrowing (currently token2 is the only rebalanced token)
+            # entry_token_amount_2A = amount at START of this segment (from position's entry_price_2A)
+            # exit_token_amount_2A = amount at END of this segment (same for now, will change after rebalance logic)
+            # For now, token amounts don't change during the segment, so delta = 0
+            # Fees will be calculated when actual rebalancing adjusts token amounts
+            delta_borrow_2A = exit_token_amount_2A - entry_token_amount_2A
+            if delta_borrow_2A > 0:
+                # Get entry fee from position record
+                entry_fee_2A = position.get('entry_borrow_fee_2A', 0) or 0
+                rebalance_fees += delta_borrow_2A * closing_rates['price_2A'] * entry_fee_2A
+
+            # Token3@B: Not currently rebalanced, so no fees
+            # If we rebalance token3 in the future, add similar logic here
+
+            realised_fees = rebalance_fees
+        else:
+            # First segment: use fees from pv_result (full initial fees)
+            realised_fees = pv_result['fees']
+
         return {
             'opening_timestamp': opening_timestamp,
             'closing_timestamp': live_timestamp,
@@ -923,8 +1087,8 @@ class PositionService:
             'exit_action_2B': exit_action_2B,
             'exit_action_3B': exit_action_3B,
             # Realised PnL
-            'realised_pnl': pv_result['net_earnings'],
-            'realised_fees': pv_result['fees'],
+            'realised_pnl': pv_result['net_earnings'] - pv_result['fees'] + realised_fees,  # Adjust for correct fees
+            'realised_fees': realised_fees,
             'realised_lend_earnings': pv_result['lend_earnings'],
             'realised_borrow_costs': pv_result['borrow_costs'],
             # Weightings (constant)

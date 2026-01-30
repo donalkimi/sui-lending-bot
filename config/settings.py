@@ -7,8 +7,8 @@ SUI_RPC_URL = "https://side-flashy-isle.sui-mainnet.quiknode.pro/6acae20a62b8a68
 
 # Strategy Parameters
 DEFAULT_LIQUIDATION_DISTANCE = 0.20  # 315 default safety buffer
-MIN_NET_APR_THRESHOLD = -10.5  # Minimum 0.5% net APR to consider
-RATE_SPREAD_THRESHOLD = 0.01  # Strategies must have at least 1% spread (lend_rate - borrow_rate)
+MIN_NET_APR_THRESHOLD = -1  # for now, i want to see all strategies, even ones that are not profitable (lose up to -1%)
+RATE_SPREAD_THRESHOLD = 0.00  # Strategies must have at least one of token2 lend-borrow and token 1 lend -token3 borrow be positive. 
 
 # Alert Configuration
 SLACK_WEBHOOK_URL = "https://hooks.slack.com/triggers/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"

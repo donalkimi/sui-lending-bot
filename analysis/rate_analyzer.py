@@ -338,6 +338,7 @@ class RateAnalyzer:
         # Pre-filter token1 (stablecoin) candidates based on minimum lending threshold
         # Find minimum borrow rate across all stablecoins and protocols
         all_stablecoin_borrow_rates = []
+        print(self.protocols)
         for stablecoin in self.STABLECOINS:
             for protocol in self.protocols:
                 rate = self.get_rate(self.borrow_rates, stablecoin, protocol)
@@ -448,14 +449,21 @@ class RateAnalyzer:
                             # Skip if same protocol
                             if protocol_A == protocol_B:
                                 continue
-                            
                             analyzed += 1
                             
                             # Get all the rates
                             lend_rate_1A = self.get_rate(self.lend_rates, token1, protocol_A)
+                            if np.isnan(lend_rate_1A): 
+                                continue
                             borrow_rate_2A = self.get_rate(self.borrow_rates, token2, protocol_A)
+                            if np.isnan(borrow_rate_2A): 
+                                continue
                             lend_rate_2B = self.get_rate(self.lend_rates, token2, protocol_B)
+                            if np.isnan(lend_rate_2B): 
+                                continue
                             borrow_rate_3B = self.get_rate(self.borrow_rates, token3, protocol_B)
+                            if np.isnan(borrow_rate_3B): 
+                                continue
                             
                             # Apply rate spread filter
                             spread_threshold = settings.RATE_SPREAD_THRESHOLD
@@ -468,10 +476,12 @@ class RateAnalyzer:
                             # We want: lend_rate_1A - borrow_rate_3B >= +1%
                             token1_spread = lend_rate_1A - borrow_rate_3B
 
-                            # If either spread is below threshold, exclude this strategy
-                            if token2_spread < spread_threshold or token1_spread < spread_threshold:
+                            # If BOTH spread are below threshold, exclude this strategy. It might be the case the the weighted average of a negative spread in the middle is more than offset by spread on the boundaries (or vice-versa)
+                            if token2_spread < spread_threshold and token1_spread < spread_threshold:
                                 self.excluded_by_rate_spread += 1
-
+                                if protocol_A.lower()=='suilend' or protocol_B.lower()=='suilend':
+                                    print(f"suilend strategy excluded: {protocol_A}<->{protocol_B} {token1}/{token2}/{token3} \n{lend_rate_1A}->{borrow_rate_2A}->{lend_rate_2B}->{borrow_rate_3B}\t\t{token2_spread}, {token1_spread}")
+                            
                                 # # Log to console for debugging
                                 # failed_conditions = []
                                 # if token2_spread < spread_threshold:
