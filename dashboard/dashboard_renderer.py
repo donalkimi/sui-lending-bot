@@ -1128,7 +1128,6 @@ def render_positions_table_tab(timestamp_seconds: int):
             else:
                 start_ts = to_seconds(position['entry_timestamp'])
             pv_result = service.calculate_position_value(position, start_ts, latest_timestamp)
-            realized_apr = service.calculate_realized_apr(position, latest_timestamp)
 
             # Display data quality info if rates were forward-filled
             if pv_result.get('has_forward_filled_data', False):
@@ -1149,79 +1148,31 @@ When a rate was missing, the previous valid rate was carried forward (following 
                         st.write("No details available")
 
             # STAGE 1: Build summary title for expander
-            title = f"▶ {to_datetime_str(position['entry_timestamp'])} | {token_flow} | {protocol_pair} | Entry {position['entry_net_apr'] * 100:.2f}% | Current {current_net_apr_decimal * 100:.2f}% | Realized {realized_apr * 100:.2f}% | Value ${pv_result['current_value']:.2f}"
+            # Calculate strategy-level metrics for title (from entry to current)
+            # Calculate days from entry to current timestamp
+            entry_ts = to_seconds(position['entry_timestamp'])
+            strategy_days = (latest_timestamp - entry_ts) / 86400
+
+            # For title: We need to calculate strategy_pnl from strategy summary
+            # This requires calculating all segments. We'll do a simplified calculation here.
+            # Calculate from ENTRY to CURRENT (not from last rebalance)
+            strategy_pv_result = service.calculate_position_value(position, entry_ts, latest_timestamp)
+            strategy_total_pnl = strategy_pv_result['net_earnings']
+
+            # Calculate strategy value: deployment + total PnL
+            strategy_value = deployment_usd + strategy_total_pnl
+
+            # Calculate Net APR from strategy start
+            if strategy_days > 0:
+                # Net APR = (Total PnL / deployment) * (365 / days)
+                strategy_net_apr = (strategy_total_pnl / deployment_usd) * (365 / strategy_days)
+            else:
+                strategy_net_apr = 0.0
+
+            title = f"▶ {to_datetime_str(position['entry_timestamp'])} | {token_flow} | {protocol_pair} | Entry {position['entry_net_apr'] * 100:.2f}% | Current {current_net_apr_decimal * 100:.2f}% | Net APR {strategy_net_apr * 100:.2f}% | Value ${strategy_value:,.2f}"
 
             # STAGE 2-3: Build detail table inside expander
             with st.expander(title, expanded=False):
-                # Summary table (1 row with key metrics)
-                # Calculate PnL (ex fees) = current_value - start_capital + fees
-                pnl_ex_fees = pv_result['current_value'] - deployment_usd + pv_result['fees']
-
-                # Determine entry time label (show last rebalance or original entry)
-                if pd.notna(position.get('last_rebalance_timestamp')):
-                    entry_time_label = f"{to_datetime_str(position['last_rebalance_timestamp'])} (Last Rebalance)"
-                else:
-                    entry_time_label = f"{to_datetime_str(position['entry_timestamp'])} (Original)"
-
-                # Get accumulated realised PnL (from previous rebalances)
-                accumulated_realised_pnl = position.get('accumulated_realised_pnl', 0.0) or 0.0
-
-                entry_net_apr = safe_float(position['entry_net_apr'])
-
-                summary_data = [{
-                    'Entry Time': entry_time_label,
-                    'Token Flow': token_flow,
-                    'Protocols': protocol_pair,
-                    'Entry APR': f"{entry_net_apr * 100:.2f}%",
-                    'Realized APR': f"{realized_apr * 100:.2f}%",
-                    'Current APR': f"{current_net_apr_decimal * 100:.2f}%",
-                    'Start Capital': f"${deployment_usd:,.2f}",
-                    'Unrealised PnL': f"${pnl_ex_fees:,.2f}",
-                    'Accumulated Realised PnL': f"${accumulated_realised_pnl:,.2f}",
-                    'Fees': f"${pv_result['fees']:,.2f}",
-                    'Current Value': f"${pv_result['current_value']:,.2f}",
-                }]
-                summary_df = pd.DataFrame(summary_data)
-
-                # Apply color formatting to APR columns
-                def color_apr(val):
-                    """Color positive APRs green, negative red"""
-                    if isinstance(val, str) and '%' in val:
-                        try:
-                            numeric_val = float(val.replace('%', ''))
-                            if numeric_val > 0:
-                                return 'color: green'
-                            elif numeric_val < 0:
-                                return 'color: red'
-                        except (ValueError, TypeError):
-                            pass
-                    return ''
-
-                def color_pnl(val):
-                    """Color positive PnL green, negative red"""
-                    if isinstance(val, str) and '$' in val:
-                        try:
-                            numeric_val = float(val.replace('$', '').replace(',', ''))
-                            if numeric_val > 0:
-                                return 'color: green'
-                            elif numeric_val < 0:
-                                return 'color: red'
-                        except (ValueError, TypeError):
-                            pass
-                    return ''
-
-                styled_summary_df = summary_df.style.map(
-                    color_apr,
-                    subset=['Entry APR', 'Current APR', 'Realized APR']
-                ).map(
-                    color_pnl,
-                    subset=['Unrealised PnL', 'Accumulated Realised PnL']
-                )
-                st.dataframe(styled_summary_df, width='stretch', hide_index=True)
-
-                # Add spacing
-                st.markdown("---")
-
                 # Detail table (4 legs breakdown)
                 detail_data = []
 
@@ -1611,7 +1562,6 @@ When a rate was missing, the previous valid rate was carried forward (following 
                     'Live Liq Dist': format_liq_distance(liq_1A),
                     'Rebalance Liq Dist': format_liq_distance(rebalanced_liq_1A),
                     'Fee Rate': '',  # NEW: No fee for Lend
-                    'Entry Fees $$$': '',  # NEW: No entry fee for Lend
                 })
 
                 # Calculate fees for leg 2A (delta if rebalanced, full if first segment)
@@ -1650,7 +1600,6 @@ When a rate was missing, the previous valid rate was carried forward (following 
                     'Live Liq Dist': format_liq_distance(liq_2A),
                     'Rebalance Liq Dist': format_liq_distance(rebalanced_liq_2A),
                     'Fee Rate': f"{borrow_fee_2A * 100:.2f}%" if borrow_fee_2A > 0 else '',
-                    'Entry Fees $$$': f"${fees_2A:.2f}" if fees_2A > 0 else '',
                 })
 
                 # Row 3: Protocol B - Lend token2
@@ -1673,7 +1622,6 @@ When a rate was missing, the previous valid rate was carried forward (following 
                     'Live Liq Dist': format_liq_distance(liq_2B),
                     'Rebalance Liq Dist': format_liq_distance(rebalanced_liq_2B),
                     'Fee Rate': '',  # NEW: No fee for Lend
-                    'Entry Fees $$$': '',  # NEW: No entry fee for Lend
                 })
 
                 # Calculate fees for leg 3B (delta if rebalanced, full if first segment)
@@ -1712,12 +1660,13 @@ When a rate was missing, the previous valid rate was carried forward (following 
                     'Live Liq Dist': format_liq_distance(liq_3B),
                     'Rebalance Liq Dist': format_liq_distance(rebalanced_liq_3B),
                     'Fee Rate': f"{borrow_fee_3B * 100:.2f}%" if borrow_fee_3B > 0 else '',
-                    'Entry Fees $$$': f"${fees_3B:.2f}" if fees_3B > 0 else '',
                 })
 
                 # Calculate Strategy Summary (sum of all segments: rebalanced + live)
-                # Live segment totals
-                live_base_earnings = base_1A + base_2A + base_2B + base_3B
+                # Live segment totals - separate lend/borrow, then combine
+                live_base_lend = base_1A + base_2B  # lend legs (1A, 2B)
+                live_base_borrow = base_2A + base_3B  # borrow legs (2A, 3B)
+                live_base_earnings = live_base_lend - live_base_borrow  # earnings - costs
                 live_reward_earnings = reward_1A + reward_2A + reward_2B + reward_3B
                 live_fees = fees_2A + fees_3B
                 live_total_earnings = live_base_earnings + live_reward_earnings
@@ -1764,7 +1713,11 @@ When a rate was missing, the previous valid rate was carried forward (following 
                             rebal_base_3B, rebal_reward_3B = service.calculate_leg_earnings_split(rebal_as_pos, '3B', 'Borrow', opening_ts_rebal, closing_ts_rebal)
 
                             # Calculate segment summary values (same logic as Segment Summary)
-                            segment_base = rebal_base_1A + rebal_base_2A + rebal_base_2B + rebal_base_3B
+                            # Separate lend and borrow, then combine
+                            segment_base_lend = rebal_base_1A + rebal_base_2B  # lend legs
+                            segment_base_borrow = rebal_base_2A + rebal_base_3B  # borrow legs
+                            segment_base = segment_base_lend - segment_base_borrow  # earnings - costs
+                            # Rewards are all positive, just sum
                             segment_reward = rebal_reward_1A + rebal_reward_2A + rebal_reward_2B + rebal_reward_3B
 
                             # Calculate fees for this segment (same logic as Segment Summary)
@@ -1916,7 +1869,11 @@ When a rate was missing, the previous valid rate was carried forward (following 
                 st.markdown("**Live Position Summary**")
 
                 # Calculate summary values from token table
-                total_base_earnings = base_1A + base_2A + base_2B + base_3B
+                # Separate lend and borrow for base, then combine: earnings - costs
+                base_lend = base_1A + base_2B  # lend legs (1A, 2B)
+                base_borrow = base_2A + base_3B  # borrow legs (2A, 3B)
+                total_base_earnings = base_lend - base_borrow  # earnings - costs
+                # Rewards are all positive, just sum
                 total_reward_earnings = reward_1A + reward_2A + reward_2B + reward_3B
                 total_fees = fees_2A + fees_3B
                 total_earnings = total_base_earnings + total_reward_earnings
@@ -2094,38 +2051,130 @@ When a rate was missing, the previous valid rate was carried forward (following 
                     st.markdown("### 📊 Rebalance History")
 
                     for idx, rebalance in rebalances.iterrows():
-                        # Build expander title with PnL indicator
-                        realised_pnl = rebalance['realised_pnl']
-                        pnl_indicator = "🟢" if realised_pnl >= 0 else "🔴"
+                        # Helper to get protocol for each leg
+                        def get_protocol_for_leg(leg_id):
+                            if leg_id in ['1A', '2A']:
+                                return position['protocol_A']
+                            else:  # '2B', '3B'
+                                return position['protocol_B']
 
-                        # Timestamps from DB are already datetime strings
-                        rebalance_title = (
-                            f"▼ Rebalance #{int(rebalance['sequence_number'])}: "
-                            f"{rebalance['opening_timestamp']} → "
-                            f"{rebalance['closing_timestamp']} | "
-                            f"Realised PnL: {pnl_indicator} ${realised_pnl:,.2f}"
-                        )
+                        # Helper to get action for each leg
+                        def get_action_for_leg(leg_id):
+                            if leg_id in ['1A', '2B']:
+                                return 'Lend'
+                            else:  # '2A', '3B'
+                                return 'Borrow'
+
+                        # Calculate segment summary metrics BEFORE creating title
+                        # Initialize accumulators (separate lend/borrow for base)
+                        base_lend_total = 0.0
+                        base_borrow_total = 0.0
+                        total_reward_earnings = 0.0
+                        total_fees = 0.0
+
+                        # Get current sequence for timestamp determination
+                        current_seq = int(rebalance['sequence_number'])
+                        is_latest_segment = (current_seq == len(rebalances))
+
+                        # Get previous rebalance for fee calculation
+                        prev_rebalance = None
+                        if current_seq > 1:
+                            prev_rebalance_df = rebalances[rebalances['sequence_number'] == current_seq - 1]
+                            if not prev_rebalance_df.empty:
+                                prev_rebalance = prev_rebalance_df.iloc[0]
+
+                        # Build position-like Series for earnings calculation
+                        rebalance_as_position = pd.Series({
+                            'deployment_usd': rebalance['deployment_usd'],
+                            'L_A': rebalance['L_A'],
+                            'B_A': rebalance['B_A'],
+                            'L_B': rebalance['L_B'],
+                            'B_B': rebalance['B_B'],
+                            'token1': position['token1'],
+                            'token2': position['token2'],
+                            'token3': position['token3'],
+                            'token1_contract': position['token1_contract'],
+                            'token2_contract': position['token2_contract'],
+                            'token3_contract': position['token3_contract'],
+                            'protocol_A': position['protocol_A'],
+                            'protocol_B': position['protocol_B']
+                        })
+
+                        opening_ts = to_seconds(rebalance['opening_timestamp'])
+                        if is_latest_segment:
+                            closing_ts = timestamp_seconds
+                        else:
+                            closing_ts = to_seconds(rebalance['closing_timestamp'])
+
+                        # Loop through all 4 legs to calculate base/reward earnings and fees
+                        for leg in ['1A', '2A', '2B', '3B']:
+                            action = get_action_for_leg(leg)
+
+                            # Calculate base and reward earnings for this leg
+                            try:
+                                base_amount, reward_amount = service.calculate_leg_earnings_split(
+                                    rebalance_as_position, leg, action, opening_ts, closing_ts
+                                )
+                                # Separate lend and borrow base amounts
+                                if action == 'Lend':
+                                    base_lend_total += base_amount
+                                else:  # Borrow
+                                    base_borrow_total += base_amount
+                                # Rewards are all positive, just accumulate
+                                total_reward_earnings += reward_amount
+                            except Exception:
+                                pass  # Skip if calculation fails
+
+                            # Calculate fees for borrow legs
+                            if action == 'Borrow':
+                                if leg == '2A':
+                                    borrow_fee = position.get('entry_borrow_fee_2A', 0) or 0
+                                else:  # '3B'
+                                    borrow_fee = position.get('entry_borrow_fee_3B', 0) or 0
+
+                                if borrow_fee > 0:
+                                    if prev_rebalance is not None:
+                                        current_borrow = rebalance[f'entry_token_amount_{leg}']
+                                        prev_borrow = prev_rebalance[f'entry_token_amount_{leg}']
+                                        delta_borrow = current_borrow - prev_borrow
+                                        if delta_borrow > 0:
+                                            leg_fees = borrow_fee * delta_borrow * rebalance[f'opening_price_{leg}']
+                                            total_fees += leg_fees
+                                    else:
+                                        leg_fees = borrow_fee * rebalance[f'entry_token_amount_{leg}'] * rebalance[f'opening_price_{leg}']
+                                        total_fees += leg_fees
+
+                        # After loop: combine lend and borrow base totals
+                        total_base_earnings = base_lend_total - base_borrow_total  # earnings - costs
+
+                        # Calculate duration in days
+                        opening_ts = to_seconds(rebalance['opening_timestamp'])
+                        closing_ts_for_apr = to_seconds(rebalance['closing_timestamp'])
+                        duration_days = (closing_ts_for_apr - opening_ts) / 86400
+
+                        # Calculate APR from realized PnL
+                        realised_pnl = rebalance['realised_pnl']
+                        deployment = rebalance['deployment_usd']
+                        if duration_days > 0:
+                            apr = (realised_pnl / deployment) * (365 / duration_days) * 100
+                        else:
+                            apr = 0.0
+
+                        # Build enhanced expander title (using same format as position expander)
+                        rebalance_title = f"▼ Rebalance #{int(rebalance['sequence_number'])}: {rebalance['opening_timestamp']} → {rebalance['closing_timestamp']} ({duration_days:.1f} days) | Realised PnL: ${realised_pnl:.2f} (APR: {apr:.2f}%) | base earnings ${total_base_earnings:.2f}, rewards ${total_reward_earnings:.2f}, Fees ${total_fees:.2f}"
 
                         with st.expander(rebalance_title, expanded=False):
-                            # Get previous rebalance for comparison (if exists)
-                            current_seq = int(rebalance['sequence_number'])
-                            prev_rebalance = None
-                            if current_seq > 1:
-                                prev_rebalance = rebalances[rebalances['sequence_number'] == current_seq - 1]
-                                if not prev_rebalance.empty:
-                                    prev_rebalance = prev_rebalance.iloc[0]
+                            # Get next rebalance for "Rebalance Out" calculation
+                            next_rebalance = None
+                            if current_seq < len(rebalances):
+                                next_rebalance = rebalances[rebalances['sequence_number'] == current_seq + 1]
+                                if not next_rebalance.empty:
+                                    next_rebalance = next_rebalance.iloc[0]
                                 else:
-                                    prev_rebalance = None
+                                    next_rebalance = None
 
                             # Build rebalance detail table with all 4 legs
                             rebalance_data = []
-
-                            # Helper to get protocol for each leg
-                            def get_protocol_for_leg(leg_id):
-                                if leg_id in ['1A', '2A']:
-                                    return position['protocol_A']
-                                else:  # '2B', '3B'
-                                    return position['protocol_B']
 
                             # Helper to get token symbol for each leg
                             def get_token_for_leg(leg_id):
@@ -2135,13 +2184,6 @@ When a rate was missing, the previous valid rate was carried forward (following 
                                     return position['token2']
                                 else:  # '3B'
                                     return position['token3']
-
-                            # Helper to get action for each leg
-                            def get_action_for_leg(leg_id):
-                                if leg_id in ['1A', '2B']:
-                                    return 'Lend'
-                                else:  # '2A', '3B'
-                                    return 'Borrow'
 
                             # Helper to format liquidation price
                             def format_rebalance_liq_price(liq_price):
@@ -2157,10 +2199,8 @@ When a rate was missing, the previous valid rate was carried forward (following 
                                     return ""
                                 return f"{liq_dist * 100:.2f}%"
 
-                            # Initialize accumulators for base and reward earnings and fees across all legs
-                            total_base_earnings = 0.0
-                            total_reward_earnings = 0.0
-                            total_fees = 0.0
+                            # Reuse pre-calculated segment summary values (calculated before title)
+                            # total_base_earnings, total_reward_earnings, total_fees are already available
 
                             # Build rows for all 4 legs
                             for leg in ['1A', '2A', '2B', '3B']:
@@ -2182,25 +2222,76 @@ When a rate was missing, the previous valid rate was carried forward (following 
                                 if prev_rebalance is not None:
                                     current_amount = rebalance[f'entry_token_amount_{leg}']
                                     prev_amount = prev_rebalance[f'entry_token_amount_{leg}']
-                                    delta = current_amount - prev_amount
+                                    delta_tokens = current_amount - prev_amount
+                                    delta_usd = delta_tokens * rebalance[f'opening_price_{leg}']
 
-                                    if abs(delta) > 0.0001:  # Ignore tiny differences
+                                    if abs(delta_usd) > 0.1:  # Ignore tiny differences
                                         # Format action based on action type and direction
+                                        usd_amt = abs(delta_usd)
                                         if action == 'Lend':
-                                            if delta > 0:
-                                                token_rebalance_action = f"Lend {abs(delta):,.4f}"
+                                            if delta_usd > 0:
+                                                token_rebalance_action = f"Lend ${usd_amt:,.0f}"
                                             else:
-                                                token_rebalance_action = f"Withdraw {abs(delta):,.4f}"
+                                                token_rebalance_action = f"Withdraw ${usd_amt:,.0f}"
                                         else:  # Borrow
-                                            if delta > 0:
-                                                token_rebalance_action = f"Borrow {abs(delta):,.4f}"
+                                            if delta_usd > 0:
+                                                token_rebalance_action = f"Borrow ${usd_amt:,.0f}"
                                             else:
-                                                token_rebalance_action = f"Repay {abs(delta):,.4f}"
+                                                token_rebalance_action = f"Repay ${usd_amt:,.0f}"
                                     else:
                                         token_rebalance_action = "No change"
                                 else:
                                     # First rebalance - no previous to compare
                                     token_rebalance_action = "Initial"
+
+                                # Calculate "Rebalance Out" for this leg
+                                # Shows the USD value of token change when exiting this segment
+                                rebalance_out_usd = ''
+
+                                # Determine next position state
+                                if next_rebalance is not None:
+                                    # There's another rebalance after this one
+                                    next_amt = next_rebalance[f'entry_token_amount_{leg}']
+                                elif current_seq == len(rebalances):
+                                    # This is the last rebalance, compare to LIVE position
+                                    # Calculate live position token amounts from current weights
+                                    live_deployment = position['deployment_usd']
+                                    if leg == '1A':
+                                        live_weight = position['L_A']
+                                        live_price = position['entry_price_1A']
+                                    elif leg == '2A':
+                                        live_weight = position['B_A']
+                                        live_price = position['entry_price_2A']
+                                    elif leg == '2B':
+                                        live_weight = position['L_B']
+                                        live_price = position['entry_price_2B']
+                                    else:  # '3B'
+                                        live_weight = position['B_B']
+                                        live_price = position['entry_price_3B']
+
+                                    next_amt = (live_weight * live_deployment) / live_price if live_price > 0 else 0
+                                else:
+                                    # Not last rebalance and no next rebalance (shouldn't happen)
+                                    next_amt = None
+
+                                if next_amt is not None:
+                                    curr_amt = rebalance[f'entry_token_amount_{leg}']
+                                    delta_out_tokens = next_amt - curr_amt
+                                    delta_out_usd_val = delta_out_tokens * rebalance[f'closing_price_{leg}']
+
+                                    if abs(delta_out_usd_val) > 1:
+                                        # Format with action verb based on action type and direction
+                                        usd_amt = abs(delta_out_usd_val)
+                                        if action == 'Lend':
+                                            if delta_out_usd_val > 0:
+                                                rebalance_out_usd = f"Lend ${usd_amt:,.0f}"
+                                            else:
+                                                rebalance_out_usd = f"Withdraw ${usd_amt:,.0f}"
+                                        else:  # Borrow
+                                            if delta_out_usd_val > 0:
+                                                rebalance_out_usd = f"Borrow ${usd_amt:,.0f}"
+                                            else:
+                                                rebalance_out_usd = f"Repay ${usd_amt:,.0f}"
 
                                 # Calculate base and reward earnings for this leg
                                 # Create position-like Series from rebalance data
@@ -2240,14 +2331,11 @@ When a rate was missing, the previous valid rate was carried forward (following 
                                     # Fallback to zeros if calculation fails
                                     base_amount, reward_amount = 0.0, 0.0
 
-                                # Accumulate base and reward earnings across all legs
-                                total_base_earnings += base_amount
-                                total_reward_earnings += reward_amount
+                                # Note: total_base_earnings, total_reward_earnings already calculated before title
+                                # Per-leg values (base_amount, reward_amount) are used for token table display only
 
-                                # Calculate fees for borrow legs
+                                # Calculate fee rate for borrow legs
                                 fee_rate_display = ''
-                                fees_display = ''
-                                leg_fees = 0.0  # Track fees for this leg
                                 if action == 'Borrow':
                                     # Get borrow fee rate from position
                                     if leg == '2A':
@@ -2257,29 +2345,6 @@ When a rate was missing, the previous valid rate was carried forward (following 
 
                                     if borrow_fee > 0:
                                         fee_rate_display = f"{borrow_fee * 100:.2f}%"
-
-                                        # Calculate delta fees or full fees
-                                        if prev_rebalance is not None:
-                                            # Delta fees: only on ADDITIONAL borrowing
-                                            current_borrow = rebalance[f'entry_token_amount_{leg}']
-                                            prev_borrow = prev_rebalance[f'entry_token_amount_{leg}']
-                                            delta_borrow = current_borrow - prev_borrow
-
-                                            if delta_borrow > 0:
-                                                # Additional borrowing - pay fees on delta
-                                                leg_fees = borrow_fee * delta_borrow * rebalance[f'opening_price_{leg}']
-                                                fees_display = f"${leg_fees:.2f} (Δ)"
-                                            else:
-                                                # Repayment or no change - no fees
-                                                leg_fees = 0.0
-                                                fees_display = "$0.00"
-                                        else:
-                                            # First segment - full entry fees
-                                            leg_fees = borrow_fee * rebalance[f'entry_token_amount_{leg}'] * rebalance[f'opening_price_{leg}']
-                                            fees_display = f"${leg_fees:.2f}"
-
-                                # Accumulate fees
-                                total_fees += leg_fees
 
                                 row = {
                                     'Protocol': get_protocol_for_leg(leg),
@@ -2292,12 +2357,12 @@ When a rate was missing, the previous valid rate was carried forward (following 
                                     'Entry Price': f"${rebalance[f'opening_price_{leg}']:.4f}",
                                     'Close Price': f"${rebalance[f'closing_price_{leg}']:.4f}",
                                     'Exit Liq Price': format_rebalance_liq_price(rebalance.get(f'closing_liq_price_{leg}')),
-                                    'Rebalance into': token_rebalance_action,
+                                    'Rebalance In': token_rebalance_action,
                                     'Token Amount': f"{rebalance[f'entry_token_amount_{leg}']:,.4f}",
+                                    'Rebalance Out': rebalance_out_usd,
                                     'Lend/Borrow Base $$$': f"${base_amount:,.2f}",
                                     'Reward $$$': f"${reward_amount:,.2f}",
                                     'Fee Rate': fee_rate_display,
-                                    'Entry Fees $$$': fees_display,
                                     'Entry $$$ Size': f"${rebalance[f'entry_size_usd_{leg}']:,.2f}",
                                     'Exit $$$ Size': f"${rebalance[f'exit_size_usd_{leg}']:,.2f}",
                                     'Exit Liq Dist': format_rebalance_liq_dist(rebalance.get(f'closing_liq_dist_{leg}'))

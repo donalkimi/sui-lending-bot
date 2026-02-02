@@ -182,6 +182,79 @@ else:
 - Fees = sum of borrow leg fees
 - PnL = Total Earnings - Fees
 
+### Auto-Rebalancing System (February 2026)
+
+The system now automatically detects and rebalances positions when liquidation risk changes significantly.
+
+**Trigger:** When liquidation distance changes by more than the configured threshold (default 2%)
+
+**Location:** Integrated into [data/refresh_pipeline.py](data/refresh_pipeline.py) - runs automatically after fetching new market data
+
+**Algorithm:**
+1. After fetching fresh market data, check all active positions
+2. For each position, compare live liquidation distances to baseline:
+   - **Never rebalanced:** Baseline = entry liquidation distances (calculated from entry prices/rates)
+   - **Previously rebalanced:** Baseline = `closing_liq_dist_2A` and `closing_liq_dist_2B` from most recent segment
+3. Check token2 legs independently:
+   - **Leg 2A (Pebble DEEP Borrow):** Compare baseline vs live liquidation distance
+   - **Leg 2B (Suilend DEEP Lend):** Compare baseline vs live liquidation distance
+4. Trigger rebalance if: `abs(baseline_liq_dist) - abs(live_liq_dist) >= threshold`
+5. Execute `service.rebalance_position()` automatically for flagged positions
+6. Log all auto-rebalance attempts (success/failure)
+
+**Configuration:**
+```python
+# config/settings.py
+REBALANCE_THRESHOLD = 0.02  # 2% default
+```
+
+**Example:**
+```
+Position 8cfcd054 (DEEP Pebble/Suilend):
+- Leg 2A: 25% → 53% (28% safer - no action)
+- Leg 2B: -20% → -1.62% (18.38% MORE DANGEROUS - TRIGGERS REBALANCE!)
+
+Result: Position automatically rebalanced to restore safe margins
+```
+
+**Critical Bug Fix (February 2026):**
+
+**Problem:** Auto-rebalance check was using static position sizes instead of actual token amounts valued at current prices.
+
+**Root Cause:**
+- Code calculated liquidation distances using: `collateral_value = deployment_usd * L_A`
+- This gave entry USD value, not current USD value
+- Dashboard correctly calculated: `collateral_value = (entry_token_amount * live_price)`
+
+**Impact:** System showed zero delta for all positions despite massive price changes (e.g., DEEP dropping 18%)
+
+**Fix:** Updated `check_positions_need_rebalancing()` to match dashboard logic:
+```python
+# Calculate entry token amounts (constant throughout position life)
+entry_token_amount_1A = (L_A * deployment_usd) / entry_price_1A
+entry_token_amount_2A = (B_A * deployment_usd) / entry_price_2A
+# ... etc
+
+# Current USD values = token amounts × live prices
+current_collateral_A = entry_token_amount_1A * live_price_1A
+current_loan_A = entry_token_amount_2A * live_price_2A
+# ... etc
+
+# Now liquidation distance calculations reflect actual price movements
+```
+
+**Implementation:**
+- [analysis/position_service.py:1661-1900](analysis/position_service.py#L1661-L1900) - `check_positions_need_rebalancing()` method
+- [data/refresh_pipeline.py:180-258](data/refresh_pipeline.py#L180-L258) - Auto-rebalance integration
+
+**Safety Features:**
+- Only rebalances positions with `status='active'`
+- Non-blocking: errors don't crash the refresh pipeline
+- Detailed logging for audit trail
+- Rebalance reason: `"auto_rebalance_threshold_exceeded"`
+
+**Future Enhancement:** Slack notifications for auto-rebalance events (plan exists at `/docs/slack-rebalance-notifications.md`)
+
 ---
 
 ## Positions Tab: Deep Dive
@@ -1044,8 +1117,10 @@ class UnifiedDataLoader:
 
 ### Long-Term
 1. **Advanced Rebalancing**
-   - Auto-rebalance based on triggers (APR drop, liquidation risk)
-   - Rebalance optimizer (minimize fees)
+   - ✅ Auto-rebalance based on liquidation risk (Implemented February 2026)
+   - 🔲 Slack notifications for auto-rebalance events (Planned - see `/docs/slack-rebalance-notifications.md`)
+   - 🔲 Auto-rebalance based on APR drop triggers
+   - 🔲 Rebalance optimizer (minimize fees)
 
 2. **Risk Management**
    - Real-time liquidation alerts
@@ -1093,6 +1168,38 @@ class UnifiedDataLoader:
 - Fixed timestamp: latest segment uses `timestamp_seconds` not stored `closing_timestamp`
 - Fixed fees: shows delta with "(Δ)" indicator for rebalanced segments
 
+**Rebalance Column Updates (February 2026) - Lines ~2187-2235**
+- **"Rebalance In" column** (formerly "Rebalance into"):
+  - Shows USD amounts with action verbs when entering segment
+  - Format: "Lend $5,000", "Borrow $2,500", "Withdraw $1,000", "Repay $300"
+  - First segment: "Initial"
+  - No change: "No change"
+  - Uses `opening_price_{leg}` for USD conversion (fixed from incorrect `entry_price_{leg}`)
+- **"Rebalance Out" column** (newly added):
+  - Shows USD amounts with action verbs when exiting segment to next rebalance
+  - Calculation: `(tokenAmount_next - tokenAmount_current) * closing_price_{leg}`
+  - Format: Same action verbs as "Rebalance In" (Lend/Borrow/Withdraw/Repay)
+  - Only displays if absolute delta > $1
+  - Empty for last segment (no next segment to transition to)
+  - Uses `closing_price_{leg}` for USD conversion (fixed from incorrect `exit_price_{leg}`)
+
+**Bug Fix: Base Earnings Calculation (February 2026) - Lines 1741-1743, 1791-1793**
+- Fixed live segment and rebalance segment base earnings calculations
+- Now properly separates lend legs from borrow legs before combining
+- Calculation: `base_total = base_lend_total - base_borrow_total` (earnings - costs)
+- Ensures consistent calculation pattern across all summary sections
+
+**UI Update: Removed Strategy Summary Table (February 2026) - Lines 1176-1178**
+- Removed summary table from top of expanded position rows
+- Streamlined UI - key metrics already in expander title
+- Maintains token table and strategy summary sections
+
+**UI Update: Removed Entry Fees Column (February 2026) - Lines 1565, 1604, 1627, 1666, 2390**
+- Removed "Entry Fees $$$" column from live position and rebalance history tables
+- Fees not realized until position closed/rebalanced, so removed from live display
+- Fee calculations still performed internally for PnL
+- "Fee Rate" column remains for reference
+
 #### 2. [analysis/position_service.py](analysis/position_service.py)
 
 **New Method: `calculate_leg_earnings_split()` - Lines 1212-1358**
@@ -1101,11 +1208,31 @@ class UnifiedDataLoader:
 - Uses forward-looking rate principle
 - **Critical fix:** Queries by `token_contract` not `token` symbol
 
+**Bug Fix: Borrow Reward Accumulation - Line 953 (February 2026)**
+- Changed from `-=` to `+=` for borrow reward accumulation
+- Ensures rewards are always accumulated as positive values
+- Signs/directions handled when combining lend and borrow totals
+
 **New Helper Methods - Lines 1360-1412**
 - `_get_token_for_leg()`: Get token symbol for leg
 - `_get_token_contract_for_leg()`: Get token contract for leg (for queries)
 - `_get_protocol_for_leg()`: Get protocol for leg
 - `_get_weight_for_leg()`: Get position multiplier for leg
+
+**New Method: `check_positions_need_rebalancing()` - Lines 1661-1900 (February 2026)**
+- Checks all active positions for liquidation distance changes
+- Compares per-leg liquidation distances (2A and 2B) against baseline
+- Returns list of positions needing rebalancing with delta details
+- **Critical fix:** Uses token amounts valued at current prices (not static position sizes)
+
+#### 3. [data/refresh_pipeline.py](data/refresh_pipeline.py)
+
+**Auto-Rebalance Integration - Lines 180-258 (February 2026)**
+- Added automatic rebalancing after market data refresh
+- Checks positions using `check_positions_need_rebalancing()`
+- Executes `rebalance_position()` for positions exceeding threshold
+- Non-blocking: errors don't crash pipeline
+- Updated `RefreshResult` dataclass with rebalance tracking fields
 
 ### Key Bug Fixes
 
@@ -1133,6 +1260,121 @@ class UnifiedDataLoader:
 **Root Cause:** Was summing stored database values instead of calculating from token tables
 **Fix:** Calculate each segment's summary using same logic as display, then sum
 **Impact:** Strategy Summary now accurately reflects sum of all segment summaries
+
+#### Bug: Rebalance Columns Using Incorrect Field Names (February 2026)
+**Root Cause:** Code referenced non-existent fields `entry_price_{leg}` and `exit_price_{leg}` in rebalance records
+**Fix:** Updated to use correct field names from database schema:
+- `entry_price_{leg}` → `opening_price_{leg}` (price when segment opens)
+- `exit_price_{leg}` → `closing_price_{leg}` (price when segment closes)
+**Impact:** "Rebalance In" and "Rebalance Out" columns now display correctly without KeyError
+
+#### Bug: Rebalance Out Calculation Before Loop (February 2026)
+**Root Cause:** `rebalance_out_usd` calculation was placed before the leg loop, referencing undefined `leg` variable
+**Fix:** Moved calculation inside the leg loop (after line 2186) to calculate separately for each leg
+**Impact:** Code no longer crashes with `NameError: name 'leg' is not defined`
+
+#### Bug: Rebalance Out Missing Action Verbs (February 2026)
+**Root Cause:** "Rebalance Out" column only showed USD amounts without indicating direction/action
+**Fix:** Added action verb logic matching "Rebalance In" format (Lend/Borrow/Withdraw/Repay)
+**Impact:** Clearer understanding of cash flows when exiting segments
+
+#### Bug: Auto-Rebalance Check Using Static Position Sizes (February 2026)
+**Root Cause:** `check_positions_need_rebalancing()` calculated liquidation distances using static position sizes (`deployment * L_A`) instead of token amounts valued at current prices
+**Fix:** Updated to match dashboard logic:
+- Calculate entry token amounts: `token_amount = (weight * deployment) / entry_price`
+- Calculate current USD values: `current_value = token_amount * live_price`
+- Use current values for liquidation distance calculations
+**Impact:** Auto-rebalancing now correctly detects liquidation risk changes due to price movements (e.g., DEEP dropping 18% triggered rebalance on position at -1.62% from liquidation)
+
+#### Bug: Negative Rewards Display (February 2026)
+**Root Cause:** Borrow reward accumulation used `-=` instead of `+=`, and dashboard didn't properly separate lend/borrow base earnings
+**Symptoms:**
+- Borrow legs showed negative rewards (e.g., "-$4.00") in token tables
+- Summary calculations showed incorrect base earnings
+
+**Fix Applied:**
+1. **[position_service.py:953](analysis/position_service.py#L953)**: Changed borrow reward accumulation from `-=` to `+=`
+   ```python
+   # BEFORE:
+   reward_total -= deployment * weight * reward_apr * period_years
+
+   # AFTER:
+   reward_total += deployment * weight * reward_apr * period_years
+   ```
+
+2. **[dashboard_renderer.py:1741-1743](dashboard/dashboard_renderer.py#L1741-L1743)**: Fixed live segment base calculation in Strategy Summary
+   ```python
+   # BEFORE:
+   live_base_earnings = base_1A + base_2A + base_2B + base_3B
+
+   # AFTER:
+   live_base_lend = base_1A + base_2B  # lend legs (1A, 2B)
+   live_base_borrow = base_2A + base_3B  # borrow legs (2A, 3B)
+   live_base_earnings = live_base_lend - live_base_borrow  # earnings - costs
+   ```
+
+3. **[dashboard_renderer.py:1791-1793](dashboard/dashboard_renderer.py#L1791-L1793)**: Fixed rebalance segment base calculation
+   ```python
+   # BEFORE:
+   segment_base = rebal_base_1A + rebal_base_2A + rebal_base_2B + rebal_base_3B
+
+   # AFTER:
+   segment_base_lend = rebal_base_1A + rebal_base_2B  # lend legs
+   segment_base_borrow = rebal_base_2A + rebal_base_3B  # borrow legs
+   segment_base = segment_base_lend - segment_base_borrow  # earnings - costs
+   ```
+
+**Key Insight:** ALL accumulations use `+=`. The signs/directions are handled when combining:
+- `base_total = base_lend_total - base_borrow_total` (earnings - costs)
+- `reward_total = reward_lend_total + reward_borrow_total` (all positive - rewards are always earnings!)
+
+**Impact:**
+- All reward values now display as positive (even for borrow legs)
+- Base earnings correctly calculated as lend earnings minus borrow costs
+- Summary calculations now accurate across all tabs
+
+#### UI Change: Removed Strategy Summary Table (February 2026)
+**Change:** Removed the summary table that appeared at the top of expanded position rows
+
+**Removed Table Columns:**
+- Entry Time
+- Token Flow
+- Protocols
+- Entry APR
+- Realized APR
+- Current APR
+- Start Capital
+- Unrealised PnL
+- Accumulated Realised PnL
+- Fees
+- Current Value
+
+**Rationale:** Key metrics already visible in:
+- Expander title (Entry APR, Current APR, Net APR, Value)
+- Token table breakdown (detailed per-leg information)
+- Strategy Summary section (comprehensive PnL breakdown)
+
+**Implementation:** [dashboard_renderer.py:1176-1178](dashboard/dashboard_renderer.py#L1176-L1178)
+
+#### UI Change: Removed Entry Fees Column (February 2026)
+**Change:** Removed "Entry Fees $$$" column from all token tables
+
+**Affected Tables:**
+- Live position token table (4 legs: 1A, 2A, 2B, 3B)
+- Rebalance history token tables (all segments)
+
+**Rationale:** Entry fees are not realized until position is closed or rebalanced. Displaying them in live position token table was misleading - suggested fees were being paid during the current segment when they were actually paid at entry/rebalance.
+
+**Fee Handling:**
+- Fee amounts still calculated internally for PnL calculations
+- "Fee Rate" column remains (shows borrow fee percentage)
+- Total fees still shown in summary metrics
+- Just removed the per-leg "Entry Fees $$$" display column
+
+**Implementation:**
+- [dashboard_renderer.py:1565,1604,1627,1666](dashboard/dashboard_renderer.py#L1565) - Removed from live position legs
+- [dashboard_renderer.py:2390](dashboard/dashboard_renderer.py#L2390) - Removed from rebalance history
+- Cleaned up unused `fees_display` variable calculations
 
 ---
 

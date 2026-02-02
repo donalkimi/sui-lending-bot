@@ -947,10 +947,10 @@ class PositionService:
                     # Handle None/NULL values
                     base_apr = float(base_apr) if base_apr is not None else 0.0
                     reward_apr = float(reward_apr) if reward_apr is not None else 0.0
-                    # Borrow costs are positive
+                    # Borrow costs are accumulated as positive
                     base_total += deployment * weight * base_apr * period_years
-                    # Borrow rewards REDUCE costs, so subtract (making reward_total negative)
-                    reward_total -= deployment * weight * reward_apr * period_years
+                    # Borrow rewards are earnings, accumulated as positive
+                    reward_total += deployment * weight * reward_apr * period_years
 
         return base_total, reward_total
 
@@ -1656,3 +1656,265 @@ class PositionService:
         )
 
         return result['count'].iloc[0] > 0 if not result.empty else False
+
+    def check_positions_need_rebalancing(
+        self,
+        live_timestamp: int,
+        rebalance_threshold: float = 0.02
+    ) -> List[Dict]:
+        """
+        Check all active positions to see if rebalancing is needed based on liquidation distance changes.
+
+        Logic: For each position, check if liquidation distance has changed significantly
+        for token2 in both protocols (legs 2A and 2B).
+
+        Formula: abs(baseline_liq_dist) - abs(live_liq_dist) >= rebalance_threshold
+
+        DESIGN PRINCIPLES:
+        - Timestamps are Unix seconds (int) internally
+        - Use stored closing_liq_dist from most recent rebalance segment for rebalanced positions
+        - Calculate live liquidation distances using PositionCalculator.calculate_liquidation_price()
+        - Check both leg 2A (borrow from protocol A) and leg 2B (lend to protocol B)
+
+        Args:
+            live_timestamp: Current timestamp (Unix seconds)
+            rebalance_threshold: Minimum change to trigger rebalance (default 0.02 = 2%)
+
+        Returns:
+            List of dicts with position info and rebalance recommendation:
+            [
+                {
+                    'position_id': str,
+                    'token2': str,
+                    'protocol_A': str,
+                    'protocol_B': str,
+                    'baseline_liq_dist_2A': float,  # Entry or most recent closing
+                    'live_liq_dist_2A': float,
+                    'baseline_liq_dist_2B': float,  # Entry or most recent closing
+                    'live_liq_dist_2B': float,
+                    'needs_rebalance_2A': bool,
+                    'needs_rebalance_2B': bool,
+                    'needs_rebalance': bool  # True if either leg needs rebalancing
+                },
+                ...
+            ]
+        """
+        from analysis.position_calculator import PositionCalculator
+
+        # Get all active positions at live_timestamp
+        active_positions = self.get_active_positions(live_timestamp=live_timestamp)
+
+        if active_positions.empty:
+            return []
+
+        results = []
+        calculator = PositionCalculator()
+
+        # Convert timestamp for DB queries
+        live_timestamp_str = to_datetime_str(live_timestamp)
+
+        for _, position in active_positions.iterrows():
+            position_id = position['position_id']
+            rebalance_count = position.get('rebalance_count', 0)
+
+            # Get baseline liquidation distances (entry or most recent closing)
+            if rebalance_count == 0:
+                # Never rebalanced - need to calculate from entry data
+                # Note: entry_liquidation_distance is overall strategy value, not per-leg
+                # We need to calculate per-leg distances from entry data
+                baseline_liq_dist_2A = None  # Will calculate from entry
+                baseline_liq_dist_2B = None  # Will calculate from entry
+                use_entry_calc = True
+            else:
+                # Has been rebalanced - get most recent segment's closing liquidation distances
+                query = """
+                SELECT closing_liq_dist_2A, closing_liq_dist_2B
+                FROM position_rebalances
+                WHERE position_id = ?
+                ORDER BY sequence_number DESC
+                LIMIT 1
+                """
+                segment = pd.read_sql_query(query, self.conn, params=(position_id,))
+
+                if not segment.empty:
+                    baseline_liq_dist_2A = float(segment['closing_liq_dist_2A'].iloc[0])
+                    baseline_liq_dist_2B = float(segment['closing_liq_dist_2B'].iloc[0])
+                    use_entry_calc = False
+                else:
+                    # Fallback to entry calculation
+                    use_entry_calc = True
+
+            # Get current market data at live_timestamp
+            try:
+                # Query rates and prices for all 4 legs
+                query_rates = """
+                SELECT protocol, token_contract, lend_total_apr, borrow_total_apr, price_usd,
+                       collateral_ratio, liquidation_threshold, borrow_weight
+                FROM rates_snapshot
+                WHERE timestamp = ?
+                AND ((protocol = ? AND token_contract = ?) OR
+                     (protocol = ? AND token_contract = ?) OR
+                     (protocol = ? AND token_contract = ?) OR
+                     (protocol = ? AND token_contract = ?))
+                """
+                rates_df = pd.read_sql_query(
+                    query_rates,
+                    self.conn,
+                    params=(
+                        live_timestamp_str,
+                        position['protocol_A'], position['token1_contract'],  # Leg 1A
+                        position['protocol_A'], position['token2_contract'],  # Leg 2A
+                        position['protocol_B'], position['token2_contract'],  # Leg 2B
+                        position['protocol_B'], position['token3_contract'],  # Leg 3B
+                    )
+                )
+
+                if rates_df.empty:
+                    # No market data at this timestamp - skip position
+                    continue
+
+                # Extract rates/prices for each leg
+                def get_market_data(protocol, token_contract):
+                    row = rates_df[
+                        (rates_df['protocol'] == protocol) &
+                        (rates_df['token_contract'] == token_contract)
+                    ]
+                    if row.empty:
+                        return None
+                    return row.iloc[0]
+
+                data_1A = get_market_data(position['protocol_A'], position['token1_contract'])
+                data_2A = get_market_data(position['protocol_A'], position['token2_contract'])
+                data_2B = get_market_data(position['protocol_B'], position['token2_contract'])
+
+                if data_1A is None or data_2A is None or data_2B is None:
+                    # Missing data for some legs - skip position
+                    continue
+
+                # Calculate entry token amounts (token amounts stay constant, assuming no interest accrual in paper trading)
+                deployment_usd = float(position['deployment_usd'])
+                L_A = float(position['L_A'])
+                B_A = float(position['B_A'])
+                L_B = float(position['L_B'])
+                B_B = float(position['B_B'])
+
+                entry_price_1A = float(position['entry_price_1A'])
+                entry_price_2A = float(position['entry_price_2A'])
+                entry_price_2B = float(position['entry_price_2B'])
+                entry_price_3B = float(position['entry_price_3B'])
+
+                # Token amounts (constant throughout position life, unless manually rebalanced)
+                entry_token_amount_1A = (L_A * deployment_usd) / entry_price_1A if entry_price_1A > 0 else 0
+                entry_token_amount_2A = (B_A * deployment_usd) / entry_price_2A if entry_price_2A > 0 else 0
+                entry_token_amount_2B = (L_B * deployment_usd) / entry_price_2B if entry_price_2B > 0 else 0
+                entry_token_amount_3B = (B_B * deployment_usd) / entry_price_3B if entry_price_3B > 0 else 0
+
+                # Calculate baseline liquidation distances if needed
+                if use_entry_calc:
+                    # Baseline uses entry token amounts valued at entry prices
+                    baseline_collateral_A = entry_token_amount_1A * entry_price_1A
+                    baseline_loan_A = entry_token_amount_2A * entry_price_2A
+                    baseline_collateral_B = entry_token_amount_2B * entry_price_2B
+                    baseline_loan_B = entry_token_amount_3B * entry_price_3B
+
+                    # Leg 2A: Borrow token2 from Protocol A
+                    # Collateral: token1 lent (1A), Loan: token2 borrowed (2A)
+                    baseline_result_2A = calculator.calculate_liquidation_price(
+                        collateral_value=baseline_collateral_A,
+                        loan_value=baseline_loan_A,
+                        lending_token_price=entry_price_1A,
+                        borrowing_token_price=entry_price_2A,
+                        lltv=float(position['entry_liquidation_threshold_1A']),
+                        side='borrowing',  # Token2 price rise causes liquidation
+                        borrow_weight=float(position.get('entry_borrow_weight_2A', 1.0))
+                    )
+                    baseline_liq_dist_2A = baseline_result_2A['pct_distance']
+
+                    # Leg 2B: Lend token2 to Protocol B
+                    # Collateral: token2 lent (2B), Loan: token3 borrowed (3B)
+                    baseline_result_2B = calculator.calculate_liquidation_price(
+                        collateral_value=baseline_collateral_B,
+                        loan_value=baseline_loan_B,
+                        lending_token_price=entry_price_2B,
+                        borrowing_token_price=entry_price_3B,
+                        lltv=float(position['entry_liquidation_threshold_2B']),
+                        side='lending',  # Token2 price drop causes liquidation
+                        borrow_weight=float(position.get('entry_borrow_weight_3B', 1.0))
+                    )
+                    baseline_liq_dist_2B = baseline_result_2B['pct_distance']
+
+                # Calculate live liquidation distances using entry token amounts valued at live prices
+                live_price_1A = float(data_1A['price_usd'])
+                live_price_2A = float(data_2A['price_usd'])
+                live_price_2B = float(data_2B['price_usd'])
+
+                # Need to get token3 data for leg 3B
+                data_3B = get_market_data(position['protocol_B'], position['token3_contract'])
+                if data_3B is None:
+                    continue
+                live_price_3B = float(data_3B['price_usd'])
+
+                # Current USD values = entry token amounts × live prices
+                current_collateral_A = entry_token_amount_1A * live_price_1A
+                current_loan_A = entry_token_amount_2A * live_price_2A
+                current_collateral_B = entry_token_amount_2B * live_price_2B
+                current_loan_B = entry_token_amount_3B * live_price_3B
+
+                # Leg 2A: Borrow token2 from Protocol A
+                live_result_2A = calculator.calculate_liquidation_price(
+                    collateral_value=current_collateral_A,
+                    loan_value=current_loan_A,
+                    lending_token_price=live_price_1A,
+                    borrowing_token_price=live_price_2A,
+                    lltv=float(data_1A['liquidation_threshold']),
+                    side='borrowing',
+                    borrow_weight=float(data_2A.get('borrow_weight', 1.0))
+                )
+                live_liq_dist_2A = live_result_2A['pct_distance']
+
+                # Leg 2B: Lend token2 to Protocol B
+                live_result_2B = calculator.calculate_liquidation_price(
+                    collateral_value=current_collateral_B,
+                    loan_value=current_loan_B,
+                    lending_token_price=live_price_2B,
+                    borrowing_token_price=live_price_3B,
+                    lltv=float(data_2B['liquidation_threshold']),
+                    side='lending',
+                    borrow_weight=float(data_3B.get('borrow_weight', 1.0))
+                )
+                live_liq_dist_2B = live_result_2B['pct_distance']
+
+                # Check if rebalancing is needed
+                # Formula: abs(baseline) - abs(live) >= threshold
+                delta_2A = abs(baseline_liq_dist_2A) - abs(live_liq_dist_2A)
+                delta_2B = abs(baseline_liq_dist_2B) - abs(live_liq_dist_2B)
+
+                needs_rebalance_2A = delta_2A >= rebalance_threshold
+                needs_rebalance_2B = delta_2B >= rebalance_threshold
+                needs_rebalance = needs_rebalance_2A or needs_rebalance_2B
+
+                # Store result
+                results.append({
+                    'position_id': position_id,
+                    'token2': position['token2'],
+                    'protocol_A': position['protocol_A'],
+                    'protocol_B': position['protocol_B'],
+                    'baseline_liq_dist_2A': baseline_liq_dist_2A,
+                    'live_liq_dist_2A': live_liq_dist_2A,
+                    'baseline_liq_dist_2B': baseline_liq_dist_2B,
+                    'live_liq_dist_2B': live_liq_dist_2B,
+                    'delta_2A': delta_2A,
+                    'delta_2B': delta_2B,
+                    'needs_rebalance_2A': needs_rebalance_2A,
+                    'needs_rebalance_2B': needs_rebalance_2B,
+                    'needs_rebalance': needs_rebalance
+                })
+
+            except Exception as e:
+                # Log error but continue checking other positions
+                print(f"Error checking position {position_id}: {e}")
+                import traceback
+                traceback.print_exc()
+                continue
+
+        return results
