@@ -438,24 +438,24 @@ class RateAnalyzer:
                         continue
                     
                     # For each protocol pair (bidirectional)
-                    for protocol_A in self.protocols:
-                        for protocol_B in self.protocols:
+                    for protocol_a in self.protocols:
+                        for protocol_b in self.protocols:
                             # Skip if same protocol
-                            if protocol_A == protocol_B:
+                            if protocol_a == protocol_b:
                                 continue
                             analyzed += 1
                             
                             # Get all the rates
-                            lend_rate_1A = self.get_rate(self.lend_rates, token1, protocol_A)
+                            lend_rate_1A = self.get_rate(self.lend_rates, token1, protocol_a)
                             if np.isnan(lend_rate_1A): 
                                 continue
-                            borrow_rate_2A = self.get_rate(self.borrow_rates, token2, protocol_A)
+                            borrow_rate_2A = self.get_rate(self.borrow_rates, token2, protocol_a)
                             if np.isnan(borrow_rate_2A): 
                                 continue
-                            lend_rate_2B = self.get_rate(self.lend_rates, token2, protocol_B)
+                            lend_rate_2B = self.get_rate(self.lend_rates, token2, protocol_b)
                             if np.isnan(lend_rate_2B): 
                                 continue
-                            borrow_rate_3B = self.get_rate(self.borrow_rates, token3, protocol_B)
+                            borrow_rate_3B = self.get_rate(self.borrow_rates, token3, protocol_b)
                             if np.isnan(borrow_rate_3B): 
                                 continue
                             
@@ -487,32 +487,32 @@ class RateAnalyzer:
                                 #         f"(lend {token1} @ {lend_rate_1A*100:.2f}% - borrow {token3} @ {borrow_rate_3B*100:.2f}%)"
                                 #     )
 
-                                # #print(f"   [FILTERED] {protocol_A} <-> {protocol_B} | {token1}->{token2}->{token3} | {', '.join(failed_conditions)}")
+                                # #print(f"   [FILTERED] {protocol_a} <-> {protocol_b} | {token1}->{token2}->{token3} | {', '.join(failed_conditions)}")
                                 continue  # Skip this combination
                             
                             # Get collateral ratios
-                            collateral_1A = self.get_rate(self.collateral_ratios, token1, protocol_A)
-                            collateral_2B = self.get_rate(self.collateral_ratios, token2, protocol_B)
+                            collateral_1A = self.get_rate(self.collateral_ratios, token1, protocol_a)
+                            collateral_2B = self.get_rate(self.collateral_ratios, token2, protocol_b)
                             # Get liquidation thresholds
-                            liquidation_threshold_1A = self.get_liquidation_threshold(token1, protocol_A)
-                            liquidation_threshold_2B = self.get_liquidation_threshold(token2, protocol_B)
+                            liquidation_threshold_1A = self.get_liquidation_threshold(token1, protocol_a)
+                            liquidation_threshold_2B = self.get_liquidation_threshold(token2, protocol_b)
                             # NEW: Get prices
-                            price_1A = self.get_price(token1, protocol_A)
-                            price_2A = self.get_price(token2, protocol_A)
-                            price_2B = self.get_price(token2, protocol_B)
-                            price_3B = self.get_price(token3, protocol_B)
+                            price_1A = self.get_price(token1, protocol_a)
+                            price_2A = self.get_price(token2, protocol_a)
+                            price_2B = self.get_price(token2, protocol_b)
+                            price_3B = self.get_price(token3, protocol_b)
 
                             # NEW: Get available borrow
-                            available_borrow_2A = self.get_available_borrow(token2, protocol_A)
-                            available_borrow_3B = self.get_available_borrow(token3, protocol_B)
+                            available_borrow_2A = self.get_available_borrow(token2, protocol_a)
+                            available_borrow_3B = self.get_available_borrow(token3, protocol_b)
 
                             # NEW: Get borrow fees
-                            borrow_fee_2A = self.get_borrow_fee(token2, protocol_A)
-                            borrow_fee_3B = self.get_borrow_fee(token3, protocol_B)
+                            borrow_fee_2A = self.get_borrow_fee(token2, protocol_a)
+                            borrow_fee_3B = self.get_borrow_fee(token3, protocol_b)
 
                             # NEW: Get borrow weights (defaults to 1.0)
-                            borrow_weight_2A = self.get_borrow_weight(token2, protocol_A)
-                            borrow_weight_3B = self.get_borrow_weight(token3, protocol_B)
+                            borrow_weight_2A = self.get_borrow_weight(token2, protocol_a)
+                            borrow_weight_3B = self.get_borrow_weight(token3, protocol_b)
 
                             # Skip if any rates OR prices are missing
                             if any(np.isnan([lend_rate_1A, borrow_rate_2A, lend_rate_2B,
@@ -541,8 +541,8 @@ class RateAnalyzer:
                                 token1=token1,
                                 token2=token2,
                                 token3=token3,
-                                protocol_A=protocol_A,
-                                protocol_B=protocol_B,
+                                protocol_a=protocol_a,
+                                protocol_b=protocol_b,
                                 lend_rate_token1_A=lend_rate_1A,
                                 borrow_rate_token2_A=borrow_rate_2A,
                                 lend_rate_token2_B=lend_rate_2B,
@@ -564,9 +564,9 @@ class RateAnalyzer:
                             )
 
                             # Add contract addresses to result (for historical chart queries)
-                            result['token1_contract'] = self.get_contract(token1, protocol_A)
-                            result['token2_contract'] = self.get_contract(token2, protocol_A)  # Use Protocol A
-                            result['token3_contract'] = self.get_contract(token3, protocol_B)
+                            result['token1_contract'] = self.get_contract(token1, protocol_a)
+                            result['token2_contract'] = self.get_contract(token2, protocol_a)  # Use Protocol A
+                            result['token3_contract'] = self.get_contract(token3, protocol_b)
 
                             if result['valid']:
                                 valid += 1
@@ -607,7 +607,7 @@ class RateAnalyzer:
             tokens: List of tokens to consider (default: all tokens)
             
         Returns:
-            Tuple of (protocol_A, protocol_B, detailed_results_df)
+            Tuple of (protocol_a, protocol_b, detailed_results_df)
         """
         # Analyze all combinations
         all_results = self.analyze_all_combinations(tokens)
@@ -632,8 +632,8 @@ class RateAnalyzer:
             strategy_type += " (with conversion)"
         
         print(f"\n[BEST STRATEGY] BEST STRATEGY FOUND ({strategy_type}):")
-        print(f"   Protocol A: {best['protocol_A']}")
-        print(f"   Protocol B: {best['protocol_B']}")
+        print(f"   Protocol A: {best['protocol_a']}")
+        print(f"   Protocol B: {best['protocol_b']}")
         print(f"   Token 1 (Start): {best['token1']}")
         print(f"   Token 2 (Middle): {best['token2']}")
         print(f"   Token 3 (Close): {best['token3']}", end="")
@@ -644,7 +644,7 @@ class RateAnalyzer:
         print(f"   Net APR: {best['net_apr'] * 100:.2f}%")
         print(f"   Liquidation Distance: {best['liquidation_distance'] * 100:.0f}%")
         
-        return best['protocol_A'], best['protocol_B'], all_results
+        return best['protocol_a'], best['protocol_b'], all_results
 
 
 # Example usage

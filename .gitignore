@@ -24,6 +24,7 @@ wheels/
 env/
 venv/
 ENV/
+.env
 
 # Node.js
 node_modules/
@@ -70,4 +71,4 @@ data/*.db
 data/*.db-journal
 data/*.db-wal
 data/*.db-shmlending_rates.db
-data/*.db.backup*
+data/*.db.backup

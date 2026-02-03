@@ -1,6 +1,11 @@
 """
 Configuration settings for the Sui Lending Bot
 """
+import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # RPC Configuration
 SUI_RPC_URL = "https://side-flashy-isle.sui-mainnet.quiknode.pro/6acae20a62b8a6842e8d407b4f6d7f98372dc8bb/"
@@ -23,10 +28,13 @@ DASHBOARD_PORT = 8501
 DASHBOARD_TITLE = "Sui Lending Bot - Cross-Protocol Yield Optimizer"
 
 # Database Configuration
-USE_CLOUD_DB = False  # Set to True to use Supabase PostgreSQL
-SQLITE_PATH = "data/lending_rates.db"
-SUPABASE_URL = None  # Set this when ready: "postgresql://postgres.xxx:..."
-# Example: SUPABASE_URL = "postgresql://postgres.abc123:[password]@db.xxx.supabase.co:5432/postgres"
+USE_CLOUD_DB = True  # Set to True to use Supabase PostgreSQL
+SQLITE_PATH = "data/lending_rates.db"  # Keep for local development
+SUPABASE_URL = os.getenv('SUPABASE_URL')  # Loaded from .env file
+
+# Validation: Ensure SUPABASE_URL is set when using cloud database
+if USE_CLOUD_DB and not SUPABASE_URL:
+    raise ValueError("USE_CLOUD_DB=True but SUPABASE_URL not set. Check your .env file.")
 
 # Rebalancing Settings
 # REBALANCE_THRESHOLD: Trigger auto-rebalance detection when liquidation distance changes by this amount

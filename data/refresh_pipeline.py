@@ -44,8 +44,8 @@ class RefreshResult:
     liquidation_thresholds: pd.DataFrame
 
     # Strategy outputs
-    protocol_A: Optional[str]
-    protocol_B: Optional[str]
+    protocol_a: Optional[str]
+    protocol_b: Optional[str]
     all_results: pd.DataFrame
 
     # Token registry update summary
@@ -128,8 +128,8 @@ def refresh_pipeline(
         print("[DB] Snapshot saved successfully")
 
     # Initialize strategy results (always, regardless of save_snapshots)
-    protocol_A: Optional[str] = None
-    protocol_B: Optional[str] = None
+    protocol_a: Optional[str] = None
+    protocol_b: Optional[str] = None
     all_results: pd.DataFrame = pd.DataFrame()
 
     # Initialize rebalance tracking variables
@@ -154,8 +154,8 @@ def refresh_pipeline(
             liquidation_distance=liquidation_distance
         )
 
-        protocol_A, protocol_B, all_results = analyzer.find_best_protocol_pair()
-        print(f"[ANALYSIS] Analysis complete - Best pair: {protocol_A} + {protocol_B}")
+        protocol_a, protocol_b, all_results = analyzer.find_best_protocol_pair()
+        print(f"[ANALYSIS] Analysis complete - Best pair: {protocol_a} + {protocol_b}")
 
         # Save analysis to cache (always save, regardless of save_snapshots)
         tracker.save_analysis_cache(
@@ -183,10 +183,10 @@ def refresh_pipeline(
         try:
             from analysis.position_service import PositionService
             from config.settings import REBALANCE_THRESHOLD
-            import sqlite3
+            from dashboard.dashboard_utils import get_db_connection
 
             # Create database connection for position service
-            conn = sqlite3.connect(settings.SQLITE_PATH)
+            conn = get_db_connection()  # Respects USE_CLOUD_DB setting
             service = PositionService(conn)
             rebalance_checks = service.check_positions_need_rebalancing(
                 live_timestamp=current_seconds,
@@ -205,7 +205,7 @@ def refresh_pipeline(
                     for check in positions_needing_rebalance:
                         position_id = check['position_id']
                         print(f"\n[AUTO-REBALANCE] 🔄 Auto-rebalancing position {position_id[:8]}... "
-                              f"({check['token2']} in {check['protocol_A']}/{check['protocol_B']})")
+                              f"({check['token2']} in {check['protocol_a']}/{check['protocol_b']})")
 
                         # Log liquidation distance changes
                         if check['needs_rebalance_2A']:
@@ -273,8 +273,8 @@ def refresh_pipeline(
         borrow_fees=borrow_fees,
         borrow_weights=borrow_weights,
         liquidation_thresholds=liquidation_thresholds,
-        protocol_A=protocol_A,
-        protocol_B=protocol_B,
+        protocol_a=protocol_a,
+        protocol_b=protocol_b,
         all_results=all_results,
         token_summary=token_summary,
         rebalance_checks=rebalance_checks,

@@ -237,7 +237,7 @@ def get_token_contract(conn: Any, token_symbol: str) -> Optional[str]:
 
 
 def fetch_historical_rates(conn: Any, token1_contract: str, token2_contract: str, token3_contract: str,
-                          protocol_A: str, protocol_B: str, strategy_seconds: int) -> pd.DataFrame:
+                          protocol_a: str, protocol_b: str, strategy_seconds: int) -> pd.DataFrame:
     """
     Fetch ALL historical rates for the given tokens/protocols UP TO the strategy timestamp.
 
@@ -249,8 +249,8 @@ def fetch_historical_rates(conn: Any, token1_contract: str, token2_contract: str
         token1_contract: Token1 contract address
         token2_contract: Token2 contract address
         token3_contract: Token3 contract address
-        protocol_A: First protocol name
-        protocol_B: Second protocol name
+        protocol_a: First protocol name
+        protocol_b: Second protocol name
         strategy_seconds: Unix timestamp in seconds (the "current" moment)
 
     Returns:
@@ -290,10 +290,10 @@ def fetch_historical_rates(conn: Any, token1_contract: str, token2_contract: str
             """
             params = (
                 strategy_dt_str,
-                token1_contract, protocol_A,
-                token2_contract, protocol_A,
-                token2_contract, protocol_B,
-                token3_contract, protocol_B
+                token1_contract, protocol_a,
+                token2_contract, protocol_a,
+                token2_contract, protocol_b,
+                token3_contract, protocol_b
             )
         else:
             query = """
@@ -317,10 +317,10 @@ def fetch_historical_rates(conn: Any, token1_contract: str, token2_contract: str
             """
             params = (
                 strategy_dt_str,
-                token1_contract, protocol_A,
-                token2_contract, protocol_A,
-                token2_contract, protocol_B,
-                token3_contract, protocol_B
+                token1_contract, protocol_a,
+                token2_contract, protocol_a,
+                token2_contract, protocol_b,
+                token3_contract, protocol_b
             )
 
         df = pd.read_sql_query(query, conn, params=params)
@@ -353,9 +353,9 @@ def fetch_historical_rates(conn: Any, token1_contract: str, token2_contract: str
 
 
 def calculate_net_apr_history(raw_df: pd.DataFrame, token1_contract: str, token2_contract: str,
-                              token3_contract: str, protocol_A: str, protocol_B: str,
-                              L_A: float, B_A: float, L_B: float, B_B: float,
-                              borrow_fee_2A: float = 0.0, borrow_fee_3B: float = 0.0) -> pd.DataFrame:
+                              token3_contract: str, protocol_a: str, protocol_b: str,
+                              l_a: float, b_a: float, l_b: float, b_b: float,
+                              borrow_fee_2a: float = 0.0, borrow_fee_3b: float = 0.0) -> pd.DataFrame:
     """
     Calculate net APR for each timestamp using static weightings and fees
 
@@ -364,11 +364,11 @@ def calculate_net_apr_history(raw_df: pd.DataFrame, token1_contract: str, token2
         token1_contract: Token1 contract address
         token2_contract: Token2 contract address
         token3_contract: Token3 contract address
-        protocol_A: First protocol name
-        protocol_B: Second protocol name
-        L_A, B_A, L_B, B_B: Position weightings
-        borrow_fee_2A: Borrow fee for token2 from Protocol A (decimal, e.g., 0.0030)
-        borrow_fee_3B: Borrow fee for token3 from Protocol B (decimal, e.g., 0.0030)
+        protocol_a: First protocol name
+        protocol_b: Second protocol name
+        l_a, b_a, l_b, b_b: Position weightings
+        borrow_fee_2a: Borrow fee for token2 from Protocol A (decimal, e.g., 0.0030)
+        borrow_fee_3b: Borrow fee for token3 from Protocol B (decimal, e.g., 0.0030)
 
     Returns:
         DataFrame with columns: timestamp, net_apr (fee-adjusted), token2_price
@@ -386,30 +386,30 @@ def calculate_net_apr_history(raw_df: pd.DataFrame, token1_contract: str, token2
             contract = row['token_contract']
             protocol = row['protocol']
 
-            if contract == token1_contract and protocol == protocol_A:
+            if contract == token1_contract and protocol == protocol_a:
                 lend_1A = row['lend_total_apr']
-            elif contract == token2_contract and protocol == protocol_A:
+            elif contract == token2_contract and protocol == protocol_a:
                 borrow_2A = row['borrow_total_apr']
                 token2_price = row['price_usd']
-            elif contract == token2_contract and protocol == protocol_B:
+            elif contract == token2_contract and protocol == protocol_b:
                 lend_2B = row['lend_total_apr']
-            elif contract == token3_contract and protocol == protocol_B:
+            elif contract == token3_contract and protocol == protocol_b:
                 borrow_3B = row['borrow_total_apr']
 
         # Skip if any required values are missing
         if lend_1A is None or borrow_2A is None or lend_2B is None or borrow_3B is None or token2_price is None:
             continue
 
-        earn_A = L_A * lend_1A
-        earn_B = L_B * lend_2B
-        cost_A = B_A * borrow_2A
-        cost_B = B_B * borrow_3B
+        earn_A = l_a * lend_1A
+        earn_B = l_b * lend_2B
+        cost_A = b_a * borrow_2A
+        cost_B = b_b * borrow_3B
 
         # Calculate base APR (as decimal)
         base_apr = earn_A + earn_B - cost_A - cost_B
 
         # Subtract annualized fee cost to get Net APR (as decimal)
-        total_fee_cost = B_A * borrow_fee_2A + B_B * borrow_fee_3B
+        total_fee_cost = b_a * borrow_fee_2a + b_b * borrow_fee_3b
         net_apr = base_apr - total_fee_cost
 
         results.append({
@@ -422,17 +422,17 @@ def calculate_net_apr_history(raw_df: pd.DataFrame, token1_contract: str, token2
 
 
 def create_strategy_history_chart(df: pd.DataFrame, token1: str, token2: str, token3: str,
-                                  protocol_A: str, protocol_B: str, liq_dist: float,
-                                  L_A: float, B_A: float, L_B: float, B_B: float) -> go.Figure:
+                                  protocol_a: str, protocol_b: str, liq_dist: float,
+                                  l_a: float, b_a: float, l_b: float, b_b: float) -> go.Figure:
     """
     Create Plotly chart with dual axes (price + APR)
 
     Args:
         df: DataFrame with timestamp (as seconds), net_apr, token2_price
         token1, token2, token3: Token symbols
-        protocol_A, protocol_B: Protocol names
+        protocol_a, protocol_b: Protocol names
         liq_dist: Liquidation distance (for display)
-        L_A, B_A, L_B, B_B: Position weightings (for display)
+        l_a, b_a, l_b, b_b: Position weightings (for display)
 
     Returns:
         Plotly Figure object
@@ -490,9 +490,9 @@ def create_strategy_history_chart(df: pd.DataFrame, token1: str, token2: str, to
         title=dict(
             text=(
                 f'<b>Historical Performance: {token1} → {token2} → {token3}</b><br>'
-                f'<sub>{protocol_A} ↔ {protocol_B} | '
+                f'<sub>{protocol_a} ↔ {protocol_b} | '
                 f'Liq Dist: {liq_dist*100:.0f}% | '
-                f'Weightings: L_A={L_A:.2f}, B_A={B_A:.2f}, L_B={L_B:.2f}, B_B={B_B:.2f}</sub>'
+                f'Weightings: l_a={l_a:.2f}, b_a={b_a:.2f}, l_b={l_b:.2f}, b_b={b_b:.2f}</sub>'
             ),
             x=0.5,
             xanchor='center',
@@ -550,7 +550,7 @@ def get_strategy_history(strategy_row: Dict[str, Any], liquidation_distance: flo
         liquidation_distance: Current liquidation distance setting (for display only)
 
     Returns:
-        Tuple of (history_df, L_A, B_A, L_B, B_B) or (None, None, None, None, None) if error
+        Tuple of (history_df, l_a, b_a, l_b, b_b) or (None, None, None, None, None) if error
     """
     # Get database connection
     conn = get_db_connection()
@@ -562,8 +562,8 @@ def get_strategy_history(strategy_row: Dict[str, Any], liquidation_distance: flo
         token1 = strategy_row['token1']
         token2 = strategy_row['token2']
         token3 = strategy_row['token3']
-        protocol_A = strategy_row['protocol_A']
-        protocol_B = strategy_row['protocol_B']
+        protocol_a = strategy_row['protocol_a']
+        protocol_b = strategy_row['protocol_b']
 
         # Get contract addresses from strategy_row (populated by analysis phase)
         token1_contract = strategy_row.get('token1_contract')
@@ -580,14 +580,14 @@ def get_strategy_history(strategy_row: Dict[str, Any], liquidation_distance: flo
             token3_contract = ""  # Will be filtered in SQL WHERE clause
 
         # USE THE WEIGHTINGS ALREADY CALCULATED IN THE ANALYSIS
-        L_A = strategy_row['L_A']
-        B_A = strategy_row['B_A']
-        L_B = strategy_row['L_B']
-        B_B = strategy_row['B_B']
+        l_a = strategy_row['l_a']
+        b_a = strategy_row['b_a']
+        l_b = strategy_row['l_b']
+        b_b = strategy_row['b_b']
 
         # Get current fees from the strategy row
-        borrow_fee_2A = strategy_row.get('borrow_fee_2A', 0.0)
-        borrow_fee_3B = strategy_row.get('borrow_fee_3B', 0.0)
+        borrow_fee_2a = strategy_row.get('borrow_fee_2a', 0.0)
+        borrow_fee_3b = strategy_row.get('borrow_fee_3b', 0.0)
 
         # Get the strategy timestamp and convert to seconds
         from utils.time_helpers import to_seconds, to_datetime_str
@@ -603,26 +603,26 @@ def get_strategy_history(strategy_row: Dict[str, Any], liquidation_distance: flo
         print(f"DEBUG get_strategy_history - Before SQL query:")
         print(f"Strategy timestamp: {strategy_seconds} seconds ({to_datetime_str(strategy_seconds)})")
         print(f"Token contracts: {token1_contract}, {token2_contract}, {token3_contract}")
-        print(f"Protocols: {protocol_A}, {protocol_B}")
+        print(f"Protocols: {protocol_a}, {protocol_b}")
         print(f"{'='*80}\n")
 
         # Fetch historical rates
         raw_df = fetch_historical_rates(
             conn, token1_contract, token2_contract, token3_contract,
-            protocol_A, protocol_B, strategy_seconds
+            protocol_a, protocol_b, strategy_seconds
         )
 
         if raw_df.empty:
-            return None, L_A, B_A, L_B, B_B
+            return None, l_a, b_a, l_b, b_b
 
         # Calculate net APR history
         history_df = calculate_net_apr_history(
             raw_df, token1_contract, token2_contract, token3_contract,
-            protocol_A, protocol_B, L_A, B_A, L_B, B_B,
-            borrow_fee_2A, borrow_fee_3B
+            protocol_a, protocol_b, l_a, b_a, l_b, b_b,
+            borrow_fee_2a, borrow_fee_3b
         )
 
-        return history_df, L_A, B_A, L_B, B_B
+        return history_df, l_a, b_a, l_b, b_b
 
     except Exception as e:
         print(f"❌ Error in get_strategy_history: {e}")

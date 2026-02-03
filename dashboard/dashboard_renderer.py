@@ -169,8 +169,8 @@ def display_strategy_details(strategy_row: Union[pd.Series, Dict[str, Any]], dep
     token1 = strategy_row['token1']
     token2 = strategy_row['token2']
     token3 = strategy_row['token3']
-    protocol_A = strategy_row['protocol_A']
-    protocol_B = strategy_row['protocol_B']
+    protocol_a = strategy_row['protocol_a']
+    protocol_b = strategy_row['protocol_b']
 
     # Contract addresses
     token1_contract = strategy_row.get('token1_contract', '')
@@ -178,16 +178,16 @@ def display_strategy_details(strategy_row: Union[pd.Series, Dict[str, Any]], dep
     token3_contract = strategy_row.get('token3_contract', '')
 
     # USD values
-    L_A = strategy_row['L_A']
-    B_A = strategy_row['B_A']
-    L_B = strategy_row['L_B']
-    B_B = strategy_row['B_B']
+    l_a = strategy_row['l_a']
+    b_a = strategy_row['b_a']
+    l_b = strategy_row['l_b']
+    b_b = strategy_row['b_b']
 
     # Rates
-    lend_rate_1A = strategy_row['lend_rate_1A']
-    borrow_rate_2A = strategy_row['borrow_rate_2A']
-    lend_rate_2B = strategy_row['lend_rate_2B']
-    borrow_rate_3B = strategy_row['borrow_rate_3B']
+    lend_rate_1a = strategy_row['lend_rate_1a']
+    borrow_rate_2a = strategy_row['borrow_rate_2a']
+    lend_rate_2b = strategy_row['lend_rate_2b']
+    borrow_rate_3b = strategy_row['borrow_rate_3b']
 
     # Prices
     P1_A = strategy_row['P1_A']
@@ -211,12 +211,12 @@ def display_strategy_details(strategy_row: Union[pd.Series, Dict[str, Any]], dep
 
     liquidity_details = []
     if available_borrow_2A is not None and not pd.isna(available_borrow_2A):
-        constraint_2A = available_borrow_2A / B_A if B_A > 0 else float('inf')
-        liquidity_details.append(f"• {token2} on {protocol_A}: ${available_borrow_2A:,.2f} available → max ${constraint_2A:,.2f}")
+        constraint_2A = available_borrow_2A / b_a if b_a > 0 else float('inf')
+        liquidity_details.append(f"• {token2} on {protocol_a}: ${available_borrow_2A:,.2f} available → max ${constraint_2A:,.2f}")
 
     if available_borrow_3B is not None and not pd.isna(available_borrow_3B):
-        constraint_3B = available_borrow_3B / B_B if B_B > 0 else float('inf')
-        liquidity_details.append(f"• {token3} on {protocol_B}: ${available_borrow_3B:,.2f} available → max ${constraint_3B:,.2f}")
+        constraint_3B = available_borrow_3B / b_b if b_b > 0 else float('inf')
+        liquidity_details.append(f"• {token3} on {protocol_b}: ${available_borrow_3B:,.2f} available → max ${constraint_3B:,.2f}")
 
     liquidity_constraints_message = None
     if liquidity_details:
@@ -232,39 +232,39 @@ def display_strategy_details(strategy_row: Union[pd.Series, Dict[str, Any]], dep
     table_data = [
         # Row 1: Protocol A, token1, Lend
         {
-            'Protocol': protocol_A,
+            'Protocol': protocol_a,
             'Token': token1,
             'Contract': format_contract(token1_contract),
             'Action': 'Lend',
-            'Rate': f"{lend_rate_1A * 100:.2f}%",
-            'Weight': f"{L_A:.2f}",
-            'Token Amount': f"{(L_A * deployment_usd) / P1_A:.2f}",
+            'Rate': f"{lend_rate_1a * 100:.2f}%",
+            'Weight': f"{l_a:.2f}",
+            'Token Amount': f"{(l_a * deployment_usd) / P1_A:.2f}",
             'Price': f"${P1_A:.4f}",
             'Fee': '',
             'Available': ''
         },
         # Row 2: Protocol A, token2, Borrow
         {
-            'Protocol': protocol_A,
+            'Protocol': protocol_a,
             'Token': token2,
             'Contract': format_contract(token2_contract),
             'Action': 'Borrow',
-            'Rate': f"{borrow_rate_2A * 100:.2f}%",
-            'Weight': f"{B_A:.2f}",
-            'Token Amount': f"{(B_A * deployment_usd) / P2_A:.2f}",
+            'Rate': f"{borrow_rate_2a * 100:.2f}%",
+            'Weight': f"{b_a:.2f}",
+            'Token Amount': f"{(b_a * deployment_usd) / P2_A:.2f}",
             'Price': f"${P2_A:.4f}",
             'Fee': f"{borrow_fee_2A*100:.2f}%" if pd.notna(borrow_fee_2A) else 'N/A',
             'Available': format_usd_abbreviated(available_borrow_2A) if pd.notna(available_borrow_2A) else 'N/A'
         },
         # Row 3: Protocol B, token2, Lend
         {
-            'Protocol': protocol_B,
+            'Protocol': protocol_b,
             'Token': token2,
             'Contract': format_contract(token2_contract),
             'Action': 'Lend',
-            'Rate': f"{lend_rate_2B * 100:.2f}%",
-            'Weight': f"{L_B:.2f}",
-            'Token Amount': f"{(L_B * deployment_usd) / P2_B:.2f}",
+            'Rate': f"{lend_rate_2b * 100:.2f}%",
+            'Weight': f"{l_b:.2f}",
+            'Token Amount': f"{(l_b * deployment_usd) / P2_B:.2f}",
             'Price': f"${P2_B:.4f}",
             'Fee': '',
             'Available': ''
@@ -273,13 +273,13 @@ def display_strategy_details(strategy_row: Union[pd.Series, Dict[str, Any]], dep
 
     # Add 4th row (Borrow token3 from Protocol B)
     table_data.append({
-        'Protocol': protocol_B,
+        'Protocol': protocol_b,
         'Token': token3,
         'Contract': format_contract(token3_contract),
         'Action': 'Borrow',
-        'Rate': f"{borrow_rate_3B * 100:.2f}%",
-        'Weight': f"{B_B:.2f}",
-        'Token Amount': f"{(B_B * deployment_usd) / P3_B:.2f}",
+        'Rate': f"{borrow_rate_3b * 100:.2f}%",
+        'Weight': f"{b_b:.2f}",
+        'Token Amount': f"{(b_b * deployment_usd) / P3_B:.2f}",
         'Price': f"${P3_B:.4f}",
         'Fee': f"{borrow_fee_3B*100:.2f}%" if pd.notna(borrow_fee_3B) else 'N/A',
         'Available': format_usd_abbreviated(available_borrow_3B) if pd.notna(available_borrow_3B) else 'N/A'
@@ -329,8 +329,8 @@ def display_strategies_table(
         table_data.append({
             '_idx': idx,  # Hidden index for selection
             'Token Pair': token_pair,
-            'Protocol A': row['protocol_A'],
-            'Protocol B': row['protocol_B'],
+            'Protocol A': row['protocol_a'],
+            'Protocol B': row['protocol_b'],
             'Net APR': row['net_apr'] * 100,  # Convert decimal to percentage
             'APR 5d': row.get('apr5', 0) * 100,  # APR if exit after 5 days
             'APR 30d': row.get('apr30', 0) * 100,  # 30-day average
@@ -396,7 +396,7 @@ def calculate_position_returns(strategy: Dict, deployment_usd: float) -> Dict:
     Calculate position sizes and expected returns for a given deployment amount.
 
     Args:
-        strategy: Strategy dict with multipliers (L_A, B_A, L_B, B_B) and net_apr
+        strategy: Strategy dict with multipliers (l_a, b_a, l_b, b_b) and net_apr
         deployment_usd: USD amount to deploy
 
     Returns:
@@ -423,16 +423,16 @@ def calculate_position_returns(strategy: Dict, deployment_usd: float) -> Dict:
 
     # Position sizes (multiplier × deployment)
     # All strategies are 4-leg levered strategies
-    lend_a_usd = strategy['L_A'] * deployment_usd
-    borrow_a_usd = strategy['B_A'] * deployment_usd
-    lend_b_usd = strategy['L_B'] * deployment_usd
-    borrow_b_usd = strategy['B_B'] * deployment_usd
+    lend_a_usd = strategy['l_a'] * deployment_usd
+    borrow_a_usd = strategy['b_a'] * deployment_usd
+    lend_b_usd = strategy['l_b'] * deployment_usd
+    borrow_b_usd = strategy['b_b'] * deployment_usd
 
     # Percentages (for display)
-    lend_a_pct = strategy['L_A'] * 100
-    borrow_a_pct = strategy['B_A'] * 100
-    lend_b_pct = strategy['L_B'] * 100
-    borrow_b_pct = strategy['B_B'] * 100
+    lend_a_pct = strategy['l_a'] * 100
+    borrow_a_pct = strategy['b_a'] * 100
+    lend_b_pct = strategy['l_b'] * 100
+    borrow_b_pct = strategy['b_b'] * 100
 
     # Expected returns (based on net APR)
     yearly_return_usd = deployment_usd * net_apr
@@ -497,13 +497,13 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
     # ========================================
     # Calculate upfront fees percentage
     upfront_fees_pct = (
-        strategy['B_A'] * strategy['borrow_fee_2A'] +
-        strategy['B_B'] * strategy['borrow_fee_3B']
+        strategy['b_a'] * strategy['borrow_fee_2A'] +
+        strategy['b_b'] * strategy['borrow_fee_3B']
     )
 
     # Build display strings
     token_flow = f"{strategy['token1']} → {strategy['token2']} → {strategy['token3']}"
-    protocol_pair = f"{strategy['protocol_A']} ↔ {strategy['protocol_B']}"
+    protocol_pair = f"{strategy['protocol_a']} ↔ {strategy['protocol_b']}"
 
     # Create summary table
     summary_data = [{
@@ -566,23 +566,23 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
     # TOKEN-LEVEL DETAILS TABLE
     # ========================================
     # Calculate token amounts (with zero-division protection)
-    entry_token_amount_1A = (strategy['L_A'] * deployment_usd) / strategy['P1_A'] if strategy['P1_A'] > 0 else 0
+    entry_token_amount_1A = (strategy['l_a'] * deployment_usd) / strategy['P1_A'] if strategy['P1_A'] > 0 else 0
     # Token 2: Calculate using Protocol A price (source of borrowed tokens)
     # This ensures the same token quantity is used for both Protocol A and Protocol B
-    entry_token_amount_2 = (strategy['B_A'] * deployment_usd) / strategy['P2_A'] if strategy['P2_A'] > 0 else 0
+    entry_token_amount_2 = (strategy['b_a'] * deployment_usd) / strategy['P2_A'] if strategy['P2_A'] > 0 else 0
     entry_token_amount_2A = entry_token_amount_2  # Borrowed from Protocol A
     entry_token_amount_2B = entry_token_amount_2  # Same tokens lent to Protocol B
-    entry_token_amount_3B = (strategy['B_B'] * deployment_usd) / strategy['P3_B'] if strategy['P3_B'] > 0 else 0
+    entry_token_amount_3B = (strategy['b_b'] * deployment_usd) / strategy['P3_B'] if strategy['P3_B'] > 0 else 0
 
     # Calculate position sizes in USD (weight * deployment_usd)
-    position_size_1A = strategy['L_A'] * deployment_usd
-    position_size_2A = strategy['B_A'] * deployment_usd
-    position_size_2B = strategy['L_B'] * deployment_usd
-    position_size_3B = strategy['B_B'] * deployment_usd
+    position_size_1A = strategy['l_a'] * deployment_usd
+    position_size_2A = strategy['b_a'] * deployment_usd
+    position_size_2B = strategy['l_b'] * deployment_usd
+    position_size_3B = strategy['b_b'] * deployment_usd
 
     # Calculate fee amounts in USD
-    fee_usd_2A = strategy['B_A'] * strategy['borrow_fee_2A'] * deployment_usd
-    fee_usd_3B = strategy['B_B'] * strategy['borrow_fee_3B'] * deployment_usd
+    fee_usd_2A = strategy['b_a'] * strategy['borrow_fee_2A'] * deployment_usd
+    fee_usd_3B = strategy['b_b'] * strategy['borrow_fee_3B'] * deployment_usd
 
     # Calculate dynamic precision
     precision_1A = get_token_precision(strategy['P1_A'])
@@ -642,21 +642,21 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
     detail_data = []
 
     # Calculate effective LTV on-the-fly
-    effective_ltv_1A = (strategy['B_A'] / strategy['L_A']) * strategy.get('borrow_weight_2A', 1.0)
-    effective_ltv_2B = (strategy['B_B'] / strategy['L_B']) * strategy.get('borrow_weight_3B', 1.0)
+    effective_ltv_1A = (strategy['b_a'] / strategy['l_a']) * strategy.get('borrow_weight_2A', 1.0)
+    effective_ltv_2B = (strategy['b_b'] / strategy['l_b']) * strategy.get('borrow_weight_3B', 1.0)
 
     # Row 1: Protocol A - Lend token1
     lltv_1A = strategy.get('liquidation_threshold_1A', 0.0)
     detail_data.append({
-        'Protocol': strategy['protocol_A'],
+        'Protocol': strategy['protocol_a'],
         'Token': strategy['token1'],
         'Action': 'Lend',
         'maxCF': f"{strategy['collateral_ratio_1A']:.2%}",
         'LLTV': f"{lltv_1A:.2%}" if lltv_1A > 0 else "",
         'Effective LTV': f"{effective_ltv_1A:.2%}",
         'Borrow Weight': "-",
-        'Weight': f"{strategy['L_A']:.4f}",
-        'Rate': f"{strategy['lend_rate_1A'] * 100:.2f}%",
+        'Weight': f"{strategy['l_a']:.4f}",
+        'Rate': f"{strategy['lend_rate_1a'] * 100:.2f}%",
         'Token Amount': f"{entry_token_amount_1A:,.{precision_1A}f}",
         'Size ($$$)': f"${position_size_1A:,.2f}",
         'Price': f"${strategy['P1_A']:.4f}",
@@ -669,15 +669,15 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
 
     # Row 2: Protocol A - Borrow token2
     detail_data.append({
-        'Protocol': strategy['protocol_A'],
+        'Protocol': strategy['protocol_a'],
         'Token': strategy['token2'],
         'Action': 'Borrow',
         'maxCF': "-",
         'LLTV': "-",
         'Effective LTV': "-",
         'Borrow Weight': f"{strategy.get('borrow_weight_2A', 1.0):.2f}x",
-        'Weight': f"{strategy['B_A']:.4f}",
-        'Rate': f"{strategy['borrow_rate_2A'] * 100:.2f}%",
+        'Weight': f"{strategy['b_a']:.4f}",
+        'Rate': f"{strategy['borrow_rate_2a'] * 100:.2f}%",
         'Token Amount': f"{entry_token_amount_2A:,.{precision_2A}f}",
         'Size ($$$)': f"${position_size_2A:,.2f}",
         'Price': f"${strategy['P2_A']:.4f}",
@@ -691,15 +691,15 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
     # Row 3: Protocol B - Lend token2
     lltv_2B = strategy.get('liquidation_threshold_2B', 0.0)
     detail_data.append({
-        'Protocol': strategy['protocol_B'],
+        'Protocol': strategy['protocol_b'],
         'Token': strategy['token2'],
         'Action': 'Lend',
         'maxCF': f"{strategy['collateral_ratio_2B']:.2%}",
         'LLTV': f"{lltv_2B:.2%}" if lltv_2B > 0 else "",
         'Effective LTV': f"{effective_ltv_2B:.2%}",
         'Borrow Weight': "-",
-        'Weight': f"{strategy['L_B']:.4f}",
-        'Rate': f"{strategy['lend_rate_2B'] * 100:.2f}%",
+        'Weight': f"{strategy['l_b']:.4f}",
+        'Rate': f"{strategy['lend_rate_2b'] * 100:.2f}%",
         'Token Amount': f"{entry_token_amount_2B:,.{precision_2B}f}",
         'Size ($$$)': f"${position_size_2B:,.2f}",
         'Price': f"${strategy['P2_B']:.4f}",
@@ -712,15 +712,15 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
 
     # Row 4: Protocol B - Borrow token3
     detail_data.append({
-        'Protocol': strategy['protocol_B'],
+        'Protocol': strategy['protocol_b'],
         'Token': strategy['token3'],
         'Action': 'Borrow',
         'maxCF': "-",
         'LLTV': "-",
         'Effective LTV': "-",
         'Borrow Weight': f"{strategy.get('borrow_weight_3B', 1.0):.2f}x",
-        'Weight': f"{strategy['B_B']:.4f}",
-        'Rate': f"{strategy['borrow_rate_3B'] * 100:.2f}%",
+        'Weight': f"{strategy['b_b']:.4f}",
+        'Rate': f"{strategy['borrow_rate_3b'] * 100:.2f}%",
         'Token Amount': f"{entry_token_amount_3B:,.{precision_3B}f}",
         'Size ($$$)': f"${position_size_3B:,.2f}",
         'Price': f"${strategy['P3_B']:.4f}",
@@ -781,17 +781,17 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
             liquidation_distance = strategy.get('liquidation_distance', 0.20)
 
             # Get position multipliers from strategy history calculation
-            _, L_A, B_A, L_B, B_B = get_strategy_history(
+            _, l_a, b_a, l_b, b_b = get_strategy_history(
                 strategy_row=strategy,
                 liquidation_distance=liquidation_distance
             )
 
             # Build positions dict
             positions = {
-                'L_A': L_A,
-                'B_A': B_A,
-                'L_B': L_B,
-                'B_B': B_B
+                'l_a': l_a,
+                'b_a': b_a,
+                'l_b': l_b,
+                'b_b': b_b
             }
 
             # Create position (all strategies are 4-leg levered)
@@ -804,8 +804,8 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
                 token1_contract=strategy['token1_contract'],
                 token2_contract=strategy['token2_contract'],
                 token3_contract=strategy.get('token3_contract'),
-                protocol_A=strategy['protocol_A'],
-                protocol_B=strategy['protocol_B'],
+                protocol_a=strategy['protocol_a'],
+                protocol_b=strategy['protocol_b'],
                 deployment_usd=deployment_usd,
                 is_paper_trade=True,
                 notes=""
@@ -968,6 +968,30 @@ def render_positions_table_tab(timestamp_seconds: int):
         # Get active positions (filtered by selected timestamp)
         active_positions = service.get_active_positions(live_timestamp=timestamp_seconds)
 
+        # # DEBUG: Show what we got
+        # if not active_positions.empty:
+        #     st.write("### DEBUG: Position Data Loaded")
+        #     st.write(f"- **Number of positions:** {len(active_positions)}")
+        #     st.write(f"- **Columns ({len(active_positions.columns)}):** {list(active_positions.columns)}")
+
+        #     # Check for l_a column variations
+        #     l_a_cols = [col for col in active_positions.columns if 'l_a' in col.lower()]
+        #     st.write(f"- **Columns containing 'l_a':** {l_a_cols if l_a_cols else '❌ NONE FOUND'}")
+
+        #     # Show first position sample
+        #     with st.expander("📋 First Position Data Sample"):
+        #         first_pos = active_positions.iloc[0]
+        #         st.write(f"**All keys in first position:**")
+        #         st.code('\n'.join(list(first_pos.index)))
+
+        #         # Try to access l_a
+        #         try:
+        #             l_a_value = first_pos['l_a']
+        #             st.success(f"✅ Successfully accessed l_a = {l_a_value} (type: {type(l_a_value)})")
+        #         except KeyError as e:
+        #             st.error(f"❌ KeyError accessing 'l_a': {e}")
+        #             st.write("Available keys:", list(first_pos.index))
+
         if active_positions.empty:
             # Provide context-aware messaging based on whether viewing historical timestamp
             latest_ts_query = "SELECT MAX(timestamp) FROM rates_snapshot"
@@ -994,10 +1018,11 @@ def render_positions_table_tab(timestamp_seconds: int):
         latest_timestamp_str = to_datetime_str(timestamp_seconds)
 
         # Query all rates and prices at latest timestamp
-        rates_query = """
+        ph = service._get_placeholder()
+        rates_query = f"""
         SELECT protocol, token, lend_total_apr, borrow_total_apr, borrow_fee, price_usd
         FROM rates_snapshot
-        WHERE timestamp = ?
+        WHERE timestamp = {ph}
         """
         rates_df = pd.read_sql_query(rates_query, conn, params=(latest_timestamp_str,))
 
@@ -1075,48 +1100,48 @@ def render_positions_table_tab(timestamp_seconds: int):
             token_flow = f"{position['token1']} → {position['token2']} → {position['token3']}"
 
             # Build protocol pair string
-            protocol_pair = f"{position['protocol_A']} ↔ {position['protocol_B']}"
+            protocol_pair = f"{position['protocol_a']} ↔ {position['protocol_b']}"
 
             # Get current rates for all 4 legs from rates_snapshot
-            lend_1A = get_rate(position['token1'], position['protocol_A'], 'lend')
-            borrow_2A = get_rate(position['token2'], position['protocol_A'], 'borrow')
-            lend_2B = get_rate(position['token2'], position['protocol_B'], 'lend')
-            borrow_3B = get_rate(position['token3'], position['protocol_B'], 'borrow')
+            lend_1A = get_rate(position['token1'], position['protocol_a'], 'lend')
+            borrow_2A = get_rate(position['token2'], position['protocol_a'], 'borrow')
+            lend_2B = get_rate(position['token2'], position['protocol_b'], 'lend')
+            borrow_3B = get_rate(position['token3'], position['protocol_b'], 'borrow')
 
             # Get borrow fees
-            borrow_fee_2A = get_borrow_fee(position['token2'], position['protocol_A'])
-            borrow_fee_3B = get_borrow_fee(position['token3'], position['protocol_B'])
+            borrow_fee_2A = get_borrow_fee(position['token2'], position['protocol_a'])
+            borrow_fee_3B = get_borrow_fee(position['token3'], position['protocol_b'])
 
             # Safely extract position multipliers and numeric fields (handle bytes/corrupted data)
-            L_A = safe_float(position['L_A'])
-            B_A = safe_float(position['B_A'])
-            L_B = safe_float(position['L_B'])
-            B_B = safe_float(position['B_B'])
+            l_a = safe_float(position['l_a'])
+            b_a = safe_float(position['b_a'])
+            l_b = safe_float(position['l_b'])
+            b_b = safe_float(position['b_b'])
             deployment_usd = safe_float(position['deployment_usd'])
 
             # Safely extract entry rates
-            entry_lend_rate_1A = safe_float(position['entry_lend_rate_1A'])
-            entry_borrow_rate_2A = safe_float(position['entry_borrow_rate_2A'])
-            entry_lend_rate_2B = safe_float(position['entry_lend_rate_2B'])
-            entry_borrow_rate_3B = safe_float(position['entry_borrow_rate_3B'])
+            entry_lend_rate_1a = safe_float(position['entry_lend_rate_1a'])
+            entry_borrow_rate_2a = safe_float(position['entry_borrow_rate_2a'])
+            entry_lend_rate_2b = safe_float(position['entry_lend_rate_2b'])
+            entry_borrow_rate_3b = safe_float(position['entry_borrow_rate_3b'])
 
             # Safely extract entry prices
-            entry_price_1A = safe_float(position['entry_price_1A'])
-            entry_price_2A = safe_float(position['entry_price_2A'])
-            entry_price_2B = safe_float(position['entry_price_2B'])
-            entry_price_3B = safe_float(position['entry_price_3B'])
+            entry_price_1a = safe_float(position['entry_price_1a'])
+            entry_price_2a = safe_float(position['entry_price_2a'])
+            entry_price_2b = safe_float(position['entry_price_2b'])
+            entry_price_3b = safe_float(position['entry_price_3b'])
 
             # Calculate GROSS APR using position multipliers
             # Rates are already in decimal format (0.05 = 5%)
             gross_apr = (
-                (L_A * lend_1A) +
-                (L_B * lend_2B) -
-                (B_A * borrow_2A) -
-                (B_B * borrow_3B)
+                (l_a * lend_1A) +
+                (l_b * lend_2B) -
+                (b_a * borrow_2A) -
+                (b_b * borrow_3B)
             )
 
             # Calculate fee cost (keep as decimal per DESIGN_NOTES.md Rule #7)
-            fee_cost = B_A * borrow_fee_2A + B_B * borrow_fee_3B
+            fee_cost = b_a * borrow_fee_2A + b_b * borrow_fee_3B
 
             # Calculate NET APR (in decimal)
             current_net_apr_decimal = gross_apr - fee_cost
@@ -1163,7 +1188,7 @@ When a rate was missing, the previous valid rate was carried forward (following 
             strategy_value = deployment_usd + strategy_total_pnl
 
             # Calculate Net APR from strategy start
-            if strategy_days > 0:
+            if strategy_days > 0 and deployment_usd > 0:
                 # Net APR = (Total PnL / deployment) * (365 / days)
                 strategy_net_apr = (strategy_total_pnl / deployment_usd) * (365 / strategy_days)
             else:
@@ -1177,19 +1202,19 @@ When a rate was missing, the previous valid rate was carried forward (following 
                 detail_data = []
 
                 # Calculate entry token amounts (Stage 3) with zero-division protection
-                entry_token_amount_1A = (L_A * deployment_usd) / entry_price_1A if entry_price_1A > 0 else 0
+                entry_token_amount_1A = (l_a * deployment_usd) / entry_price_1a if entry_price_1a > 0 else 0
                 # Token 2: Calculate using Protocol A price (source of borrowed tokens)
                 # This ensures the same token quantity is used for both Protocol A and Protocol B
-                entry_token_amount_2 = (B_A * deployment_usd) / entry_price_2A if entry_price_2A > 0 else 0
+                entry_token_amount_2 = (b_a * deployment_usd) / entry_price_2a if entry_price_2a > 0 else 0
                 entry_token_amount_2A = entry_token_amount_2  # Borrowed from Protocol A
                 entry_token_amount_2B = entry_token_amount_2  # Same tokens lent to Protocol B
-                entry_token_amount_3B = (B_B * deployment_usd) / entry_price_3B if entry_price_3B > 0 else 0
+                entry_token_amount_3B = (b_b * deployment_usd) / entry_price_3b if entry_price_3b > 0 else 0
 
                 # STAGE 4: Get live prices for all tokens
-                live_price_1A = get_price(position['token1'], position['protocol_A'])
-                live_price_2A = get_price(position['token2'], position['protocol_A'])
-                live_price_2B = get_price(position['token2'], position['protocol_B'])
-                live_price_3B = get_price(position['token3'], position['protocol_B'])
+                live_price_1A = get_price(position['token1'], position['protocol_a'])
+                live_price_2A = get_price(position['token2'], position['protocol_a'])
+                live_price_2B = get_price(position['token2'], position['protocol_b'])
+                live_price_3B = get_price(position['token3'], position['protocol_b'])
 
                 # Calculate dynamic precision for token amounts (based on live prices)
                 precision_1A = get_token_precision(live_price_1A)
@@ -1246,35 +1271,49 @@ When a rate was missing, the previous valid rate was carried forward (following 
                         liq_max = target_liq_dist_input / (1 - target_liq_dist_input)
                         return f"{liq_max * 100:.2f}%"
 
-                # Check if position has required fields for new calculation
-                has_lltv = 'entry_liquidation_threshold_1A' in position and position['entry_liquidation_threshold_1A'] is not None
-                has_borrow_weights = 'entry_borrow_weight_2A' in position and position['entry_borrow_weight_2A'] is not None and position['entry_borrow_weight_2A'] > 0
+                # Check if this is a legacy position (created before LLTV system upgrade)
+                is_legacy_position = (position.get('entry_liquidation_threshold_1a', 0) == 0 or
+                                     position.get('entry_liquidation_threshold_2b', 0) == 0)
 
-                if not has_lltv or not has_borrow_weights:
-                    st.error(f"⚠️ Position created before LLTV switch - missing required fields. Please close and redeploy this position.")
-                    conn.close()
-                    return
+                if is_legacy_position:
+                    # Legacy position - show warning and use collateral ratios for calculations
+                    st.warning("⚠️ **Legacy Position**: This position was created before the LLTV system upgrade (Jan 2026). "
+                             "Liquidation calculations use collateral ratios instead of liquidation thresholds and may be less accurate. "
+                             "Consider closing and redeploying for full accuracy.")
+
+                    # For legacy positions, use collateral ratios as fallback for LLTV
+                    # and set borrow weights to 1.0 (default)
+                    lltv_1A = position['entry_collateral_ratio_1a']
+                    lltv_2B = position['entry_collateral_ratio_2b']
+                    borrow_weight_2A = 1.0
+                    borrow_weight_3B = 1.0
+                else:
+                    # New position with proper LLTV values
+                    lltv_1A = position['entry_liquidation_threshold_1a']
+                    lltv_2B = position['entry_liquidation_threshold_2b']
+                    borrow_weight_2A = position.get('entry_borrow_weight_2a', 1.0)
+                    borrow_weight_3B = position.get('entry_borrow_weight_3b', 1.0)
 
                 # Calculate target weights using PositionCalculator with entry liquidation distance
                 target_calc = PositionCalculator(liquidation_distance=position['entry_liquidation_distance'])
                 target_positions = target_calc.calculate_positions(
-                    liquidation_threshold_A=position['entry_liquidation_threshold_1A'],
-                    liquidation_threshold_B=position['entry_liquidation_threshold_2B'],
-                    collateral_ratio_A=position['entry_collateral_ratio_1A'],
-                    collateral_ratio_B=position['entry_collateral_ratio_2B'],
-                    borrow_weight_A=position['entry_borrow_weight_2A'],
-                    borrow_weight_B=position['entry_borrow_weight_3B']
+                    liquidation_threshold_a=lltv_1A,
+                    liquidation_threshold_b=lltv_2B,
+                    collateral_ratio_a=position['entry_collateral_ratio_1a'],
+                    collateral_ratio_b=position['entry_collateral_ratio_2b'],
+                    borrow_weight_a=borrow_weight_2A,
+                    borrow_weight_b=borrow_weight_3B
                 )
 
                 # Calculate CURRENT token amounts using TARGET weights and LIVE prices
                 # This shows what the position SHOULD be at current market conditions
-                current_token_amount_1A = (target_positions['L_A'] * deployment_usd) / live_price_1A if live_price_1A > 0 else 0
+                current_token_amount_1A = (target_positions['l_a'] * deployment_usd) / live_price_1A if live_price_1A > 0 else 0
                 # Token 2: Calculate using Protocol A price and TARGET weight
                 # This ensures the same token quantity is used for both Protocol A and Protocol B
-                current_token_amount_2 = (target_positions['B_A'] * deployment_usd) / live_price_2A if live_price_2A > 0 else 0
+                current_token_amount_2 = (target_positions['b_a'] * deployment_usd) / live_price_2A if live_price_2A > 0 else 0
                 current_token_amount_2A = current_token_amount_2  # Borrowed from Protocol A
                 current_token_amount_2B = current_token_amount_2  # Same tokens lent to Protocol B
-                current_token_amount_3B = (target_positions['B_B'] * deployment_usd) / live_price_3B if live_price_3B > 0 else 0
+                current_token_amount_3B = (target_positions['b_b'] * deployment_usd) / live_price_3B if live_price_3B > 0 else 0
 
                 # Calculate current collateral and loan values using ENTRY token amounts and LIVE PRICES
                 # Token amounts don't change - only prices change
@@ -1289,9 +1328,9 @@ When a rate was missing, the previous valid rate was carried forward (following 
                     loan_value=current_loan_A,
                     lending_token_price=live_price_1A,
                     borrowing_token_price=live_price_2A,
-                    lltv=position.get('entry_liquidation_threshold_1A', position['entry_collateral_ratio_1A']),
+                    lltv=lltv_1A,
                     side='lending',
-                    borrow_weight=position.get('entry_borrow_weight_2A', 1.0)
+                    borrow_weight=borrow_weight_2A
                 )
 
                 # Leg 2: Liquidation price for token2 (borrowing side - price must rise)
@@ -1300,9 +1339,9 @@ When a rate was missing, the previous valid rate was carried forward (following 
                     loan_value=current_loan_A,
                     lending_token_price=live_price_1A,
                     borrowing_token_price=live_price_2A,
-                    lltv=position.get('entry_liquidation_threshold_1A', position['entry_collateral_ratio_1A']),
+                    lltv=lltv_1A,
                     side='borrowing',
-                    borrow_weight=position.get('entry_borrow_weight_2A', 1.0)
+                    borrow_weight=borrow_weight_2A
                 )
 
                 # Protocol B (Lend token2, Borrow token3)
@@ -1316,9 +1355,9 @@ When a rate was missing, the previous valid rate was carried forward (following 
                     loan_value=current_loan_B,
                     lending_token_price=live_price_2B,
                     borrowing_token_price=live_price_3B,
-                    lltv=position.get('entry_liquidation_threshold_2B', position['entry_collateral_ratio_2B']),
+                    lltv=lltv_2B,
                     side='lending',
-                    borrow_weight=position.get('entry_borrow_weight_3B', 1.0)
+                    borrow_weight=borrow_weight_3B
                 )
 
                 # Leg 4: Liquidation price for token3 (borrowing side - price must rise)
@@ -1327,58 +1366,58 @@ When a rate was missing, the previous valid rate was carried forward (following 
                     loan_value=current_loan_B,
                     lending_token_price=live_price_2B,
                     borrowing_token_price=live_price_3B,
-                    lltv=position.get('entry_liquidation_threshold_2B', position['entry_collateral_ratio_2B']),
+                    lltv=lltv_2B,
                     side='borrowing',
-                    borrow_weight=position.get('entry_borrow_weight_3B', 1.0)
+                    borrow_weight=borrow_weight_3B
                 )
 
                 # Calculate entry liquidation distances (using entry prices instead of live prices)
                 # Protocol A (using entry collateral and loan values)
-                entry_collateral_A = entry_token_amount_1A * position['entry_price_1A']
-                entry_loan_A = entry_token_amount_2A * position['entry_price_2A']
+                entry_collateral_A = entry_token_amount_1A * position['entry_price_1a']
+                entry_loan_A = entry_token_amount_2A * position['entry_price_2a']
 
                 entry_liq_1A = calc.calculate_liquidation_price(
                     collateral_value=entry_collateral_A,
                     loan_value=entry_loan_A,
-                    lending_token_price=position['entry_price_1A'],
-                    borrowing_token_price=position['entry_price_2A'],
-                    lltv=position.get('entry_liquidation_threshold_1A', position['entry_collateral_ratio_1A']),
+                    lending_token_price=position['entry_price_1a'],
+                    borrowing_token_price=position['entry_price_2a'],
+                    lltv=lltv_1A,
                     side='lending',
-                    borrow_weight=position.get('entry_borrow_weight_2A', 1.0)
+                    borrow_weight=borrow_weight_2A
                 )
 
                 entry_liq_2A = calc.calculate_liquidation_price(
                     collateral_value=entry_collateral_A,
                     loan_value=entry_loan_A,
-                    lending_token_price=position['entry_price_1A'],
-                    borrowing_token_price=position['entry_price_2A'],
-                    lltv=position.get('entry_liquidation_threshold_1A', position['entry_collateral_ratio_1A']),
+                    lending_token_price=position['entry_price_1a'],
+                    borrowing_token_price=position['entry_price_2a'],
+                    lltv=lltv_1A,
                     side='borrowing',
-                    borrow_weight=position.get('entry_borrow_weight_2A', 1.0)
+                    borrow_weight=borrow_weight_2A
                 )
 
                 # Protocol B (using entry collateral and loan values)
-                entry_collateral_B = entry_token_amount_2B * position['entry_price_2B']
-                entry_loan_B = entry_token_amount_3B * position['entry_price_3B']
+                entry_collateral_B = entry_token_amount_2B * position['entry_price_2b']
+                entry_loan_B = entry_token_amount_3B * position['entry_price_3b']
 
                 entry_liq_2B = calc.calculate_liquidation_price(
                     collateral_value=entry_collateral_B,
                     loan_value=entry_loan_B,
-                    lending_token_price=position['entry_price_2B'],
-                    borrowing_token_price=position['entry_price_3B'],
-                    lltv=position.get('entry_liquidation_threshold_2B', position['entry_collateral_ratio_2B']),
+                    lending_token_price=position['entry_price_2b'],
+                    borrowing_token_price=position['entry_price_3b'],
+                    lltv=lltv_2B,
                     side='lending',
-                    borrow_weight=position.get('entry_borrow_weight_3B', 1.0)
+                    borrow_weight=borrow_weight_3B
                 )
 
                 entry_liq_3B = calc.calculate_liquidation_price(
                     collateral_value=entry_collateral_B,
                     loan_value=entry_loan_B,
-                    lending_token_price=position['entry_price_2B'],
-                    borrowing_token_price=position['entry_price_3B'],
-                    lltv=position.get('entry_liquidation_threshold_2B', position['entry_collateral_ratio_2B']),
+                    lending_token_price=position['entry_price_2b'],
+                    borrowing_token_price=position['entry_price_3b'],
+                    lltv=lltv_2B,
                     side='borrowing',
-                    borrow_weight=position.get('entry_borrow_weight_3B', 1.0)
+                    borrow_weight=borrow_weight_3B
                 )
 
                 # Helper function to format token rebalance display
@@ -1445,9 +1484,9 @@ When a rate was missing, the previous valid rate was carried forward (following 
                     loan_value=rebalanced_loan_A,
                     lending_token_price=live_price_1A,
                     borrowing_token_price=live_price_2A,
-                    lltv=position.get('entry_liquidation_threshold_1A', position['entry_collateral_ratio_1A']),
+                    lltv=position.get('entry_liquidation_threshold_1a', position['entry_collateral_ratio_1a']),
                     side='lending',
-                    borrow_weight=position.get('entry_borrow_weight_2A', 1.0)
+                    borrow_weight=position.get('entry_borrow_weight_2a', 1.0)
                 )
 
                 # Leg 2: Protocol A - Borrow token2 (borrowing side)
@@ -1456,9 +1495,9 @@ When a rate was missing, the previous valid rate was carried forward (following 
                     loan_value=rebalanced_loan_A,
                     lending_token_price=live_price_1A,
                     borrowing_token_price=live_price_2A,
-                    lltv=position.get('entry_liquidation_threshold_1A', position['entry_collateral_ratio_1A']),
+                    lltv=position.get('entry_liquidation_threshold_1a', position['entry_collateral_ratio_1a']),
                     side='borrowing',
-                    borrow_weight=position.get('entry_borrow_weight_2A', 1.0)
+                    borrow_weight=position.get('entry_borrow_weight_2a', 1.0)
                 )
 
                 # Leg 3: Protocol B - Lend token2 (lending side)
@@ -1467,9 +1506,9 @@ When a rate was missing, the previous valid rate was carried forward (following 
                     loan_value=rebalanced_loan_B,
                     lending_token_price=live_price_2B,
                     borrowing_token_price=live_price_3B,
-                    lltv=position.get('entry_liquidation_threshold_2B', position['entry_collateral_ratio_2B']),
+                    lltv=position.get('entry_liquidation_threshold_2b', position['entry_collateral_ratio_2b']),
                     side='lending',
-                    borrow_weight=position.get('entry_borrow_weight_3B', 1.0)
+                    borrow_weight=position.get('entry_borrow_weight_3b', 1.0)
                 )
 
                 # Leg 4: Protocol B - Borrow token3 (borrowing side)
@@ -1478,9 +1517,9 @@ When a rate was missing, the previous valid rate was carried forward (following 
                     loan_value=rebalanced_loan_B,
                     lending_token_price=live_price_2B,
                     borrowing_token_price=live_price_3B,
-                    lltv=position.get('entry_liquidation_threshold_2B', position['entry_collateral_ratio_2B']),
+                    lltv=position.get('entry_liquidation_threshold_2b', position['entry_collateral_ratio_2b']),
                     side='borrowing',
-                    borrow_weight=position.get('entry_borrow_weight_3B', 1.0)
+                    borrow_weight=position.get('entry_borrow_weight_3b', 1.0)
                 )
 
                 # Helper function to format rebalance size in USD
@@ -1531,10 +1570,10 @@ When a rate was missing, the previous valid rate was carried forward (following 
 
                 # Calculate for all 4 legs
                 try:
-                    base_1A, reward_1A = service.calculate_leg_earnings_split(position, '1A', 'Lend', segment_start_ts, live_ts)
-                    base_2A, reward_2A = service.calculate_leg_earnings_split(position, '2A', 'Borrow', segment_start_ts, live_ts)
-                    base_2B, reward_2B = service.calculate_leg_earnings_split(position, '2B', 'Lend', segment_start_ts, live_ts)
-                    base_3B, reward_3B = service.calculate_leg_earnings_split(position, '3B', 'Borrow', segment_start_ts, live_ts)
+                    base_1A, reward_1A = service.calculate_leg_earnings_split(position, '1a', 'Lend', segment_start_ts, live_ts)
+                    base_2A, reward_2A = service.calculate_leg_earnings_split(position, '2a', 'Borrow', segment_start_ts, live_ts)
+                    base_2B, reward_2B = service.calculate_leg_earnings_split(position, '2b', 'Lend', segment_start_ts, live_ts)
+                    base_3B, reward_3B = service.calculate_leg_earnings_split(position, '3b', 'Borrow', segment_start_ts, live_ts)
                 except Exception as e:
                     # Fallback to zeros if calculation fails
                     base_1A, reward_1A = 0.0, 0.0
@@ -1544,13 +1583,13 @@ When a rate was missing, the previous valid rate was carried forward (following 
 
                 # Row 1: Protocol A - Lend token1
                 detail_data.append({
-                    'Protocol': position['protocol_A'],
+                    'Protocol': position['protocol_a'],
                     'Token': position['token1'],
                     'Action': 'Lend',
-                    'Weight': f"{L_A:.4f}",
-                    'Entry Rate': f"{entry_lend_rate_1A * 100:.2f}%",
+                    'Weight': f"{l_a:.4f}",
+                    'Entry Rate': f"{entry_lend_rate_1a * 100:.2f}%",
                     'Live Rate': f"{lend_1A * 100:.2f}%",
-                    'Entry Price': f"${entry_price_1A:.4f}",
+                    'Entry Price': f"${entry_price_1a:.4f}",
                     'Live Price': f"${live_price_1A:.4f}",
                     'Liquidation Price': format_liq_price(liq_1A),
                     'Token Amount': f"{entry_token_amount_1A:,.{precision_1A}f}",
@@ -1564,31 +1603,31 @@ When a rate was missing, the previous valid rate was carried forward (following 
                     'Fee Rate': '',  # NEW: No fee for Lend
                 })
 
-                # Calculate fees for leg 2A (delta if rebalanced, full if first segment)
+                # Calculate fees for leg 2a (delta if rebalanced, full if first segment)
                 if borrow_fee_2A > 0:
                     if last_rebalance is not None:
                         # Delta fees: only on ADDITIONAL borrowing since last rebalance
-                        prev_borrow_2A = last_rebalance['entry_token_amount_2A']
+                        prev_borrow_2A = last_rebalance['entry_token_amount_2a']
                         delta_borrow_2A = entry_token_amount_2A - prev_borrow_2A
                         if delta_borrow_2A > 0:
-                            fees_2A = borrow_fee_2A * delta_borrow_2A * entry_price_2A
+                            fees_2A = borrow_fee_2A * delta_borrow_2A * entry_price_2a
                         else:
                             fees_2A = 0.0  # Repayment or no change - no fees
                     else:
                         # First segment - full entry fees
-                        fees_2A = borrow_fee_2A * entry_token_amount_2A * entry_price_2A
+                        fees_2A = borrow_fee_2A * entry_token_amount_2A * entry_price_2a
                 else:
                     fees_2A = 0.0
 
                 # Row 2: Protocol A - Borrow token2
                 detail_data.append({
-                    'Protocol': position['protocol_A'],
+                    'Protocol': position['protocol_a'],
                     'Token': position['token2'],
                     'Action': 'Borrow',
-                    'Weight': f"{B_A:.4f}",
-                    'Entry Rate': f"{entry_borrow_rate_2A * 100:.2f}%",
+                    'Weight': f"{b_a:.4f}",
+                    'Entry Rate': f"{entry_borrow_rate_2a * 100:.2f}%",
                     'Live Rate': f"{borrow_2A * 100:.2f}%",
-                    'Entry Price': f"${entry_price_2A:.4f}",
+                    'Entry Price': f"${entry_price_2a:.4f}",
                     'Live Price': f"${live_price_2A:.4f}",
                     'Liquidation Price': format_liq_price(liq_2A),
                     'Token Amount': f"{entry_token_amount_2A:,.{precision_2A}f}",
@@ -1604,13 +1643,13 @@ When a rate was missing, the previous valid rate was carried forward (following 
 
                 # Row 3: Protocol B - Lend token2
                 detail_data.append({
-                    'Protocol': position['protocol_B'],
+                    'Protocol': position['protocol_b'],
                     'Token': position['token2'],
                     'Action': 'Lend',
-                    'Weight': f"{L_B:.4f}",
-                    'Entry Rate': f"{entry_lend_rate_2B * 100:.2f}%",
+                    'Weight': f"{l_b:.4f}",
+                    'Entry Rate': f"{entry_lend_rate_2b * 100:.2f}%",
                     'Live Rate': f"{lend_2B * 100:.2f}%",
-                    'Entry Price': f"${entry_price_2B:.4f}",
+                    'Entry Price': f"${entry_price_2b:.4f}",
                     'Live Price': f"${live_price_2B:.4f}",
                     'Liquidation Price': format_liq_price(liq_2B),
                     'Token Amount': f"{entry_token_amount_2B:,.{precision_2B}f}",
@@ -1624,31 +1663,31 @@ When a rate was missing, the previous valid rate was carried forward (following 
                     'Fee Rate': '',  # NEW: No fee for Lend
                 })
 
-                # Calculate fees for leg 3B (delta if rebalanced, full if first segment)
+                # Calculate fees for leg 3b (delta if rebalanced, full if first segment)
                 if borrow_fee_3B > 0:
                     if last_rebalance is not None:
                         # Delta fees: only on ADDITIONAL borrowing since last rebalance
                         prev_borrow_3B = last_rebalance['entry_token_amount_3B']
                         delta_borrow_3B = entry_token_amount_3B - prev_borrow_3B
                         if delta_borrow_3B > 0:
-                            fees_3B = borrow_fee_3B * delta_borrow_3B * entry_price_3B
+                            fees_3B = borrow_fee_3B * delta_borrow_3B * entry_price_3b
                         else:
                             fees_3B = 0.0  # Repayment or no change - no fees
                     else:
                         # First segment - full entry fees
-                        fees_3B = borrow_fee_3B * entry_token_amount_3B * entry_price_3B
+                        fees_3B = borrow_fee_3B * entry_token_amount_3B * entry_price_3b
                 else:
                     fees_3B = 0.0
 
                 # Row 4: Protocol B - Borrow token3 (4th leg)
                 detail_data.append({
-                    'Protocol': position['protocol_B'],
+                    'Protocol': position['protocol_b'],
                     'Token': position['token3'],
                     'Action': 'Borrow',
-                    'Weight': f"{B_B:.4f}",
-                    'Entry Rate': f"{entry_borrow_rate_3B * 100:.2f}%",
+                    'Weight': f"{b_b:.4f}",
+                    'Entry Rate': f"{entry_borrow_rate_3b * 100:.2f}%",
                     'Live Rate': f"{borrow_3B * 100:.2f}%",
-                    'Entry Price': f"${entry_price_3B:.4f}",
+                    'Entry Price': f"${entry_price_3b:.4f}",
                     'Live Price': f"${live_price_3B:.4f}",
                     'Liquidation Price': format_liq_price(liq_3B),
                     'Token Amount': f"{entry_token_amount_3B:,.{precision_3B}f}",
@@ -1664,8 +1703,8 @@ When a rate was missing, the previous valid rate was carried forward (following 
 
                 # Calculate Strategy Summary (sum of all segments: rebalanced + live)
                 # Live segment totals - separate lend/borrow, then combine
-                live_base_lend = base_1A + base_2B  # lend legs (1A, 2B)
-                live_base_borrow = base_2A + base_3B  # borrow legs (2A, 3B)
+                live_base_lend = base_1A + base_2B  # lend legs (1a, 2b)
+                live_base_borrow = base_2A + base_3B  # borrow legs (2a, 3b)
                 live_base_earnings = live_base_lend - live_base_borrow  # earnings - costs
                 live_reward_earnings = reward_1A + reward_2A + reward_2B + reward_3B
                 live_fees = fees_2A + fees_3B
@@ -1696,21 +1735,21 @@ When a rate was missing, the previous valid rate was carried forward (following 
                         # Create position-like object for this rebalance
                         rebal_as_pos = pd.Series({
                             'deployment_usd': rebal['deployment_usd'],
-                            'L_A': rebal['L_A'], 'B_A': rebal['B_A'],
-                            'L_B': rebal['L_B'], 'B_B': rebal['B_B'],
+                            'l_a': rebal['l_a'], 'b_a': rebal['b_a'],
+                            'l_b': rebal['l_b'], 'b_b': rebal['b_b'],
                             'token1': position['token1'], 'token2': position['token2'], 'token3': position['token3'],
                             'token1_contract': position['token1_contract'],
                             'token2_contract': position['token2_contract'],
                             'token3_contract': position['token3_contract'],
-                            'protocol_A': position['protocol_A'], 'protocol_B': position['protocol_B']
+                            'protocol_a': position['protocol_a'], 'protocol_b': position['protocol_b']
                         })
 
                         # Calculate base/reward earnings for all 4 legs
                         try:
-                            rebal_base_1A, rebal_reward_1A = service.calculate_leg_earnings_split(rebal_as_pos, '1A', 'Lend', opening_ts_rebal, closing_ts_rebal)
-                            rebal_base_2A, rebal_reward_2A = service.calculate_leg_earnings_split(rebal_as_pos, '2A', 'Borrow', opening_ts_rebal, closing_ts_rebal)
-                            rebal_base_2B, rebal_reward_2B = service.calculate_leg_earnings_split(rebal_as_pos, '2B', 'Lend', opening_ts_rebal, closing_ts_rebal)
-                            rebal_base_3B, rebal_reward_3B = service.calculate_leg_earnings_split(rebal_as_pos, '3B', 'Borrow', opening_ts_rebal, closing_ts_rebal)
+                            rebal_base_1A, rebal_reward_1A = service.calculate_leg_earnings_split(rebal_as_pos, '1a', 'Lend', opening_ts_rebal, closing_ts_rebal)
+                            rebal_base_2A, rebal_reward_2A = service.calculate_leg_earnings_split(rebal_as_pos, '2a', 'Borrow', opening_ts_rebal, closing_ts_rebal)
+                            rebal_base_2B, rebal_reward_2B = service.calculate_leg_earnings_split(rebal_as_pos, '2b', 'Lend', opening_ts_rebal, closing_ts_rebal)
+                            rebal_base_3B, rebal_reward_3B = service.calculate_leg_earnings_split(rebal_as_pos, '3b', 'Borrow', opening_ts_rebal, closing_ts_rebal)
 
                             # Calculate segment summary values (same logic as Segment Summary)
                             # Separate lend and borrow, then combine
@@ -1727,25 +1766,25 @@ When a rate was missing, the previous valid rate was carried forward (following 
                             if idx > 0:
                                 prev_rebal = rebalances_temp.iloc[idx - 1]
 
-                            # Leg 2A fees (borrow)
-                            borrow_fee_2A_seg = position.get('entry_borrow_fee_2A', 0) or 0
+                            # Leg 2a fees (borrow)
+                            borrow_fee_2A_seg = position.get('entry_borrow_fee_2a', 0) or 0
                             if borrow_fee_2A_seg > 0:
                                 if prev_rebal is not None:
-                                    delta_borrow_2A = rebal['entry_token_amount_2A'] - prev_rebal['entry_token_amount_2A']
+                                    delta_borrow_2A = rebal['entry_token_amount_2a'] - prev_rebal['entry_token_amount_2a']
                                     if delta_borrow_2A > 0:
-                                        segment_fees += borrow_fee_2A_seg * delta_borrow_2A * rebal['opening_price_2A']
+                                        segment_fees += borrow_fee_2A_seg * delta_borrow_2A * rebal['opening_price_2a']
                                 else:
-                                    segment_fees += borrow_fee_2A_seg * rebal['entry_token_amount_2A'] * rebal['opening_price_2A']
+                                    segment_fees += borrow_fee_2A_seg * rebal['entry_token_amount_2a'] * rebal['opening_price_2a']
 
-                            # Leg 3B fees (borrow)
-                            borrow_fee_3B_seg = position.get('entry_borrow_fee_3B', 0) or 0
+                            # Leg 3b fees (borrow)
+                            borrow_fee_3B_seg = position.get('entry_borrow_fee_3b', 0) or 0
                             if borrow_fee_3B_seg > 0:
                                 if prev_rebal is not None:
-                                    delta_borrow_3B = rebal['entry_token_amount_3B'] - prev_rebal['entry_token_amount_3B']
+                                    delta_borrow_3B = rebal['entry_token_amount_3b'] - prev_rebal['entry_token_amount_3b']
                                     if delta_borrow_3B > 0:
-                                        segment_fees += borrow_fee_3B_seg * delta_borrow_3B * rebal['opening_price_3B']
+                                        segment_fees += borrow_fee_3B_seg * delta_borrow_3B * rebal['opening_price_3b']
                                 else:
-                                    segment_fees += borrow_fee_3B_seg * rebal['entry_token_amount_3B'] * rebal['opening_price_3B']
+                                    segment_fees += borrow_fee_3B_seg * rebal['entry_token_amount_3b'] * rebal['opening_price_3b']
 
                             # Segment totals (same as Segment Summary display)
                             segment_total_earnings = segment_base + segment_reward
@@ -1772,22 +1811,26 @@ When a rate was missing, the previous valid rate was carried forward (following 
                 st.markdown("**Strategy Summary (Real + Unreal)**")
                 deployment = position['deployment_usd']
 
-                col1, col2, col3, col4, col5 = st.columns(5)
-                with col1:
-                    strategy_pnl_pct = (strategy_pnl / deployment) * 100
-                    st.metric("Total PnL", f"${strategy_pnl:,.2f} ({strategy_pnl_pct:.2f}%)")
-                with col2:
-                    strategy_earnings_pct = (strategy_total_earnings / deployment) * 100
-                    st.metric("Total Earnings", f"${strategy_total_earnings:,.2f} ({strategy_earnings_pct:.2f}%)")
-                with col3:
-                    strategy_base_pct = (strategy_base_earnings / deployment) * 100
-                    st.metric("Base Earnings", f"${strategy_base_earnings:,.2f} ({strategy_base_pct:.2f}%)")
-                with col4:
-                    strategy_reward_pct = (strategy_reward_earnings / deployment) * 100
-                    st.metric("Reward Earnings", f"${strategy_reward_earnings:,.2f} ({strategy_reward_pct:.2f}%)")
-                with col5:
-                    strategy_fees_pct = (strategy_fees / deployment) * 100
-                    st.metric("Fees", f"${strategy_fees:,.2f} ({strategy_fees_pct:.2f}%)")
+                # GUARD: Check for zero deployment
+                if deployment > 0:
+                    col1, col2, col3, col4, col5 = st.columns(5)
+                    with col1:
+                        strategy_pnl_pct = (strategy_pnl / deployment) * 100
+                        st.metric("Total PnL", f"${strategy_pnl:,.2f} ({strategy_pnl_pct:.2f}%)")
+                    with col2:
+                        strategy_earnings_pct = (strategy_total_earnings / deployment) * 100
+                        st.metric("Total Earnings", f"${strategy_total_earnings:,.2f} ({strategy_earnings_pct:.2f}%)")
+                    with col3:
+                        strategy_base_pct = (strategy_base_earnings / deployment) * 100
+                        st.metric("Base Earnings", f"${strategy_base_earnings:,.2f} ({strategy_base_pct:.2f}%)")
+                    with col4:
+                        strategy_reward_pct = (strategy_reward_earnings / deployment) * 100
+                        st.metric("Reward Earnings", f"${strategy_reward_earnings:,.2f} ({strategy_reward_pct:.2f}%)")
+                    with col5:
+                        strategy_fees_pct = (strategy_fees / deployment) * 100
+                        st.metric("Fees", f"${strategy_fees:,.2f} ({strategy_fees_pct:.2f}%)")
+                else:
+                    st.warning("Invalid deployment amount - cannot calculate percentages")
 
                 st.markdown("---")
 
@@ -1870,8 +1913,8 @@ When a rate was missing, the previous valid rate was carried forward (following 
 
                 # Calculate summary values from token table
                 # Separate lend and borrow for base, then combine: earnings - costs
-                base_lend = base_1A + base_2B  # lend legs (1A, 2B)
-                base_borrow = base_2A + base_3B  # borrow legs (2A, 3B)
+                base_lend = base_1A + base_2B  # lend legs (1a, 2b)
+                base_borrow = base_2A + base_3B  # borrow legs (2a, 3b)
                 total_base_earnings = base_lend - base_borrow  # earnings - costs
                 # Rewards are all positive, just sum
                 total_reward_earnings = reward_1A + reward_2A + reward_2B + reward_3B
@@ -1882,22 +1925,26 @@ When a rate was missing, the previous valid rate was carried forward (following 
                 # Get deployment for percentage calculation
                 deployment = position['deployment_usd']
 
-                col1, col2, col3, col4, col5 = st.columns(5)
-                with col1:
-                    pnl_pct = (realised_pnl / deployment) * 100
-                    st.metric("Realised PnL", f"${realised_pnl:,.2f} ({pnl_pct:.2f}%)")
-                with col2:
-                    earnings_pct = (total_earnings / deployment) * 100
-                    st.metric("Total Earnings", f"${total_earnings:,.2f} ({earnings_pct:.2f}%)")
-                with col3:
-                    base_pct = (total_base_earnings / deployment) * 100
-                    st.metric("Base Earnings", f"${total_base_earnings:,.2f} ({base_pct:.2f}%)")
-                with col4:
-                    reward_pct = (total_reward_earnings / deployment) * 100
-                    st.metric("Reward Earnings", f"${total_reward_earnings:,.2f} ({reward_pct:.2f}%)")
-                with col5:
-                    fees_pct = (total_fees / deployment) * 100
-                    st.metric("Fees", f"${total_fees:,.2f} ({fees_pct:.2f}%)")
+                # GUARD: Check for zero deployment
+                if deployment > 0:
+                    col1, col2, col3, col4, col5 = st.columns(5)
+                    with col1:
+                        pnl_pct = (realised_pnl / deployment) * 100
+                        st.metric("Realised PnL", f"${realised_pnl:,.2f} ({pnl_pct:.2f}%)")
+                    with col2:
+                        earnings_pct = (total_earnings / deployment) * 100
+                        st.metric("Total Earnings", f"${total_earnings:,.2f} ({earnings_pct:.2f}%)")
+                    with col3:
+                        base_pct = (total_base_earnings / deployment) * 100
+                        st.metric("Base Earnings", f"${total_base_earnings:,.2f} ({base_pct:.2f}%)")
+                    with col4:
+                        reward_pct = (total_reward_earnings / deployment) * 100
+                        st.metric("Reward Earnings", f"${total_reward_earnings:,.2f} ({reward_pct:.2f}%)")
+                    with col5:
+                        fees_pct = (total_fees / deployment) * 100
+                        st.metric("Fees", f"${total_fees:,.2f} ({fees_pct:.2f}%)")
+                else:
+                    st.warning("Invalid deployment amount - cannot calculate percentages")
 
                 # Add separator
                 st.markdown("---")
@@ -1967,7 +2014,7 @@ When a rate was missing, the previous valid rate was carried forward (following 
                     st.write("3. Add rebalance record to history")
                     st.write("4. Move token2 between Protocol A (borrow) and Protocol B (lend)")
                     st.write("")
-                    st.info("Note: Weightings (L_A, B_A, L_B, B_B) remain constant. Only token amounts adjust.")
+                    st.info("Note: Weightings (l_a, b_a, l_b, b_b) remain constant. Only token amounts adjust.")
 
                     col1, col2 = st.columns(2)
                     with col1:
@@ -2053,16 +2100,16 @@ When a rate was missing, the previous valid rate was carried forward (following 
                     for idx, rebalance in rebalances.iterrows():
                         # Helper to get protocol for each leg
                         def get_protocol_for_leg(leg_id):
-                            if leg_id in ['1A', '2A']:
-                                return position['protocol_A']
-                            else:  # '2B', '3B'
-                                return position['protocol_B']
+                            if leg_id in ['1a', '2a']:
+                                return position['protocol_a']
+                            else:  # '2b', '3b'
+                                return position['protocol_b']
 
                         # Helper to get action for each leg
                         def get_action_for_leg(leg_id):
-                            if leg_id in ['1A', '2B']:
+                            if leg_id in ['1a', '2b']:
                                 return 'Lend'
-                            else:  # '2A', '3B'
+                            else:  # '2a', '3b'
                                 return 'Borrow'
 
                         # Calculate segment summary metrics BEFORE creating title
@@ -2086,18 +2133,18 @@ When a rate was missing, the previous valid rate was carried forward (following 
                         # Build position-like Series for earnings calculation
                         rebalance_as_position = pd.Series({
                             'deployment_usd': rebalance['deployment_usd'],
-                            'L_A': rebalance['L_A'],
-                            'B_A': rebalance['B_A'],
-                            'L_B': rebalance['L_B'],
-                            'B_B': rebalance['B_B'],
+                            'l_a': rebalance['l_a'],
+                            'b_a': rebalance['b_a'],
+                            'l_b': rebalance['l_b'],
+                            'b_b': rebalance['b_b'],
                             'token1': position['token1'],
                             'token2': position['token2'],
                             'token3': position['token3'],
                             'token1_contract': position['token1_contract'],
                             'token2_contract': position['token2_contract'],
                             'token3_contract': position['token3_contract'],
-                            'protocol_A': position['protocol_A'],
-                            'protocol_B': position['protocol_B']
+                            'protocol_a': position['protocol_a'],
+                            'protocol_b': position['protocol_b']
                         })
 
                         opening_ts = to_seconds(rebalance['opening_timestamp'])
@@ -2107,7 +2154,7 @@ When a rate was missing, the previous valid rate was carried forward (following 
                             closing_ts = to_seconds(rebalance['closing_timestamp'])
 
                         # Loop through all 4 legs to calculate base/reward earnings and fees
-                        for leg in ['1A', '2A', '2B', '3B']:
+                        for leg in ['1a', '2a', '2b', '3b']:
                             action = get_action_for_leg(leg)
 
                             # Calculate base and reward earnings for this leg
@@ -2127,10 +2174,10 @@ When a rate was missing, the previous valid rate was carried forward (following 
 
                             # Calculate fees for borrow legs
                             if action == 'Borrow':
-                                if leg == '2A':
-                                    borrow_fee = position.get('entry_borrow_fee_2A', 0) or 0
-                                else:  # '3B'
-                                    borrow_fee = position.get('entry_borrow_fee_3B', 0) or 0
+                                if leg == '2a':
+                                    borrow_fee = position.get('entry_borrow_fee_2a', 0) or 0
+                                else:  # '3b'
+                                    borrow_fee = position.get('entry_borrow_fee_3b', 0) or 0
 
                                 if borrow_fee > 0:
                                     if prev_rebalance is not None:
@@ -2155,7 +2202,7 @@ When a rate was missing, the previous valid rate was carried forward (following 
                         # Calculate APR from realized PnL
                         realised_pnl = rebalance['realised_pnl']
                         deployment = rebalance['deployment_usd']
-                        if duration_days > 0:
+                        if duration_days > 0 and deployment > 0:
                             apr = (realised_pnl / deployment) * (365 / duration_days) * 100
                         else:
                             apr = 0.0
@@ -2178,11 +2225,11 @@ When a rate was missing, the previous valid rate was carried forward (following 
 
                             # Helper to get token symbol for each leg
                             def get_token_for_leg(leg_id):
-                                if leg_id == '1A':
+                                if leg_id == '1a':
                                     return position['token1']
-                                elif leg_id in ['2A', '2B']:
+                                elif leg_id in ['2a', '2b']:
                                     return position['token2']
-                                else:  # '3B'
+                                else:  # '3b'
                                     return position['token3']
 
                             # Helper to format liquidation price
@@ -2203,18 +2250,18 @@ When a rate was missing, the previous valid rate was carried forward (following 
                             # total_base_earnings, total_reward_earnings, total_fees are already available
 
                             # Build rows for all 4 legs
-                            for leg in ['1A', '2A', '2B', '3B']:
+                            for leg in ['1a', '2a', '2b', '3b']:
                                 action = get_action_for_leg(leg)
 
                                 # Determine rate column names based on action
                                 if action == 'Lend':
                                     opening_rate_col = f'opening_lend_rate_{leg}'
                                     closing_rate_col = f'closing_lend_rate_{leg}'
-                                    weight_col = f'L_{"A" if leg in ["1A", "2A"] else "B"}'
+                                    weight_col = f'l_{"a" if leg in ["1a", "2a"] else "b"}'
                                 else:  # Borrow
                                     opening_rate_col = f'opening_borrow_rate_{leg}'
                                     closing_rate_col = f'closing_borrow_rate_{leg}'
-                                    weight_col = f'B_{"A" if leg in ["1A", "2A"] else "B"}'
+                                    weight_col = f'b_{"b" if leg in ["1a", "2a"] else "b"}'
 
                                 # Token Rebalance Action: Show for all legs (future-proof)
                                 # Compare current entry_token_amount to previous rebalance's entry_token_amount
@@ -2256,18 +2303,18 @@ When a rate was missing, the previous valid rate was carried forward (following 
                                     # This is the last rebalance, compare to LIVE position
                                     # Calculate live position token amounts from current weights
                                     live_deployment = position['deployment_usd']
-                                    if leg == '1A':
-                                        live_weight = position['L_A']
-                                        live_price = position['entry_price_1A']
-                                    elif leg == '2A':
-                                        live_weight = position['B_A']
-                                        live_price = position['entry_price_2A']
-                                    elif leg == '2B':
-                                        live_weight = position['L_B']
-                                        live_price = position['entry_price_2B']
-                                    else:  # '3B'
-                                        live_weight = position['B_B']
-                                        live_price = position['entry_price_3B']
+                                    if leg == '1a':
+                                        live_weight = position['l_a']
+                                        live_price = position['entry_price_1a']
+                                    elif leg == '2a':
+                                        live_weight = position['b_a']
+                                        live_price = position['entry_price_2a']
+                                    elif leg == '2b':
+                                        live_weight = position['l_b']
+                                        live_price = position['entry_price_2b']
+                                    else:  # '3b'
+                                        live_weight = position['b_b']
+                                        live_price = position['entry_price_3b']
 
                                     next_amt = (live_weight * live_deployment) / live_price if live_price > 0 else 0
                                 else:
@@ -2297,18 +2344,18 @@ When a rate was missing, the previous valid rate was carried forward (following 
                                 # Create position-like Series from rebalance data
                                 rebalance_as_position = pd.Series({
                                     'deployment_usd': rebalance['deployment_usd'],
-                                    'L_A': rebalance['L_A'],
-                                    'B_A': rebalance['B_A'],
-                                    'L_B': rebalance['L_B'],
-                                    'B_B': rebalance['B_B'],
+                                    'l_a': rebalance['l_a'],
+                                    'b_a': rebalance['b_a'],
+                                    'l_b': rebalance['l_b'],
+                                    'b_b': rebalance['b_b'],
                                     'token1': position['token1'],
                                     'token2': position['token2'],
                                     'token3': position['token3'],
                                     'token1_contract': position['token1_contract'],
                                     'token2_contract': position['token2_contract'],
                                     'token3_contract': position['token3_contract'],
-                                    'protocol_A': position['protocol_A'],
-                                    'protocol_B': position['protocol_B']
+                                    'protocol_a': position['protocol_a'],
+                                    'protocol_b': position['protocol_b']
                                 })
 
                                 opening_ts = to_seconds(rebalance['opening_timestamp'])
@@ -2338,10 +2385,10 @@ When a rate was missing, the previous valid rate was carried forward (following 
                                 fee_rate_display = ''
                                 if action == 'Borrow':
                                     # Get borrow fee rate from position
-                                    if leg == '2A':
-                                        borrow_fee = position.get('entry_borrow_fee_2A', 0) or 0
-                                    else:  # '3B'
-                                        borrow_fee = position.get('entry_borrow_fee_3B', 0) or 0
+                                    if leg == '2a':
+                                        borrow_fee = position.get('entry_borrow_fee_2a', 0) or 0
+                                    else:  # '3b'
+                                        borrow_fee = position.get('entry_borrow_fee_3b', 0) or 0
 
                                     if borrow_fee > 0:
                                         fee_rate_display = f"{borrow_fee * 100:.2f}%"
@@ -2385,22 +2432,26 @@ When a rate was missing, the previous valid rate was carried forward (following 
                             # Realised PnL = Total Earnings - Fees
                             realised_pnl = total_earnings - total_fees
 
-                            col1, col2, col3, col4, col5 = st.columns(5)
-                            with col1:
-                                pnl_pct = (realised_pnl / deployment) * 100
-                                st.metric("Realised PnL", f"${realised_pnl:,.2f} ({pnl_pct:.2f}%)")
-                            with col2:
-                                earnings_pct = (total_earnings / deployment) * 100
-                                st.metric("Total Earnings", f"${total_earnings:,.2f} ({earnings_pct:.2f}%)")
-                            with col3:
-                                base_pct = (total_base_earnings / deployment) * 100
-                                st.metric("Base Earnings", f"${total_base_earnings:,.2f} ({base_pct:.2f}%)")
-                            with col4:
-                                reward_pct = (total_reward_earnings / deployment) * 100
-                                st.metric("Reward Earnings", f"${total_reward_earnings:,.2f} ({reward_pct:.2f}%)")
-                            with col5:
-                                fees_pct = (total_fees / deployment) * 100
-                                st.metric("Fees", f"${total_fees:,.2f} ({fees_pct:.2f}%)")
+                            # GUARD: Check for zero deployment
+                            if deployment > 0:
+                                col1, col2, col3, col4, col5 = st.columns(5)
+                                with col1:
+                                    pnl_pct = (realised_pnl / deployment) * 100
+                                    st.metric("Realised PnL", f"${realised_pnl:,.2f} ({pnl_pct:.2f}%)")
+                                with col2:
+                                    earnings_pct = (total_earnings / deployment) * 100
+                                    st.metric("Total Earnings", f"${total_earnings:,.2f} ({earnings_pct:.2f}%)")
+                                with col3:
+                                    base_pct = (total_base_earnings / deployment) * 100
+                                    st.metric("Base Earnings", f"${total_base_earnings:,.2f} ({base_pct:.2f}%)")
+                                with col4:
+                                    reward_pct = (total_reward_earnings / deployment) * 100
+                                    st.metric("Reward Earnings", f"${total_reward_earnings:,.2f} ({reward_pct:.2f}%)")
+                                with col5:
+                                    fees_pct = (total_fees / deployment) * 100
+                                    st.metric("Fees", f"${total_fees:,.2f} ({fees_pct:.2f}%)")
+                            else:
+                                st.warning("Invalid rebalance deployment amount - cannot calculate percentages")
 
                             # Calculate holding days
                             # DESIGN PRINCIPLE: Convert datetime strings to Unix seconds for arithmetic
@@ -2420,8 +2471,17 @@ When a rate was missing, the previous valid rate was carried forward (following 
 
         conn.close()
 
+    except KeyError as e:
+        st.error(f"❌ KeyError loading positions: {e}")
+        st.write("### Full Error Traceback:")
+        import traceback
+        st.code(traceback.format_exc())
+
     except Exception as e:
         st.error(f"❌ Error loading positions: {e}")
+        st.write("### Full Error Traceback:")
+        import traceback
+        st.code(traceback.format_exc())
 
 
 def render_zero_liquidity_tab(zero_liquidity_results: pd.DataFrame, deployment_usd: float,
@@ -2460,7 +2520,7 @@ def render_zero_liquidity_tab(zero_liquidity_results: pd.DataFrame, deployment_u
 
             with st.expander(
                 f"▶ {token_flow} | "
-                f"{row['protocol_A']} ↔ {row['protocol_B']} | "
+                f"{row['protocol_a']} ↔ {row['protocol_b']} | "
                 f"{net_apr_indicator} Net APR {net_apr_value * 100:.2f}% | {apr5_indicator} 5day APR {apr5_value * 100:.2f}%{max_size_text}",
                 expanded=False
             ):
@@ -2721,14 +2781,14 @@ def render_dashboard(data_loader: DataLoader, mode: str):
     if cached_results is not None:
         # Use cached analysis from database (returns DataFrame only)
         all_results = cached_results
-        # Extract protocol_A and protocol_B from the best strategy (first row, sorted by net_apr desc)
+        # Extract protocol_a and protocol_b from the best strategy (first row, sorted by net_apr desc)
         if not all_results.empty:
             best_strategy = all_results.iloc[0]
-            protocol_A = best_strategy['protocol_A']
-            protocol_B = best_strategy['protocol_B']
+            protocol_a = best_strategy['protocol_a']  # Strategy data uses mixed-case
+            protocol_b = best_strategy['protocol_b']  # Strategy data uses mixed-case
         else:
-            protocol_A = None
-            protocol_B = None
+            protocol_a = None
+            protocol_b = None
 
         st.sidebar.caption("✅ Using cached analysis from database")
         print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] ✅ Cache HIT: {len(all_results)} strategies")
@@ -2758,7 +2818,7 @@ def render_dashboard(data_loader: DataLoader, mode: str):
         print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] RateAnalyzer initialized in {analyzer_init_time:.1f}ms")
 
         analysis_run_start = time.time()
-        protocol_A, protocol_B, all_results = analyzer.find_best_protocol_pair()
+        protocol_a, protocol_b, all_results = analyzer.find_best_protocol_pair()
         analysis_run_time = (time.time() - analysis_run_start) * 1000
         print(f"[ANALYSIS COMPLETE] Found {len(all_results)} valid strategies")
         print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] Analysis completed: {len(all_results)} strategies in {analysis_run_time:.1f}ms")
@@ -2837,8 +2897,8 @@ def render_dashboard(data_loader: DataLoader, mode: str):
 
     if protocol_filter and not display_results.empty:
         display_results = display_results[
-            display_results['protocol_A'].isin(protocol_filter) |
-            display_results['protocol_B'].isin(protocol_filter)
+            display_results['protocol_a'].isin(protocol_filter) |
+            display_results['protocol_b'].isin(protocol_filter)
         ]
 
     filter_time = (time.time() - filter_start) * 1000

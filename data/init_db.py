@@ -11,6 +11,10 @@ Usage:
 import os
 import sqlite3
 from pathlib import Path
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 try:
     import psycopg2
@@ -77,33 +81,42 @@ def init_postgres(connection_url):
     print(f"🌐 Connecting to PostgreSQL...")
     conn = psycopg2.connect(connection_url)
     cursor = conn.cursor()
-    
-    # Execute schema
-    cursor.execute(schema_sql)
-    conn.commit()
+
+    # Execute schema (PostgreSQL needs autocommit for some DDL statements)
+    conn.set_session(autocommit=True)
+
+    # Split statements and execute one by one
+    statements = [stmt.strip() for stmt in schema_sql.split(';') if stmt.strip()]
+    for i, stmt in enumerate(statements):
+        try:
+            cursor.execute(stmt)
+        except Exception as e:
+            print(f"⚠️  Warning on statement {i+1}: {e}")
+            # Continue anyway - some statements might already exist
     
     # Verify tables created
     cursor.execute("""
-        SELECT table_name 
-        FROM information_schema.tables 
+        SELECT table_name
+        FROM information_schema.tables
         WHERE table_schema = 'public'
           AND table_type = 'BASE TABLE'
+        ORDER BY table_name
     """)
     tables = [row[0] for row in cursor.fetchall()]
-    
-    print(f"✅ Created tables: {', '.join(tables)}")
-    
+
+    print(f"\n✅ Created {len(tables)} tables: {', '.join(tables)}")
+
     # Verify views created
     cursor.execute("""
-        SELECT table_name 
-        FROM information_schema.tables 
+        SELECT table_name
+        FROM information_schema.tables
         WHERE table_schema = 'public'
           AND table_type = 'VIEW'
     """)
     views = [row[0] for row in cursor.fetchall()]
-    
-    print(f"✅ Created views: {', '.join(views)}")
-    
+
+    print(f"✅ Created {len(views)} views: {', '.join(views)}")
+
     conn.close()
     print(f"✅ Database initialized: Supabase PostgreSQL\n")
 

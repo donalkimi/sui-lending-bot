@@ -30,14 +30,14 @@ class PositionCalculator:
     
     def calculate_positions(
         self,
-        liquidation_threshold_A: float,
-        liquidation_threshold_B: float,
-        collateral_ratio_A: float,
-        collateral_ratio_B: float,
-        borrow_weight_A: float = 1.0,
-        borrow_weight_B: float = 1.0,
-        protocol_A: Optional[str] = None,
-        protocol_B: Optional[str] = None,
+        liquidation_threshold_a: float,
+        liquidation_threshold_b: float,
+        collateral_ratio_a: float,
+        collateral_ratio_b: float,
+        borrow_weight_a: float = 1.0,
+        borrow_weight_b: float = 1.0,
+        protocol_a: Optional[str] = None,
+        protocol_b: Optional[str] = None,
         token1: Optional[str] = None,
         token2: Optional[str] = None
     ) -> Dict[str, float]:
@@ -45,92 +45,92 @@ class PositionCalculator:
         Calculate recursive position sizes that converge to steady state
 
         The strategy (MARKET NEUTRAL - token1 must be a stablecoin):
-        1. Lend L_A(0) = 1.0 of token1 (STABLECOIN) in Protocol A
-        2. Borrow B_A(0) = L_A * r_A of token2 (HIGH-YIELD TOKEN) from Protocol A
-        3. Lend L_B(0) = B_A of token2 (HIGH-YIELD TOKEN) in Protocol B
-        4. Borrow B_B(0) = L_B * r_B of token1 (STABLECOIN) from Protocol B
-        5. Deposit B_B as L_A(1) back into Protocol A
+        1. Lend l_a(0) = 1.0 of token1 (STABLECOIN) in Protocol A
+        2. Borrow b_a(0) = l_a * r_A of token2 (HIGH-YIELD TOKEN) from Protocol A
+        3. Lend l_b(0) = b_a of token2 (HIGH-YIELD TOKEN) in Protocol B
+        4. Borrow b_b(0) = l_b * r_B of token1 (STABLECOIN) from Protocol B
+        5. Deposit b_b as l_a(1) back into Protocol A
         6. Repeat infinitely...
 
         By starting with a stablecoin lend, you remain market neutral with no
         directional price exposure to the high-yield token.
 
         Args:
-            liquidation_threshold_A: Liquidation LTV for Protocol A (e.g., 0.75 for 75%)
-            liquidation_threshold_B: Liquidation LTV for Protocol B (e.g., 0.80 for 80%)
-            collateral_ratio_A: Max LTV for Protocol A (e.g., 0.70 for 70%)
-            collateral_ratio_B: Max LTV for Protocol B (e.g., 0.75 for 75%)
-            borrow_weight_A: Borrow weight multiplier for token2 (default 1.0)
-            borrow_weight_B: Borrow weight multiplier for token3 (default 1.0)
+            liquidation_threshold_a: Liquidation LTV for Protocol A (e.g., 0.75 for 75%)
+            liquidation_threshold_b: Liquidation LTV for Protocol B (e.g., 0.80 for 80%)
+            collateral_ratio_a: Max LTV for Protocol A (e.g., 0.70 for 70%)
+            collateral_ratio_b: Max LTV for Protocol B (e.g., 0.75 for 75%)
+            borrow_weight_a: Borrow weight multiplier for token2 (default 1.0)
+            borrow_weight_b: Borrow weight multiplier for token3 (default 1.0)
 
         Returns:
-            Dictionary with position sizes: {L_A, B_A, L_B, B_B}
+            Dictionary with position sizes: {l_a, b_a, l_b, b_b}
         """
         # Use liquidation threshold instead of collateral ratio with safety buffer AND borrow weights
         # Borrow weight reduces effective collateral (higher weight = less borrowing capacity)
-        r_A = (liquidation_threshold_A / borrow_weight_A) / (1 + self.liq_dist)
-        r_B = (liquidation_threshold_B / borrow_weight_B) / (1 + self.liq_dist)
+        r_A = (liquidation_threshold_a / borrow_weight_a) / (1 + self.liq_dist)
+        r_B = (liquidation_threshold_b / borrow_weight_b) / (1 + self.liq_dist)
 
         # Geometric series convergence
-        # L_A = 1 + r_A*r_B + (r_A*r_B)^2 + ... = 1 / (1 - r_A*r_B)
-        L_A = 1.0 / (1.0 - r_A * r_B)
-        B_A = L_A * r_A
-        L_B = B_A  # All borrowed token2 is lent in Protocol B
-        B_B = L_B * r_B
+        # l_a = 1 + r_A*r_B + (r_A*r_B)^2 + ... = 1 / (1 - r_A*r_B)
+        l_a = 1.0 / (1.0 - r_A * r_B)
+        b_a = l_a * r_A
+        l_b = b_a  # All borrowed token2 is lent in Protocol B
+        b_b = l_b * r_B
 
         # Calculate effective LTV (on-the-fly, not stored in return dict)
-        effective_ltv_A = (B_A / L_A) * borrow_weight_A
-        effective_ltv_B = (B_B / L_B) * borrow_weight_B
+        effective_ltv_A = (b_a / l_a) * borrow_weight_a
+        effective_ltv_B = (b_b / l_b) * borrow_weight_b
 
         # AUTO-ADJUSTMENT: Bring effective LTV down to 99.5% of maxCF if exceeded
         adjusted_A = False
         adjusted_B = False
 
         # Build context strings for debug messages
-        context_A = f" [{protocol_A} - Lend {token1}]" if protocol_A and token1 else ""
-        context_B = f" [{protocol_B} - Lend {token2}]" if protocol_B and token2 else ""
+        context_A = f" [{protocol_a} - Lend {token1}]" if protocol_a and token1 else ""
+        context_B = f" [{protocol_b} - Lend {token2}]" if protocol_b and token2 else ""
 
-        if effective_ltv_A > collateral_ratio_A:
-            print(f"⚠️  Adjusting r_A{context_A}: effective_LTV_A ({effective_ltv_A:.4f}) > maxCF_A ({collateral_ratio_A:.4f})")
-            print(f"   Setting effective_LTV_A = {collateral_ratio_A * 0.995:.4f} (99.5% of maxCF)")
-            r_A = (collateral_ratio_A * 0.995) / borrow_weight_A
+        if effective_ltv_A > collateral_ratio_a:
+            print(f"⚠️  Adjusting r_A{context_A}: effective_LTV_A ({effective_ltv_A:.4f}) > maxCF_A ({collateral_ratio_a:.4f})")
+            print(f"   Setting effective_LTV_A = {collateral_ratio_a * 0.995:.4f} (99.5% of maxCF)")
+            r_A = (collateral_ratio_a * 0.995) / borrow_weight_a
             adjusted_A = True
 
-        if effective_ltv_B > collateral_ratio_B:
-            print(f"⚠️  Adjusting r_B{context_B}: effective_LTV_B ({effective_ltv_B:.4f}) > maxCF_B ({collateral_ratio_B:.4f})")
-            print(f"   Setting effective_LTV_B = {collateral_ratio_B * 0.995:.4f} (99.5% of maxCF)")
-            r_B = (collateral_ratio_B * 0.995) / borrow_weight_B
+        if effective_ltv_B > collateral_ratio_b:
+            print(f"⚠️  Adjusting r_B{context_B}: effective_LTV_B ({effective_ltv_B:.4f}) > maxCF_B ({collateral_ratio_b:.4f})")
+            print(f"   Setting effective_LTV_B = {collateral_ratio_b * 0.995:.4f} (99.5% of maxCF)")
+            r_B = (collateral_ratio_b * 0.995) / borrow_weight_b
             adjusted_B = True
 
         # Recalculate positions if any adjustment was made
         if adjusted_A or adjusted_B:
-            L_A = 1.0 / (1.0 - r_A * r_B)
-            B_A = L_A * r_A
-            L_B = B_A
-            B_B = L_B * r_B
+            l_a = 1.0 / (1.0 - r_A * r_B)
+            b_a = l_a * r_A
+            l_b = b_a
+            b_b = l_b * r_B
 
             # Recalculate effective LTV for verification and print only for adjusted parameters
-            effective_ltv_A = (B_A / L_A) * borrow_weight_A
-            effective_ltv_B = (B_B / L_B) * borrow_weight_B
+            effective_ltv_A = (b_a / l_a) * borrow_weight_a
+            effective_ltv_B = (b_b / l_b) * borrow_weight_b
 
             if adjusted_A:
-                print(f"✓ Adjusted{context_A}: effective_LTV_A = {effective_ltv_A:.4f} (vs maxCF {collateral_ratio_A:.4f})")
+                print(f"✓ Adjusted{context_A}: effective_LTV_A = {effective_ltv_A:.4f} (vs maxCF {collateral_ratio_a:.4f})")
             if adjusted_B:
-                print(f"✓ Adjusted{context_B}: effective_LTV_B = {effective_ltv_B:.4f} (vs maxCF {collateral_ratio_B:.4f})")
+                print(f"✓ Adjusted{context_B}: effective_LTV_B = {effective_ltv_B:.4f} (vs maxCF {collateral_ratio_b:.4f})")
 
         return {
-            'L_A': L_A,  # Total lent token1 in Protocol A
-            'B_A': B_A,  # Total borrowed token2 from Protocol A
-            'L_B': L_B,  # Total lent token2 in Protocol B
-            'B_B': B_B,  # Total borrowed token1 from Protocol B
+            'l_a': l_a,  # Total lent token1 in Protocol A
+            'b_a': b_a,  # Total borrowed token2 from Protocol A
+            'l_b': l_b,  # Total lent token2 in Protocol B
+            'b_b': b_b,  # Total borrowed token1 from Protocol B
             'r_A': r_A,  # Effective ratio for Protocol A
             'r_B': r_B,  # Effective ratio for Protocol B
-            'liquidation_threshold_A': liquidation_threshold_A,  # Store for reference
-            'liquidation_threshold_B': liquidation_threshold_B,  # Store for reference
-            'collateral_ratio_A': collateral_ratio_A,  # Store for reference
-            'collateral_ratio_B': collateral_ratio_B,  # Store for reference
-            'borrow_weight_A': borrow_weight_A,  # Borrow weight for token2
-            'borrow_weight_B': borrow_weight_B,  # Borrow weight for token3
+            'liquidation_threshold_a': liquidation_threshold_a,  # Store for reference
+            'liquidation_threshold_b': liquidation_threshold_b,  # Store for reference
+            'collateral_ratio_a': collateral_ratio_a,  # Store for reference
+            'collateral_ratio_b': collateral_ratio_b,  # Store for reference
+            'borrow_weight_a': borrow_weight_a,  # Borrow weight for token2
+            'borrow_weight_b': borrow_weight_b,  # Borrow weight for token3
             'liquidation_distance': self.liq_dist_input  # Original user input (for display)
         }
     
@@ -150,7 +150,7 @@ class PositionCalculator:
         Net APR = (earnings from lending) - (costs from borrowing) - (borrow fees)
 
         Args:
-            positions: Dictionary with L_A, B_A, L_B, B_B
+            positions: Dictionary with l_a, b_a, l_b, b_b
             lend_rate_token1_A: Lending APY for token1 in Protocol A (as decimal)
             borrow_rate_token2_A: Borrow APY for token2 in Protocol A (as decimal)
             lend_rate_token2_B: Lending APY for token2 in Protocol B (as decimal)
@@ -161,24 +161,24 @@ class PositionCalculator:
         Returns:
             Net APR as decimal (after fees)
         """
-        L_A = positions['L_A']
-        B_A = positions['B_A']
-        L_B = positions['L_B']
-        B_B = positions['B_B']
+        l_a = positions['l_a']
+        b_a = positions['b_a']
+        l_b = positions['l_b']
+        b_b = positions['b_b']
 
         # Earnings from lending
-        earn_A = L_A * lend_rate_token1_A
-        earn_B = L_B * lend_rate_token2_B
+        earn_A = l_a * lend_rate_token1_A
+        earn_B = l_b * lend_rate_token2_B
 
         # Costs from borrowing (rates only)
-        cost_A = B_A * borrow_rate_token2_A
-        cost_B = B_B * borrow_rate_token1_B
+        cost_A = b_a * borrow_rate_token2_A
+        cost_B = b_b * borrow_rate_token1_B
 
         # Gross APR (as decimal, before fees)
         gross_apr = earn_A + earn_B - cost_A - cost_B
 
         # Fee costs (annualized)
-        fee_cost = B_A * borrow_fee_2A + B_B * borrow_fee_3B
+        fee_cost = b_a * borrow_fee_2A + b_b * borrow_fee_3B
 
         # Net APR (after fees)
         net_apr = gross_apr - fee_cost
@@ -188,8 +188,8 @@ class PositionCalculator:
     def calculate_apr_for_days(
         self,
         net_apr: float,
-        B_A: float,
-        B_B: float,
+        b_a: float,
+        b_b: float,
         borrow_fee_2A: float,
         borrow_fee_3B: float,
         days: int
@@ -199,8 +199,8 @@ class PositionCalculator:
 
         Args:
             net_apr: Base APR without fees (decimal)
-            B_A: Borrow amount from Protocol A (position multiplier)
-            B_B: Borrow amount from Protocol B (position multiplier)
+            b_a: Borrow amount from Protocol A (position multiplier)
+            b_b: Borrow amount from Protocol B (position multiplier)
             borrow_fee_2A: Borrow fee for token2 from Protocol A (decimal, e.g., 0.0030)
             borrow_fee_3B: Borrow fee for token3 from Protocol B (decimal, e.g., 0.0030)
             days: Holding period in days
@@ -209,10 +209,10 @@ class PositionCalculator:
             Time-adjusted APR accounting for upfront fees (decimal)
 
         Formula:
-            APRx = net_apr - (B_A × f_2A + B_B × f_3B) × 365 / days
+            APRx = net_apr - (b_a × f_2A + b_b × f_3B) × 365 / days
         """
         # Total fee cost (decimal)
-        total_fee_cost = B_A * borrow_fee_2A + B_B * borrow_fee_3B
+        total_fee_cost = b_a * borrow_fee_2A + b_b * borrow_fee_3B
 
         # Time-adjusted fee impact (annualized, as decimal)
         fee_impact = total_fee_cost * 365 / days
@@ -222,8 +222,8 @@ class PositionCalculator:
     def calculate_days_to_breakeven(
         self,
         gross_apr: float,
-        B_A: float,
-        B_B: float,
+        b_a: float,
+        b_b: float,
         borrow_fee_2A: float,
         borrow_fee_3B: float
     ) -> float:
@@ -238,8 +238,8 @@ class PositionCalculator:
 
         Args:
             gross_apr: Gross APR before fees (decimal, e.g., 0.05 for 5%)
-            B_A: Borrow multiplier from Protocol A
-            B_B: Borrow multiplier from Protocol B
+            b_a: Borrow multiplier from Protocol A
+            b_b: Borrow multiplier from Protocol B
             borrow_fee_2A: Borrow fee for token2 from Protocol A (decimal, e.g., 0.0030)
             borrow_fee_3B: Borrow fee for token3 from Protocol B (decimal, e.g., 0.0030)
 
@@ -254,7 +254,7 @@ class PositionCalculator:
             - Zero gross_apr: Returns float('inf') (never breaks even)
         """
         # Total upfront fees (decimal)
-        total_fees = B_A * borrow_fee_2A + B_B * borrow_fee_3B
+        total_fees = b_a * borrow_fee_2A + b_b * borrow_fee_3B
 
         # Edge case 1: No fees means instant breakeven
         if total_fees == 0:
@@ -422,32 +422,32 @@ class PositionCalculator:
 
         Args:
             gross_apr: Base APR before fees (decimal)
-            positions: Dict with L_A, B_A, L_B, B_B
+            positions: Dict with l_a, b_a, l_b, b_b
             borrow_fee_2A: Borrow fee for token2 from Protocol A (decimal, e.g., 0.0030)
             borrow_fee_3B: Borrow fee for token3 from Protocol B (decimal, e.g., 0.0030)
 
         Returns:
             Dictionary with apr_net, apr5, apr30, apr90 (all as decimals)
         """
-        B_A = positions['B_A']
-        B_B = positions['B_B']
+        b_a = positions['b_a']
+        b_b = positions['b_b']
 
         # Total annualized fee cost (decimal)
-        total_fee_cost = B_A * borrow_fee_2A + B_B * borrow_fee_3B
+        total_fee_cost = b_a * borrow_fee_2A + b_b * borrow_fee_3B
 
         # APR(net) = APR - annualized fees (equivalent to 365-day APR)
         apr_net = gross_apr - total_fee_cost
 
         # Time-adjusted APRs using helper function
-        apr5 = self.calculate_apr_for_days(gross_apr, B_A, B_B, borrow_fee_2A, borrow_fee_3B, 5)
-        apr30 = self.calculate_apr_for_days(gross_apr, B_A, B_B, borrow_fee_2A, borrow_fee_3B, 30)
-        apr90 = self.calculate_apr_for_days(gross_apr, B_A, B_B, borrow_fee_2A, borrow_fee_3B, 90)
+        apr5 = self.calculate_apr_for_days(gross_apr, b_a, b_b, borrow_fee_2A, borrow_fee_3B, 5)
+        apr30 = self.calculate_apr_for_days(gross_apr, b_a, b_b, borrow_fee_2A, borrow_fee_3B, 30)
+        apr90 = self.calculate_apr_for_days(gross_apr, b_a, b_b, borrow_fee_2A, borrow_fee_3B, 90)
 
         # Calculate days to breakeven
         days_to_breakeven = self.calculate_days_to_breakeven(
             gross_apr,
-            B_A,
-            B_B,
+            b_a,
+            b_b,
             borrow_fee_2A,
             borrow_fee_3B
         )
@@ -465,8 +465,8 @@ class PositionCalculator:
         token1: str,
         token2: str,
         token3: str,
-        protocol_A: str,
-        protocol_B: str,
+        protocol_a: str,
+        protocol_b: str,
         lend_rate_token1_A: float,
         borrow_rate_token2_A: float,
         lend_rate_token2_B: float,
@@ -493,8 +493,8 @@ class PositionCalculator:
             token1: Stablecoin (starting lend to remain market neutral)
             token2: High-yield token (borrowed for yield generation)
             token3: Closing stablecoin (borrowed from Protocol B, converted to token1)
-            protocol_A: First protocol
-            protocol_B: Second protocol
+            protocol_a: First protocol
+            protocol_b: Second protocol
             lend_rate_token1_A: Stablecoin lending rate in Protocol A
             borrow_rate_token2_A: High-yield token borrow rate from Protocol A
             lend_rate_token2_B: High-yield token lending rate in Protocol B
@@ -518,8 +518,8 @@ class PositionCalculator:
                 collateral_ratio_token2_B,
                 borrow_weight_2A,
                 borrow_weight_3B,
-                protocol_A=protocol_A,
-                protocol_B=protocol_B,
+                protocol_a=protocol_a,
+                protocol_b=protocol_b,
                 token1=token1,
                 token2=token2
             )
@@ -527,17 +527,17 @@ class PositionCalculator:
             # Calculate max deployable size based on liquidity constraints
             max_size = None
             if available_borrow_2A is not None and available_borrow_3B is not None:
-                B_A = positions['B_A']  # Borrow multiplier for token2 on protocol A
-                B_B = positions['B_B']  # Borrow multiplier for token3 on protocol B
+                b_a = positions['b_a']  # Borrow multiplier for token2 on protocol A
+                b_b = positions['b_b']  # Borrow multiplier for token3 on protocol B
 
                 # Calculate max size for each constraint
-                if B_A > 0:
-                    max_size_constraint_2A = available_borrow_2A / B_A
+                if b_a > 0:
+                    max_size_constraint_2A = available_borrow_2A / b_a
                 else:
                     max_size_constraint_2A = float('inf')
 
-                if B_B > 0:
-                    max_size_constraint_3B = available_borrow_3B / B_B
+                if b_b > 0:
+                    max_size_constraint_3B = available_borrow_3B / b_b
                 else:
                     max_size_constraint_3B = float('inf')
 
@@ -559,8 +559,8 @@ class PositionCalculator:
             # Calculate fee-adjusted APRs for different time horizons (5, 30, 90 days)
             # Note: net_apr already includes fees, so we need to back out fees and recalculate for different time periods
             # For now, calculate based on gross APR
-            gross_apr = net_apr + (positions['B_A'] * (borrow_fee_2A if borrow_fee_2A is not None else 0.0) +
-                                   positions['B_B'] * (borrow_fee_3B if borrow_fee_3B is not None else 0.0))
+            gross_apr = net_apr + (positions['b_a'] * (borrow_fee_2A if borrow_fee_2A is not None else 0.0) +
+                                   positions['b_b'] * (borrow_fee_3B if borrow_fee_3B is not None else 0.0))
 
             fee_adjusted_aprs = self.calculate_fee_adjusted_aprs(
                 gross_apr,
@@ -570,16 +570,16 @@ class PositionCalculator:
             )
 
             # Calculate token amounts per $100 notional
-            T1_A = (positions['L_A'] / price_token1_A) * 100
-            T2_A = (positions['B_A'] / price_token2_A) * 100
+            T1_A = (positions['l_a'] / price_token1_A) * 100
+            T2_A = (positions['b_a'] / price_token2_A) * 100
             T2_B = T2_A  # Same amount of token2
-            T3_B = (positions['B_B'] / price_token3_B) * 100
+            T3_B = (positions['b_b'] / price_token3_B) * 100
             return {
                 'token1': token1,
                 'token2': token2,
                 'token3': token3,  # NEW: Track closing stablecoin
-                'protocol_A': protocol_A,
-                'protocol_B': protocol_B,
+                'protocol_a': protocol_a,
+                'protocol_b': protocol_b,
                 'net_apr': net_apr,  # As decimal
                 'apr_net': fee_adjusted_aprs['apr_net'],  # As decimal
                 'apr5': fee_adjusted_aprs['apr5'],  # As decimal
@@ -587,10 +587,10 @@ class PositionCalculator:
                 'apr90': fee_adjusted_aprs['apr90'],  # As decimal
                 'days_to_breakeven': fee_adjusted_aprs['days_to_breakeven'],  # As float (days)
                 'liquidation_distance': positions['liquidation_distance'],  # As decimal
-                'L_A': positions['L_A'],
-                'B_A': positions['B_A'],
-                'L_B': positions['L_B'],
-                'B_B': positions['B_B'],
+                'l_a': positions['l_a'],
+                'b_a': positions['b_a'],
+                'l_b': positions['l_b'],
+                'b_b': positions['b_b'],
                 'lend_rate_1A': lend_rate_token1_A,  # As decimal
                 'borrow_rate_2A': borrow_rate_token2_A,  # As decimal
                 'lend_rate_2B': lend_rate_token2_B,  # As decimal
@@ -623,8 +623,8 @@ class PositionCalculator:
                 'token1': token1,
                 'token2': token2,
                 'token3': token3,  # Include token3 in error case too
-                'protocol_A': protocol_A,
-                'protocol_B': protocol_B,
+                'protocol_a': protocol_a,
+                'protocol_b': protocol_b,
                 'net_apr': None,
                 'liquidation_distance': None,
                 'valid': False,
@@ -643,8 +643,8 @@ if __name__ == "__main__":
     token1 = 'USDY'
     token2 = 'DEEP'
     token3 = 'AUSD'
-    protocol_A = 'Navi'
-    protocol_B = 'Suilend'
+    protocol_a = 'Navi'
+    protocol_b = 'Suilend'
     
     lend_rate_1A = 0.05027
     borrow_rate_2A = 0.1486
@@ -661,7 +661,7 @@ if __name__ == "__main__":
     price_2B = 0.04454
     price_3B = 1.11681
     
-    print(f"Example: Lend {token1} in {protocol_A}, Borrow {token2}, Lend {token2} in {protocol_B}, Borrow {token3}")
+    print(f"Example: Lend {token1} in {protocol_a}, Borrow {token2}, Lend {token2} in {protocol_b}, Borrow {token3}")
     print("="*80)
     print("\nFetching data from protocols...")
     
@@ -670,10 +670,10 @@ if __name__ == "__main__":
                 collateral_1A, collateral_2B, liquidation_threshold_1A, liquidation_threshold_2B,
                 price_1A, price_2A, price_2B, price_3B]:
         print("❌ Error: Missing data for this token/protocol combination")
-        print(f"   {token1} in {protocol_A}: lend={lend_rate_1A}, collateral={collateral_1A}, lltv={liquidation_threshold_1A}, price={price_1A}")
-        print(f"   {token2} in {protocol_A}: borrow={borrow_rate_2A}, price={price_2A}")
-        print(f"   {token2} in {protocol_B}: lend={lend_rate_2B}, collateral={collateral_2B}, lltv={liquidation_threshold_2B}, price={price_2B}")
-        print(f"   {token3} in {protocol_B}: borrow={borrow_rate_3B}, price={price_3B}")
+        print(f"   {token1} in {protocol_a}: lend={lend_rate_1A}, collateral={collateral_1A}, lltv={liquidation_threshold_1A}, price={price_1A}")
+        print(f"   {token2} in {protocol_a}: borrow={borrow_rate_2A}, price={price_2A}")
+        print(f"   {token2} in {protocol_b}: lend={lend_rate_2B}, collateral={collateral_2B}, lltv={liquidation_threshold_2B}, price={price_2B}")
+        print(f"   {token3} in {protocol_b}: borrow={borrow_rate_3B}, price={price_3B}")
         import sys
         sys.exit(1)
     
@@ -684,8 +684,8 @@ if __name__ == "__main__":
         token1=token1,
         token2=token2,
         token3=token3,
-        protocol_A=protocol_A,
-        protocol_B=protocol_B,
+        protocol_a=protocol_a,
+        protocol_b=protocol_b,
         lend_rate_token1_A=lend_rate_1A,
         borrow_rate_token2_A=borrow_rate_2A,
         lend_rate_token2_B=lend_rate_2B,
@@ -707,10 +707,10 @@ if __name__ == "__main__":
     
     print(f"\n✓ Strategy is valid!")
     print(f"\nPosition Sizes:")
-    print(f"  L_A ({token1} lent in {protocol_A}):     ${result['L_A']:.4f} = {result['T1_A']:.2f} {token1} @ ${result['P1_A']:.4f}")
-    print(f"  B_A ({token2} borrowed from {protocol_A}): ${result['B_A']:.4f} = {result['T2_A']:.2f} {token2} @ ${result['P2_A']:.4f}")
-    print(f"  L_B ({token2} lent in {protocol_B}):  ${result['L_B']:.4f} = {result['T2_B']:.2f} {token2} @ ${result['P2_B']:.4f}")
-    print(f"  B_B ({token3} borrowed from {protocol_B}): ${result['B_B']:.4f} = {result['T3_B']:.2f} {token3} @ ${result['P3_B']:.4f}")
+    print(f"  l_a ({token1} lent in {protocol_a}):     ${result['l_a']:.4f} = {result['T1_A']:.2f} {token1} @ ${result['P1_A']:.4f}")
+    print(f"  b_a ({token2} borrowed from {protocol_a}): ${result['b_a']:.4f} = {result['T2_A']:.2f} {token2} @ ${result['P2_A']:.4f}")
+    print(f"  l_b ({token2} lent in {protocol_b}):  ${result['l_b']:.4f} = {result['T2_B']:.2f} {token2} @ ${result['P2_B']:.4f}")
+    print(f"  b_b ({token3} borrowed from {protocol_b}): ${result['b_b']:.4f} = {result['T3_B']:.2f} {token3} @ ${result['P3_B']:.4f}")
     print(f"  Liquidation Distance: {result['liquidation_distance'] * 100:.0f}%")
 
     print(f"\nNet APR: {result['net_apr'] * 100:.2f}%")

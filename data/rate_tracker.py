@@ -234,11 +234,47 @@ class RateTracker:
                 row['available_borrow_usd'], row['borrow_fee'], row['borrow_weight']
             ))
 
+    def _convert_to_native_types(self, value):
+        """Convert numpy/pandas types to Python native types for PostgreSQL"""
+        if value is None:
+            return None
+
+        # Check if it's a numpy/pandas type
+        if hasattr(value, 'item'):
+            # numpy scalar - convert using .item()
+            return value.item()
+
+        # Already a native Python type
+        return value
+
     def _insert_rates_postgres(self, conn, rows):
         """Insert rates into PostgreSQL"""
         cursor = conn.cursor()
-        
+
         for row in rows:
+            # Convert all values to Python native types
+            values = (
+                row['timestamp'],
+                row['protocol'],
+                row['token'],
+                row['token_contract'],
+                self._convert_to_native_types(row['lend_base_apr']),
+                self._convert_to_native_types(row['lend_reward_apr']),
+                self._convert_to_native_types(row['lend_total_apr']),
+                self._convert_to_native_types(row['borrow_base_apr']),
+                self._convert_to_native_types(row['borrow_reward_apr']),
+                self._convert_to_native_types(row['borrow_total_apr']),
+                self._convert_to_native_types(row['collateral_ratio']),
+                self._convert_to_native_types(row['liquidation_threshold']),
+                self._convert_to_native_types(row['price_usd']),
+                self._convert_to_native_types(row['utilization']),
+                self._convert_to_native_types(row['total_supply_usd']),
+                self._convert_to_native_types(row['total_borrow_usd']),
+                self._convert_to_native_types(row['available_borrow_usd']),
+                self._convert_to_native_types(row['borrow_fee']),
+                self._convert_to_native_types(row['borrow_weight'])
+            )
+
             cursor.execute('''
                 INSERT INTO rates_snapshot
                 (timestamp, protocol, token, token_contract,
@@ -248,14 +284,7 @@ class RateTracker:
                     utilization, total_supply_usd, total_borrow_usd, available_borrow_usd, borrow_fee, borrow_weight)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (timestamp, protocol, token_contract) DO NOTHING
-            ''', (
-                row['timestamp'], row['protocol'], row['token'], row['token_contract'],
-                row['lend_base_apr'], row['lend_reward_apr'], row['lend_total_apr'],
-                row['borrow_base_apr'], row['borrow_reward_apr'], row['borrow_total_apr'],
-                row['collateral_ratio'], row['liquidation_threshold'], row['price_usd'],
-                row['utilization'], row['total_supply_usd'], row['total_borrow_usd'],
-                row['available_borrow_usd'], row['borrow_fee'], row['borrow_weight']
-            ))
+            ''', values)
 
     def _save_reward_prices(
         self,
