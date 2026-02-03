@@ -49,8 +49,8 @@ def format_strategy_summary_line(strategy: Dict, liq_dist: float) -> str:
     token1 = strategy['token1']
     token2 = strategy['token2']
     token3 = strategy['token3']
-    protocol_A = strategy['protocol_A']
-    protocol_B = strategy['protocol_B']
+    protocol_a = strategy['protocol_a']
+    protocol_b = strategy['protocol_b']
     max_size = strategy.get('max_size')
 
     # Format max size
@@ -67,7 +67,7 @@ def format_strategy_summary_line(strategy: Dict, liq_dist: float) -> str:
     # Build token flow (levered)
     token_flow = f"{token1} → {token2} → {token3}"
 
-    return f"{token_flow} | {protocol_A} ↔ {protocol_B} | Max Size {max_size_str} | {net_apr_indicator} Net APR {net_apr_value * 100:.2f}% | {apr5_indicator} 5day APR {apr5_value * 100:.2f}%"
+    return f"{token_flow} | {protocol_a} ↔ {protocol_b} | Max Size {max_size_str} | {net_apr_indicator} Net APR {net_apr_value * 100:.2f}% | {apr5_indicator} 5day APR {apr5_value * 100:.2f}%"
 
 
 class SlackNotifier:
@@ -151,16 +151,16 @@ class SlackNotifier:
             "token2": strategy['token2'],
             "token3": strategy['token3'],
             "conversion_note": conversion_note,
-            "protocol_A": strategy['protocol_A'],
-            "protocol_B": strategy['protocol_B'],
-            "lend_amount": f"{strategy['L_A']:.2f}",
-            "borrow_amount_1": f"{strategy['B_A']:.2f}",
-            "lend_amount_2": f"{strategy['L_B']:.2f}",
-            "borrow_amount_2": f"{strategy['B_B']:.2f}",
-            "lend_rate_1A": f"{strategy['lend_rate_1A']:.2f}",
-            "borrow_rate_2A": f"{strategy['borrow_rate_2A']:.2f}",
-            "lend_rate_2B": f"{strategy['lend_rate_2B']:.2f}",
-            "borrow_rate_3B": f"{strategy['borrow_rate_3B']:.2f}",
+            "protocol_A": strategy['protocol_a'],
+            "protocol_B": strategy['protocol_b'],
+            "lend_amount": f"{strategy['l_a']:.2f}",
+            "borrow_amount_1": f"{strategy['b_a']:.2f}",
+            "lend_amount_2": f"{strategy['l_b']:.2f}",
+            "borrow_amount_2": f"{strategy['b_b']:.2f}",
+            "lend_rate_1A": f"{strategy['lend_rate_1a']:.2f}",
+            "borrow_rate_2A": f"{strategy['borrow_rate_2a']:.2f}",
+            "lend_rate_2B": f"{strategy['lend_rate_2b']:.2f}",
+            "borrow_rate_3B": f"{strategy['borrow_rate_3b']:.2f}",
             "available_borrow_2A": format_usd_abbreviated(strategy.get('available_borrow_2A')),
             "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')
         }
@@ -192,7 +192,7 @@ class SlackNotifier:
                     },
                     {
                         "type": "mrkdwn",
-                        "text": f"*Protocols:*\n{strategy['protocol_A']} <-> {strategy['protocol_B']}"
+                        "text": f"*Protocols:*\n{strategy['protocol_a']} <-> {strategy['protocol_b']}"
                     }
                 ]
             },
@@ -202,10 +202,10 @@ class SlackNotifier:
                     "type": "mrkdwn",
                     "text": (
                         f"*Strategy:*\n"
-                        f"• Lend {strategy['L_A']:.2f} {strategy['token1']} in {strategy['protocol_A']} @ {strategy['lend_rate_1A']:.2f}%\n"
-                        f"• Borrow {strategy['B_A']:.2f} {strategy['token2']} from {strategy['protocol_A']} @ {strategy['borrow_rate_2A']:.2f}%\n"
-                        f"• Lend {strategy['L_B']:.2f} {strategy['token2']} in {strategy['protocol_B']} @ {strategy['lend_rate_2B']:.2f}%\n"
-                        f"• Borrow {strategy['B_B']:.2f} {strategy['token3']} from {strategy['protocol_B']} @ {strategy['borrow_rate_3B']:.2f}%\n"
+                        f"• Lend {strategy['l_a']:.2f} {strategy['token1']} in {strategy['protocol_a']} @ {strategy['lend_rate_1a']:.2f}%\n"
+                        f"• Borrow {strategy['b_a']:.2f} {strategy['token2']} from {strategy['protocol_a']} @ {strategy['borrow_rate_2a']:.2f}%\n"
+                        f"• Lend {strategy['l_b']:.2f} {strategy['token2']} in {strategy['protocol_b']} @ {strategy['lend_rate_2b']:.2f}%\n"
+                        f"• Borrow {strategy['b_b']:.2f} {strategy['token3']} from {strategy['protocol_b']} @ {strategy['borrow_rate_3b']:.2f}%\n"
                         + (f"• Convert {strategy['token3']} → {strategy['token1']} (1:1)" if has_conversion else "")
                     )
                 }
@@ -367,12 +367,12 @@ class SlackNotifier:
             "new_apr": f"{new_strategy['net_apr']:.2f}",
             "current_token1": current_strategy['token1'],
             "current_token2": current_strategy['token2'],
-            "current_protocol_A": current_strategy['protocol_A'],
-            "current_protocol_B": current_strategy['protocol_B'],
+            "current_protocol_A": current_strategy['protocol_a'],
+            "current_protocol_B": current_strategy['protocol_b'],
             "new_token1": new_strategy['token1'],
             "new_token2": new_strategy['token2'],
-            "new_protocol_A": new_strategy['protocol_A'],
-            "new_protocol_B": new_strategy['protocol_B'],
+            "new_protocol_A": new_strategy['protocol_a'],
+            "new_protocol_B": new_strategy['protocol_b'],
             "liquidation_distance": f"{new_strategy['liquidation_distance']:.0f}",
             "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')
         }
@@ -399,11 +399,11 @@ class SlackNotifier:
                 "fields": [
                     {
                         "type": "mrkdwn",
-                        "text": f"*Current:*\n{current_strategy['token1']} <-> {current_strategy['token2']}\n{current_strategy['protocol_A']} <-> {current_strategy['protocol_B']}"
+                        "text": f"*Current:*\n{current_strategy['token1']} <-> {current_strategy['token2']}\n{current_strategy['protocol_a']} <-> {current_strategy['protocol_b']}"
                     },
                     {
                         "type": "mrkdwn",
-                        "text": f"*Recommended:*\n{new_strategy['token1']} <-> {new_strategy['token2']}\n{new_strategy['protocol_A']} <-> {new_strategy['protocol_B']}"
+                        "text": f"*Recommended:*\n{new_strategy['token1']} <-> {new_strategy['token2']}\n{new_strategy['protocol_a']} <-> {new_strategy['protocol_b']}"
                     }
                 ]
             },
@@ -470,18 +470,18 @@ if __name__ == "__main__":
     example_strategy = {
         'token1': 'USDY',
         'token2': 'DEEP',
-        'protocol_A': 'NAVI',
-        'protocol_B': 'SuiLend',
+        'protocol_a': 'NAVI',
+        'protocol_b': 'SuiLend',
         'net_apr': 15.5,
         'leverage': 1.09,
-        'L_A': 1.09,
-        'B_A': 0.63,
-        'L_B': 0.63,
-        'B_B': 0.09,
-        'lend_rate_1A': 9.7,
-        'borrow_rate_2A': 19.5,
-        'lend_rate_2B': 31.0,
-        'borrow_rate_1B': 5.9
+        'l_a': 1.09,
+        'b_a': 0.63,
+        'l_b': 0.63,
+        'b_b': 0.09,
+        'lend_rate_1a': 9.7,
+        'borrow_rate_2a': 19.5,
+        'lend_rate_2b': 31.0,
+        'borrow_rate_1b': 5.9
     }
     
     print("Sending test alert...")

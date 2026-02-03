@@ -591,14 +591,14 @@ class PositionCalculator:
                 'b_a': positions['b_a'],
                 'l_b': positions['l_b'],
                 'b_b': positions['b_b'],
-                'lend_rate_1A': lend_rate_token1_A,  # As decimal
-                'borrow_rate_2A': borrow_rate_token2_A,  # As decimal
-                'lend_rate_2B': lend_rate_token2_B,  # As decimal
-                'borrow_rate_3B': borrow_rate_token3_B,  # As decimal
-                'collateral_ratio_1A': collateral_ratio_token1_A,
-                'collateral_ratio_2B': collateral_ratio_token2_B,
-                'liquidation_threshold_1A': liquidation_threshold_token1_A,
-                'liquidation_threshold_2B': liquidation_threshold_token2_B,
+                'lend_rate_1a': lend_rate_token1_A,  # As decimal
+                'borrow_rate_2a': borrow_rate_token2_A,  # As decimal
+                'lend_rate_2b': lend_rate_token2_B,  # As decimal
+                'borrow_rate_3b': borrow_rate_token3_B,  # As decimal
+                'collateral_ratio_1a': collateral_ratio_token1_A,
+                'collateral_ratio_2b': collateral_ratio_token2_B,
+                'liquidation_threshold_1a': liquidation_threshold_token1_A,
+                'liquidation_threshold_2b': liquidation_threshold_token2_B,
                 'P1_A': price_token1_A,
                 'P2_A': price_token2_A,
                 'P2_B': price_token2_B,
@@ -607,13 +607,13 @@ class PositionCalculator:
                 'T2_A': T2_A,
                 'T2_B': T2_B,
                 'T3_B': T3_B,
-                'available_borrow_2A': available_borrow_2A,
-                'available_borrow_3B': available_borrow_3B,
+                'available_borrow_2a': available_borrow_2A,
+                'available_borrow_3b': available_borrow_3B,
                 'max_size': max_size,
-                'borrow_fee_2A': borrow_fee_2A if borrow_fee_2A is not None else 0.0,  # Default to 0
-                'borrow_fee_3B': borrow_fee_3B if borrow_fee_3B is not None else 0.0,  # Default to 0
-                'borrow_weight_2A': borrow_weight_2A,
-                'borrow_weight_3B': borrow_weight_3B,
+                'borrow_fee_2a': borrow_fee_2A if borrow_fee_2A is not None else 0.0,  # Default to 0
+                'borrow_fee_3b': borrow_fee_3B if borrow_fee_3B is not None else 0.0,  # Default to 0
+                'borrow_weight_2a': borrow_weight_2A,
+                'borrow_weight_3b': borrow_weight_3B,
                 'valid': True,
                 'error': None
             }

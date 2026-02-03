@@ -704,6 +704,37 @@ class RateTracker:
             ))
             print(f"[CACHE SAVE] Database: {strategy_count} strategies saved")
 
+            # Clean up old cache entries (keep only last 48 hours)
+            self._cleanup_old_cache(conn, created_at)
+
+    def _cleanup_old_cache(self, conn, current_time: int, retention_hours: int = 48) -> None:
+        """
+        Remove cache entries older than retention_hours.
+
+        Args:
+            conn: Database connection
+            current_time: Current Unix timestamp
+            retention_hours: Number of hours to retain (default: 48)
+        """
+        cutoff_time = current_time - (retention_hours * 3600)
+
+        # Delete old analysis_cache entries
+        cursor = conn.execute(
+            "DELETE FROM analysis_cache WHERE created_at < ?",
+            (cutoff_time,)
+        )
+        deleted_analysis = cursor.rowcount
+
+        # Delete old chart_cache entries
+        cursor = conn.execute(
+            "DELETE FROM chart_cache WHERE created_at < ?",
+            (cutoff_time,)
+        )
+        deleted_charts = cursor.rowcount
+
+        if deleted_analysis > 0 or deleted_charts > 0:
+            print(f"[CACHE CLEANUP] Removed {deleted_analysis} analysis entries and {deleted_charts} chart entries older than {retention_hours}h")
+
     def load_analysis_cache(
         self,
         timestamp_seconds: int,
@@ -767,6 +798,9 @@ class RateTracker:
                 VALUES (?, ?, ?, ?)
             """, (strategy_hash, timestamp_seconds, chart_html, created_at))
 
+            # Clean up old cache entries (keep only last 48 hours)
+            self._cleanup_old_cache(conn, created_at)
+
     def load_chart_cache(
         self,
         strategy_hash: str,
@@ -798,7 +832,7 @@ class RateTracker:
 
         # Use contract addresses for hashing
         key = f"{strategy['token1_contract']}_{strategy['token2_contract']}_{strategy['token3_contract']}"
-        key += f"_{strategy['protocol_A']}_{strategy['protocol_B']}"
+        key += f"_{strategy['protocol_a']}_{strategy['protocol_b']}"
         key += f"_{strategy.get('liquidation_distance', 0.10)}"
 
         return hashlib.sha256(key.encode()).hexdigest()[:16]

@@ -178,16 +178,16 @@ def display_strategy_details(strategy_row: Union[pd.Series, Dict[str, Any]], dep
     token3_contract = strategy_row.get('token3_contract', '')
 
     # USD values
-    l_a = strategy_row['l_a']
-    b_a = strategy_row['b_a']
-    l_b = strategy_row['l_b']
-    b_b = strategy_row['b_b']
+    l_a = strategy_row.get('l_a', 0.0)
+    b_a = strategy_row.get('b_a', 0.0)
+    l_b = strategy_row.get('l_b', 0.0)
+    b_b = strategy_row.get('b_b', 0.0)
 
     # Rates
-    lend_rate_1a = strategy_row['lend_rate_1a']
-    borrow_rate_2a = strategy_row['borrow_rate_2a']
-    lend_rate_2b = strategy_row['lend_rate_2b']
-    borrow_rate_3b = strategy_row['borrow_rate_3b']
+    lend_rate_1a = strategy_row.get('lend_rate_1a', 0.0)
+    borrow_rate_2a = strategy_row.get('borrow_rate_2a', 0.0)
+    lend_rate_2b = strategy_row.get('lend_rate_2b', 0.0)
+    borrow_rate_3b = strategy_row.get('borrow_rate_3b', 0.0)
 
     # Prices
     P1_A = strategy_row['P1_A']
@@ -206,8 +206,8 @@ def display_strategy_details(strategy_row: Union[pd.Series, Dict[str, Any]], dep
         max_size_message = f"📊 **Max Deployable Size:** ${max_size:,.2f}"
 
     # Prepare liquidity constraints message (detailed view)
-    available_borrow_2A = strategy_row.get('available_borrow_2A')
-    available_borrow_3B = strategy_row.get('available_borrow_3B')
+    available_borrow_2A = strategy_row.get('available_borrow_2a')
+    available_borrow_3B = strategy_row.get('available_borrow_3b')
 
     liquidity_details = []
     if available_borrow_2A is not None and not pd.isna(available_borrow_2A):
@@ -423,16 +423,16 @@ def calculate_position_returns(strategy: Dict, deployment_usd: float) -> Dict:
 
     # Position sizes (multiplier × deployment)
     # All strategies are 4-leg levered strategies
-    lend_a_usd = strategy['l_a'] * deployment_usd
-    borrow_a_usd = strategy['b_a'] * deployment_usd
-    lend_b_usd = strategy['l_b'] * deployment_usd
-    borrow_b_usd = strategy['b_b'] * deployment_usd
+    lend_a_usd = strategy.get('l_a', 0.0) * deployment_usd
+    borrow_a_usd = strategy.get('b_a', 0.0) * deployment_usd
+    lend_b_usd = strategy.get('l_b', 0.0) * deployment_usd
+    borrow_b_usd = strategy.get('b_b', 0.0) * deployment_usd
 
     # Percentages (for display)
-    lend_a_pct = strategy['l_a'] * 100
-    borrow_a_pct = strategy['b_a'] * 100
-    lend_b_pct = strategy['l_b'] * 100
-    borrow_b_pct = strategy['b_b'] * 100
+    lend_a_pct = strategy.get('l_a', 0.0) * 100
+    borrow_a_pct = strategy.get('b_a', 0.0) * 100
+    lend_b_pct = strategy.get('l_b', 0.0) * 100
+    borrow_b_pct = strategy.get('b_b', 0.0) * 100
 
     # Expected returns (based on net APR)
     yearly_return_usd = deployment_usd * net_apr
@@ -497,8 +497,8 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
     # ========================================
     # Calculate upfront fees percentage
     upfront_fees_pct = (
-        strategy['b_a'] * strategy['borrow_fee_2A'] +
-        strategy['b_b'] * strategy['borrow_fee_3B']
+        strategy.get('b_a', 0.0) * strategy.get('borrow_fee_2a', 0.0) +
+        strategy.get('b_b', 0.0) * strategy.get('borrow_fee_3b', 0.0)
     )
 
     # Build display strings
@@ -566,23 +566,23 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
     # TOKEN-LEVEL DETAILS TABLE
     # ========================================
     # Calculate token amounts (with zero-division protection)
-    entry_token_amount_1A = (strategy['l_a'] * deployment_usd) / strategy['P1_A'] if strategy['P1_A'] > 0 else 0
+    entry_token_amount_1A = (strategy.get('l_a', 0.0) * deployment_usd) / strategy['P1_A'] if strategy['P1_A'] > 0 else 0
     # Token 2: Calculate using Protocol A price (source of borrowed tokens)
     # This ensures the same token quantity is used for both Protocol A and Protocol B
-    entry_token_amount_2 = (strategy['b_a'] * deployment_usd) / strategy['P2_A'] if strategy['P2_A'] > 0 else 0
+    entry_token_amount_2 = (strategy.get('b_a', 0.0) * deployment_usd) / strategy['P2_A'] if strategy['P2_A'] > 0 else 0
     entry_token_amount_2A = entry_token_amount_2  # Borrowed from Protocol A
     entry_token_amount_2B = entry_token_amount_2  # Same tokens lent to Protocol B
-    entry_token_amount_3B = (strategy['b_b'] * deployment_usd) / strategy['P3_B'] if strategy['P3_B'] > 0 else 0
+    entry_token_amount_3B = (strategy.get('b_b', 0.0) * deployment_usd) / strategy['P3_B'] if strategy['P3_B'] > 0 else 0
 
     # Calculate position sizes in USD (weight * deployment_usd)
-    position_size_1A = strategy['l_a'] * deployment_usd
-    position_size_2A = strategy['b_a'] * deployment_usd
-    position_size_2B = strategy['l_b'] * deployment_usd
-    position_size_3B = strategy['b_b'] * deployment_usd
+    position_size_1A = strategy.get('l_a', 0.0) * deployment_usd
+    position_size_2A = strategy.get('b_a', 0.0) * deployment_usd
+    position_size_2B = strategy.get('l_b', 0.0) * deployment_usd
+    position_size_3B = strategy.get('b_b', 0.0) * deployment_usd
 
     # Calculate fee amounts in USD
-    fee_usd_2A = strategy['b_a'] * strategy['borrow_fee_2A'] * deployment_usd
-    fee_usd_3B = strategy['b_b'] * strategy['borrow_fee_3B'] * deployment_usd
+    fee_usd_2A = strategy.get('b_a', 0.0) * strategy.get('borrow_fee_2a', 0.0) * deployment_usd
+    fee_usd_3B = strategy.get('b_b', 0.0) * strategy.get('borrow_fee_3b', 0.0) * deployment_usd
 
     # Calculate dynamic precision
     precision_1A = get_token_precision(strategy['P1_A'])
@@ -599,9 +599,9 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
         loan_value=position_size_2A,
         lending_token_price=strategy['P1_A'],
         borrowing_token_price=strategy['P2_A'],
-        lltv=strategy.get('liquidation_threshold_1A', strategy['collateral_ratio_1A']),
+        lltv=strategy.get('liquidation_threshold_1a', strategy.get('collateral_ratio_1a', 0.0)),
         side='lending',
-        borrow_weight=strategy.get('borrow_weight_2A', 1.0)
+        borrow_weight=strategy.get('borrow_weight_2a', 1.0)
     )
 
     # Calculate liquidation data for Row 2 (borrowing side - Protocol A)
@@ -610,9 +610,9 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
         loan_value=position_size_2A,
         lending_token_price=strategy['P1_A'],
         borrowing_token_price=strategy['P2_A'],
-        lltv=strategy.get('liquidation_threshold_1A', strategy['collateral_ratio_1A']),
+        lltv=strategy.get('liquidation_threshold_1a', strategy.get('collateral_ratio_1a', 0.0)),
         side='borrowing',
-        borrow_weight=strategy.get('borrow_weight_2A', 1.0)
+        borrow_weight=strategy.get('borrow_weight_2a', 1.0)
     )
 
     # Calculate liquidation data for Row 3 (lending side - Protocol B)
@@ -621,9 +621,9 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
         loan_value=position_size_3B,
         lending_token_price=strategy['P2_B'],
         borrowing_token_price=strategy['P3_B'],
-        lltv=strategy.get('liquidation_threshold_2B', strategy['collateral_ratio_2B']),
+        lltv=strategy.get('liquidation_threshold_2b', strategy.get('collateral_ratio_2b', 0.0)),
         side='lending',
-        borrow_weight=strategy.get('borrow_weight_3B', 1.0)
+        borrow_weight=strategy.get('borrow_weight_3b', 1.0)
     )
 
     # Calculate liquidation data for Row 4 (borrowing side - Protocol B)
@@ -632,9 +632,9 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
         loan_value=position_size_3B,
         lending_token_price=strategy['P2_B'],
         borrowing_token_price=strategy['P3_B'],
-        lltv=strategy.get('liquidation_threshold_2B', strategy['collateral_ratio_2B']),
+        lltv=strategy.get('liquidation_threshold_2b', strategy.get('collateral_ratio_2b', 0.0)),
         side='borrowing',
-        borrow_weight=strategy.get('borrow_weight_3B', 1.0)
+        borrow_weight=strategy.get('borrow_weight_3b', 1.0)
     )
 
     # Build detail table
@@ -642,21 +642,21 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
     detail_data = []
 
     # Calculate effective LTV on-the-fly
-    effective_ltv_1A = (strategy['b_a'] / strategy['l_a']) * strategy.get('borrow_weight_2A', 1.0)
-    effective_ltv_2B = (strategy['b_b'] / strategy['l_b']) * strategy.get('borrow_weight_3B', 1.0)
+    effective_ltv_1A = (strategy.get('b_a', 0.0) / strategy.get('l_a', 1.0)) * strategy.get('borrow_weight_2a', 1.0) if strategy.get('l_a', 0.0) > 0 else 0.0
+    effective_ltv_2B = (strategy.get('b_b', 0.0) / strategy.get('l_b', 1.0)) * strategy.get('borrow_weight_3b', 1.0) if strategy.get('l_b', 0.0) > 0 else 0.0
 
     # Row 1: Protocol A - Lend token1
-    lltv_1A = strategy.get('liquidation_threshold_1A', 0.0)
+    lltv_1A = strategy.get('liquidation_threshold_1a', 0.0)
     detail_data.append({
         'Protocol': strategy['protocol_a'],
         'Token': strategy['token1'],
         'Action': 'Lend',
-        'maxCF': f"{strategy['collateral_ratio_1A']:.2%}",
+        'maxCF': f"{strategy.get('collateral_ratio_1a', 0.0):.2%}",
         'LLTV': f"{lltv_1A:.2%}" if lltv_1A > 0 else "",
         'Effective LTV': f"{effective_ltv_1A:.2%}",
         'Borrow Weight': "-",
-        'Weight': f"{strategy['l_a']:.4f}",
-        'Rate': f"{strategy['lend_rate_1a'] * 100:.2f}%",
+        'Weight': f"{strategy.get('l_a', 0.0):.4f}",
+        'Rate': f"{strategy.get('lend_rate_1a', 0.0) * 100:.2f}%",
         'Token Amount': f"{entry_token_amount_1A:,.{precision_1A}f}",
         'Size ($$$)': f"${position_size_1A:,.2f}",
         'Price': f"${strategy['P1_A']:.4f}",
@@ -675,31 +675,31 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
         'maxCF': "-",
         'LLTV': "-",
         'Effective LTV': "-",
-        'Borrow Weight': f"{strategy.get('borrow_weight_2A', 1.0):.2f}x",
-        'Weight': f"{strategy['b_a']:.4f}",
-        'Rate': f"{strategy['borrow_rate_2a'] * 100:.2f}%",
+        'Borrow Weight': f"{strategy.get('borrow_weight_2a', 1.0):.2f}x",
+        'Weight': f"{strategy.get('b_a', 0.0):.4f}",
+        'Rate': f"{strategy.get('borrow_rate_2a', 0.0) * 100:.2f}%",
         'Token Amount': f"{entry_token_amount_2A:,.{precision_2A}f}",
         'Size ($$$)': f"${position_size_2A:,.2f}",
         'Price': f"${strategy['P2_A']:.4f}",
-        'Fees (%)': f"{strategy['borrow_fee_2A'] * 100:.2f}%" if strategy['borrow_fee_2A'] > 0 else "",
+        'Fees (%)': f"{strategy.get('borrow_fee_2a', 0.0) * 100:.2f}%" if strategy.get('borrow_fee_2a', 0.0) > 0 else "",
         'Fees ($$$)': f"${fee_usd_2A:.2f}" if fee_usd_2A > 0 else "",
         'Liquidation Price': f"${liq_result_2['liq_price']:.4f}" if liq_result_2['liq_price'] != float('inf') and liq_result_2['liq_price'] > 0 else "N/A",
         'Liq Distance': f"{liq_result_2['pct_distance'] * 100:.2f}%" if liq_result_2['liq_price'] != float('inf') and liq_result_2['liq_price'] > 0 else "N/A",
-        'Max Borrow': f"${strategy['available_borrow_2A']:,.2f}" if strategy['available_borrow_2A'] > 0 else "",
+        'Max Borrow': f"${strategy.get('available_borrow_2a', 0.0):,.2f}" if strategy.get('available_borrow_2a', 0.0) > 0 else "",
     })
 
     # Row 3: Protocol B - Lend token2
-    lltv_2B = strategy.get('liquidation_threshold_2B', 0.0)
+    lltv_2B = strategy.get('liquidation_threshold_2b', 0.0)
     detail_data.append({
         'Protocol': strategy['protocol_b'],
         'Token': strategy['token2'],
         'Action': 'Lend',
-        'maxCF': f"{strategy['collateral_ratio_2B']:.2%}",
+        'maxCF': f"{strategy.get('collateral_ratio_2b', 0.0):.2%}",
         'LLTV': f"{lltv_2B:.2%}" if lltv_2B > 0 else "",
         'Effective LTV': f"{effective_ltv_2B:.2%}",
         'Borrow Weight': "-",
-        'Weight': f"{strategy['l_b']:.4f}",
-        'Rate': f"{strategy['lend_rate_2b'] * 100:.2f}%",
+        'Weight': f"{strategy.get('l_b', 0.0):.4f}",
+        'Rate': f"{strategy.get('lend_rate_2b', 0.0) * 100:.2f}%",
         'Token Amount': f"{entry_token_amount_2B:,.{precision_2B}f}",
         'Size ($$$)': f"${position_size_2B:,.2f}",
         'Price': f"${strategy['P2_B']:.4f}",
@@ -718,17 +718,17 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
         'maxCF': "-",
         'LLTV': "-",
         'Effective LTV': "-",
-        'Borrow Weight': f"{strategy.get('borrow_weight_3B', 1.0):.2f}x",
-        'Weight': f"{strategy['b_b']:.4f}",
-        'Rate': f"{strategy['borrow_rate_3b'] * 100:.2f}%",
+        'Borrow Weight': f"{strategy.get('borrow_weight_3b', 1.0):.2f}x",
+        'Weight': f"{strategy.get('b_b', 0.0):.4f}",
+        'Rate': f"{strategy.get('borrow_rate_3b', 0.0) * 100:.2f}%",
         'Token Amount': f"{entry_token_amount_3B:,.{precision_3B}f}",
         'Size ($$$)': f"${position_size_3B:,.2f}",
         'Price': f"${strategy['P3_B']:.4f}",
-        'Fees (%)': f"{strategy['borrow_fee_3B'] * 100:.2f}%" if strategy['borrow_fee_3B'] > 0 else "",
+        'Fees (%)': f"{strategy.get('borrow_fee_3b', 0.0) * 100:.2f}%" if strategy.get('borrow_fee_3b', 0.0) > 0 else "",
         'Fees ($$$)': f"${fee_usd_3B:.2f}" if fee_usd_3B > 0 else "",
         'Liquidation Price': f"${liq_result_4['liq_price']:.4f}" if liq_result_4['liq_price'] != float('inf') and liq_result_4['liq_price'] > 0 else "N/A",
         'Liq Distance': f"{liq_result_4['pct_distance'] * 100:.2f}%" if liq_result_4['liq_price'] != float('inf') and liq_result_4['liq_price'] > 0 else "N/A",
-        'Max Borrow': f"${strategy['available_borrow_3B']:,.2f}" if strategy['available_borrow_3B'] > 0 else "",
+        'Max Borrow': f"${strategy.get('available_borrow_3b', 0.0):,.2f}" if strategy.get('available_borrow_3b', 0.0) > 0 else "",
     })
 
     # Display detail table with color formatting

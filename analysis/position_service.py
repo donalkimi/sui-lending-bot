@@ -116,7 +116,7 @@ class PositionService:
 
         Args:
             strategy_row: Strategy data with timestamp, rates, prices, APRs
-            positions: Position multipliers (L_A, B_A, L_B, B_B)
+            positions: Position multipliers (l_a, b_a, l_b, b_b)
             token1: First token symbol
             token2: Second token symbol
             token3: Third token symbol
@@ -155,16 +155,16 @@ class PositionService:
         position_id = str(uuid.uuid4())
 
         # Extract multipliers
-        L_A = positions['L_A']
-        B_A = positions['B_A']
-        L_B = positions['L_B']
-        B_B = positions.get('B_B')
+        l_a = positions['l_a']
+        b_a = positions['b_a']
+        L_B = positions['l_b']
+        b_b = positions.get('b_b')
 
         # Extract entry rates (already in decimal format: 0.0316 = 3.16%)
-        entry_lend_rate_1A = strategy_row.get('lend_rate_1A', 0)
-        entry_borrow_rate_2A = strategy_row.get('borrow_rate_2A', 0)
-        entry_lend_rate_2B = strategy_row.get('lend_rate_2B', 0)
-        entry_borrow_rate_3b = strategy_row.get('borrow_rate_3B')
+        entry_lend_rate_1a = strategy_row.get('lend_rate_1a', 0)
+        entry_borrow_rate_2a = strategy_row.get('borrow_rate_2a', 0)
+        entry_lend_rate_2b = strategy_row.get('lend_rate_2b', 0)
+        entry_borrow_rate_3b = strategy_row.get('borrow_rate_3b', 0)
 
         # Extract entry prices (leg-level)
         entry_price_1a = strategy_row.get('P1_A', 0)
@@ -173,12 +173,12 @@ class PositionService:
         entry_price_3b = strategy_row.get('P3_B')
 
         # Extract entry collateral ratios
-        entry_collateral_ratio_1A = strategy_row.get('collateral_ratio_1A', 0)
-        entry_collateral_ratio_2b = strategy_row.get('collateral_ratio_2B', 0)
+        entry_collateral_ratio_1a = strategy_row.get('collateral_ratio_1a', 0)
+        entry_collateral_ratio_2b = strategy_row.get('collateral_ratio_2b', 0)
 
         # Extract entry liquidation thresholds
-        entry_liquidation_threshold_1A = strategy_row.get('liquidation_threshold_1A', 0)
-        entry_liquidation_threshold_2b = strategy_row.get('liquidation_threshold_2B', 0)
+        entry_liquidation_threshold_1a = strategy_row.get('liquidation_threshold_1a', 0)
+        entry_liquidation_threshold_2b = strategy_row.get('liquidation_threshold_2b', 0)
 
         # Extract entry strategy APRs (already fee-adjusted)
         entry_net_apr = strategy_row.get('net_apr', 0)
@@ -190,12 +190,12 @@ class PositionService:
 
         # Extract entry liquidity & fees
         entry_max_size_usd = strategy_row.get('max_size_usd')
-        entry_borrow_fee_2a = strategy_row.get('borrow_fee_2A')
-        entry_borrow_fee_3b = strategy_row.get('borrow_fee_3B')
+        entry_borrow_fee_2a = strategy_row.get('borrow_fee_2a')
+        entry_borrow_fee_3b = strategy_row.get('borrow_fee_3b')
 
         # Extract entry borrow weights (default 1.0)
-        entry_borrow_weight_2a = strategy_row.get('borrow_weight_2A', 1.0)
-        entry_borrow_weight_3b = strategy_row.get('borrow_weight_3B', 1.0)
+        entry_borrow_weight_2a = strategy_row.get('borrow_weight_2a', 1.0)
+        entry_borrow_weight_3b = strategy_row.get('borrow_weight_3b', 1.0)
 
         # Convert timestamp to datetime string for DB
         entry_timestamp_str = to_datetime_str(entry_timestamp)
@@ -232,21 +232,21 @@ class PositionService:
                 protocol_a, protocol_b,
                 entry_timestamp_str,
                 self._to_native_type(deployment_usd), 
-                self._to_native_type(L_A), 
-                self._to_native_type(B_A), 
+                self._to_native_type(l_a), 
+                self._to_native_type(b_a), 
                 self._to_native_type(L_B), 
-                self._to_native_type(B_B),
-                self._to_native_type(entry_lend_rate_1A), 
-                self._to_native_type(entry_borrow_rate_2A), 
-                self._to_native_type(entry_lend_rate_2B), 
+                self._to_native_type(b_b),
+                self._to_native_type(entry_lend_rate_1a),
+                self._to_native_type(entry_borrow_rate_2a),
+                self._to_native_type(entry_lend_rate_2b), 
                 self._to_native_type(entry_borrow_rate_3b),
                 self._to_native_type(entry_price_1a), 
                 self._to_native_type(entry_price_2a), 
                 self._to_native_type(entry_price_2b), 
                 self._to_native_type(entry_price_3b),
-                self._to_native_type(entry_collateral_ratio_1A), 
+                self._to_native_type(entry_collateral_ratio_1a), 
                 self._to_native_type(entry_collateral_ratio_2b),
-                self._to_native_type(entry_liquidation_threshold_1A), 
+                self._to_native_type(entry_liquidation_threshold_1a), 
                 self._to_native_type(entry_liquidation_threshold_2b),
                 self._to_native_type(entry_net_apr), 
                 self._to_native_type(entry_apr5), 
@@ -385,25 +385,6 @@ class PositionService:
         """
         positions = pd.read_sql_query(query, self.conn)
 
-        # DEBUG: Log raw DataFrame from database
-        if not positions.empty:
-            print(f"\n{'='*80}")
-            print(f"DEBUG: Raw DataFrame from database (BEFORE conversions)")
-            print(f"  Rows: {len(positions)}")
-            print(f"  Columns: {len(positions.columns)}")
-            print(f"\nRaw column names:")
-            for i, col in enumerate(positions.columns):
-                print(f"    [{i}] '{col}' (dtype: {positions[col].dtype})")
-
-            # Check for uppercase columns
-            uppercase_cols = [col for col in positions.columns if col != col.lower()]
-            if uppercase_cols:
-                print(f"\n  ⚠️  WARNING: Found UPPERCASE/mixed-case columns: {uppercase_cols}")
-            else:
-                print(f"\n  ✅ All columns are lowercase")
-
-            print(f"{'='*80}\n")
-
         # Convert timestamps to Unix seconds (DESIGN_NOTES principle)
         # IMPORTANT: Use Int64 dtype to handle nulls without converting to float64
         def safe_to_seconds(value):
@@ -497,27 +478,7 @@ class PositionService:
                 # Filter: only include positions that existed at the selected timestamp
                 positions = positions[positions['entry_timestamp'] <= live_timestamp].copy()
 
-        # DEBUG: Log DataFrame info before returning
-        if not positions.empty:
-            print(f"\n{'='*80}")
-            print(f"DEBUG get_active_positions: Returning {len(positions)} position(s)")
-            print(f"Shape: {positions.shape}")
-            print(f"\nColumn names ({len(positions.columns)} total):")
-            for i, col in enumerate(positions.columns):
-                print(f"  [{i}] '{col}'")
-
-            print(f"\nFirst position data types:")
-            first_pos = positions.iloc[0]
-            print(f"  l_a exists: {'l_a' in first_pos.index}")
-            print(f"  L_A exists: {'L_A' in first_pos.index}")
-
-            if 'l_a' in first_pos.index:
-                print(f"  l_a value: {first_pos['l_a']} (type: {type(first_pos['l_a'])})")
-            else:
-                print(f"  ❌ l_a NOT FOUND in position data!")
-                print(f"  Available keys starting with 'l': {[k for k in first_pos.index if k.startswith('l')]}")
-                print(f"  Available keys starting with 'L': {[k for k in first_pos.index if k.startswith('L')]}")
-            print(f"{'='*80}\n")
+        
 
         return positions
 
@@ -652,12 +613,12 @@ class PositionService:
 
         # Extract position parameters
         deployment = position['deployment_usd']
-        L_A = position['l_a']
-        B_A = position['b_a']
+        l_a = position['l_a']
+        b_a = position['b_a']
         L_B = position['l_b']
-        B_B = position['b_b']
-        entry_fee_2A = position.get('entry_borrow_fee_2a') or 0
-        entry_fee_3B = position.get('entry_borrow_fee_3b') or 0
+        b_b = position['b_b']
+        entry_fee_2a = position.get('entry_borrow_fee_2a') or 0
+        entry_fee_3b = position.get('entry_borrow_fee_3b') or 0
 
         # Position legs
         token1 = position['token1']
@@ -790,10 +751,10 @@ class PositionService:
 
             # Track last valid rate for each leg
             last_valid_rates = {
-                'lend_1A': {'base': None, 'reward': None},
-                'borrow_2A': {'base': None, 'reward': None},
-                'lend_2B': {'base': None, 'reward': None},
-                'borrow_3B': {'base': None, 'reward': None}
+                'lend_1a': {'base': None, 'reward': None},
+                'borrow_2a': {'base': None, 'reward': None},
+                'lend_2b': {'base': None, 'reward': None},
+                'borrow_3b': {'base': None, 'reward': None}
             }
 
             for i, period_data in enumerate(rates_data_input):
@@ -802,10 +763,10 @@ class PositionService:
 
                 # Process each leg
                 for leg_key, (prot, tok, r_type) in [
-                    ('lend_1A', (protocol_a, token1, 'lend')),
-                    ('borrow_2A', (protocol_a, token2, 'borrow')),
-                    ('lend_2B', (protocol_b, token2, 'lend')),
-                    ('borrow_3B', (protocol_b, token3, 'borrow'))
+                    ('lend_1a', (protocol_a, token1, 'lend')),
+                    ('borrow_2a', (protocol_a, token2, 'borrow')),
+                    ('lend_2b', (protocol_b, token2, 'lend')),
+                    ('borrow_3b', (protocol_b, token3, 'borrow'))
                 ]:
                     rate_dict = get_rate(rates_df, prot, tok, r_type)
 
@@ -853,11 +814,11 @@ class PositionService:
             time_years = time_delta_seconds / (365 * 86400)
 
             # Use pre-filled rates from forward_fill_rates()
-            rate_1A = current['rate_lend_1A']
-            rate_2B = current['rate_lend_2B']
+            rate_1a = current['rate_lend_1a']
+            rate_2b = current['rate_lend_2b']
 
             # Lend earnings for this period (no NaN checks needed - already forward-filled)
-            period_lend = deployment * (L_A * rate_1A['total'] + L_B * rate_2B['total']) * time_years
+            period_lend = deployment * (l_a * rate_1a['total'] + L_B * rate_2b['total']) * time_years
             lend_earnings += period_lend
             periods_count += 1
 
@@ -879,17 +840,17 @@ class PositionService:
             time_years = time_delta_seconds / (365 * 86400)
 
             # Use pre-filled rates from forward_fill_rates()
-            rate_2A = current['rate_borrow_2A']
-            rate_3B = current['rate_borrow_3B']
+            rate_2a = current['rate_borrow_2a']
+            rate_3b = current['rate_borrow_3b']
 
             # Borrow costs for this period (no NaN checks needed - already forward-filled)
-            period_borrow = deployment * (B_A * rate_2A['total'] + B_B * rate_3B['total']) * time_years
+            period_borrow = deployment * (b_a * rate_2a['total'] + b_b * rate_3b['total']) * time_years
             borrow_costs += period_borrow
 
         # Calculate FEES - One-Time Upfront Fees
         # For rebalance segments, fees are calculated separately based on token deltas
         if include_initial_fees:
-            fees = deployment * (B_A * entry_fee_2A + B_B * entry_fee_3B)
+            fees = deployment * (b_a * entry_fee_2a + b_b * entry_fee_3b)
         else:
             fees = 0
 
@@ -945,40 +906,40 @@ class PositionService:
     def _get_token_for_leg(self, position: pd.Series, leg: str) -> str:
         """Get token symbol for a specific leg."""
         leg_token_map = {
-            '1A': 'token1',
-            '2A': 'token2',
-            '2B': 'token2',
-            '3B': 'token3'
+            '1a': 'token1',
+            '2a': 'token2',
+            '2b': 'token2',
+            '3b': 'token3'
         }
         return position[leg_token_map[leg]]
 
     def _get_token_contract_for_leg(self, position: pd.Series, leg: str) -> str:
         """Get token contract address for a specific leg."""
         leg_token_contract_map = {
-            '1A': 'token1_contract',
-            '2A': 'token2_contract',
-            '2B': 'token2_contract',
-            '3B': 'token3_contract'
+            '1a': 'token1_contract',
+            '2a': 'token2_contract',
+            '2b': 'token2_contract',
+            '3b': 'token3_contract'
         }
         return position[leg_token_contract_map[leg]]
 
     def _get_protocol_for_leg(self, position: pd.Series, leg: str) -> str:
         """Get protocol for a specific leg."""
         leg_protocol_map = {
-            '1A': 'protocol_a',
-            '2A': 'protocol_a',
-            '2B': 'protocol_b',
-            '3B': 'protocol_b'
+            '1a': 'protocol_a',
+            '2a': 'protocol_a',
+            '2b': 'protocol_b',
+            '3b': 'protocol_b'
         }
         return position[leg_protocol_map[leg]]
 
     def _get_weight_for_leg(self, position: pd.Series, leg: str) -> float:
         """Get weight multiplier for a specific leg."""
         leg_weight_map = {
-            '1A': 'L_A',
-            '2A': 'B_A',
-            '2B': 'L_B',
-            '3B': 'B_B'
+            '1a': 'l_a',
+            '2a': 'b_a',
+            '2b': 'l_b',
+            '3b': 'b_b'
         }
         return position[leg_weight_map[leg]]
 
@@ -995,7 +956,7 @@ class PositionService:
 
         Args:
             position: Position record with deployment_usd, weights, tokens, protocols
-            leg: Leg identifier ('1A', '2A', '2B', '3B')
+            leg: Leg identifier ('1a', '2a', '2b', '3b')
             action: 'Lend' or 'Borrow'
             start_timestamp: Start of period (Unix seconds)
             end_timestamp: End of period (Unix seconds)
@@ -1015,6 +976,8 @@ class PositionService:
             raise ValueError("end_timestamp cannot be before start_timestamp")
 
         # Extract leg parameters
+        #print(f"position element in position_service.py / calculate_leg_earnings_split:")
+        #print(position)
         deployment = position['deployment_usd']
         token_contract = self._get_token_contract_for_leg(position, leg)
         protocol = self._get_protocol_for_leg(position, leg)
@@ -1036,7 +999,6 @@ class PositionService:
         ORDER BY timestamp ASC
         """
         timestamps_df = pd.read_sql_query(query_timestamps, self.conn, params=(start_str, end_str))
-
         if timestamps_df.empty:
             # No rate data available, return zeros
             return 0.0, 0.0
@@ -1068,11 +1030,13 @@ class PositionService:
 
             ts_str = to_datetime_str(ts_current)
             rates = pd.read_sql_query(rate_query, self.conn, params=(ts_str, protocol, token_contract))
-
+           # rates.to_csv("out.csv")
             if not rates.empty:
                 if action == 'Lend':
                     base_apr = rates.iloc[0]['lend_base_apr']
                     reward_apr = rates.iloc[0]['lend_reward_apr']
+                    if base_apr is None or reward_apr is None:
+                        print(f"{ts_current}\t{ts_next}\t{protocol}\t{token_contract}")
                     # Handle None/NULL values
                     base_apr = float(base_apr) if base_apr is not None else 0.0
                     reward_apr = float(reward_apr) if reward_apr is not None else 0.0
@@ -1104,7 +1068,7 @@ class PositionService:
         """
         Rebalance a position: snapshot current state, create rebalance record, update position.
 
-        IMPORTANT: Weightings (L_A, B_A, L_B, B_B) remain CONSTANT.
+        IMPORTANT: Weightings (l_a, b_a, L_B, b_b) remain CONSTANT.
         Only token amounts change to restore $$$ amounts to match weightings.
 
         Args:
@@ -1188,102 +1152,102 @@ class PositionService:
         # 4. Calculate current token amounts for all 4 legs
         # Token amounts = (weight × deployment_usd) / price
         deployment = position['deployment_usd']
-        L_A = position['l_a']
-        B_A = position['b_a']
+        l_a = position['l_a']
+        b_a = position['b_a']
         L_B = position['l_b']
-        B_B = position['b_b']
+        b_b = position['b_b']
 
         # Entry token amounts (based on entry prices from position record)
-        entry_token_amount_1a = (L_A * deployment) / position['entry_price_1a']
-        entry_token_amount_2a = (B_A * deployment) / position['entry_price_2a']
+        entry_token_amount_1a = (l_a * deployment) / position['entry_price_1a']
+        entry_token_amount_2a = (b_a * deployment) / position['entry_price_2a']
         entry_token_amount_2b = (L_B * deployment) / position['entry_price_2b']
-        entry_token_amount_3b = (B_B * deployment) / position['entry_price_3b']
+        entry_token_amount_3b = (b_b * deployment) / position['entry_price_3b']
 
         # Exit token amounts (token amounts don't change during rebalancing - only $$$ changes with price)
         # For rebalancing: token2 amounts will be adjusted to restore liq distance
         # For now, exit amounts = entry amounts (will be adjusted by rebalance logic)
-        exit_token_amount_1A = entry_token_amount_1a  # No change for token1
-        exit_token_amount_2A = entry_token_amount_2a  # Will be adjusted
-        exit_token_amount_2B = entry_token_amount_2b  # Will be adjusted
-        exit_token_amount_3B = entry_token_amount_3b  # No change for token3
+        exit_token_amount_1a = entry_token_amount_1a  # No change for token1
+        exit_token_amount_2a = entry_token_amount_2a  # Will be adjusted
+        exit_token_amount_2b = entry_token_amount_2b  # Will be adjusted
+        exit_token_amount_3b = entry_token_amount_3b  # No change for token3
 
         # 5. Calculate $$$ sizes
-        entry_size_usd_1A = entry_token_amount_1a * position['entry_price_1a']
-        entry_size_usd_2A = entry_token_amount_2a * position['entry_price_2a']
-        entry_size_usd_2B = entry_token_amount_2b * position['entry_price_2b']
-        entry_size_usd_3B = entry_token_amount_3b * position['entry_price_3b']
+        entry_size_usd_1a = entry_token_amount_1a * position['entry_price_1a']
+        entry_size_usd_2a = entry_token_amount_2a * position['entry_price_2a']
+        entry_size_usd_2b = entry_token_amount_2b * position['entry_price_2b']
+        entry_size_usd_3b = entry_token_amount_3b * position['entry_price_3b']
 
-        exit_size_usd_1A = exit_token_amount_1A * closing_rates['price_1A']
-        exit_size_usd_2A = exit_token_amount_2A * closing_rates['price_2A']
-        exit_size_usd_2B = exit_token_amount_2B * closing_rates['price_2B']
-        exit_size_usd_3B = exit_token_amount_3B * closing_rates['price_3B']
+        exit_size_usd_1a = exit_token_amount_1a * closing_rates['price_1a']
+        exit_size_usd_2a = exit_token_amount_2a * closing_rates['price_2a']
+        exit_size_usd_2b = exit_token_amount_2b * closing_rates['price_2b']
+        exit_size_usd_3b = exit_token_amount_3b * closing_rates['price_3b']
 
         # 6. Calculate liquidation prices and distances at time of rebalance
         # Use entry token amounts with closing prices
         calc = PositionCalculator(liquidation_distance=position['entry_liquidation_distance'])
 
         # Protocol A collateral and loan values (using entry token amounts and closing prices)
-        closing_collateral_A = entry_token_amount_1a * closing_rates['price_1A']
-        closing_loan_A = entry_token_amount_2a * closing_rates['price_2A']
+        closing_collateral_A = entry_token_amount_1a * closing_rates['price_1a']
+        closing_loan_A = entry_token_amount_2a * closing_rates['price_2a']
 
         # Leg 1: Protocol A - Lend token1 (lending side)
-        liq_result_1A = calc.calculate_liquidation_price(
+        liq_result_1a = calc.calculate_liquidation_price(
             collateral_value=closing_collateral_A,
             loan_value=closing_loan_A,
-            lending_token_price=closing_rates['price_1A'],
-            borrowing_token_price=closing_rates['price_2A'],
+            lending_token_price=closing_rates['price_1a'],
+            borrowing_token_price=closing_rates['price_2a'],
             lltv=position.get('entry_liquidation_threshold_1a', position['entry_collateral_ratio_1a']),
             side='lending',
             borrow_weight=position.get('entry_borrow_weight_2a', 1.0)
         )
 
         # Leg 2: Protocol A - Borrow token2 (borrowing side)
-        liq_result_2A = calc.calculate_liquidation_price(
+        liq_result_2a = calc.calculate_liquidation_price(
             collateral_value=closing_collateral_A,
             loan_value=closing_loan_A,
-            lending_token_price=closing_rates['price_1A'],
-            borrowing_token_price=closing_rates['price_2A'],
+            lending_token_price=closing_rates['price_1a'],
+            borrowing_token_price=closing_rates['price_2a'],
             lltv=position.get('entry_liquidation_threshold_1a', position['entry_collateral_ratio_1a']),
             side='borrowing',
             borrow_weight=position.get('entry_borrow_weight_2a', 1.0)
         )
 
         # Protocol B collateral and loan values (using entry token amounts and closing prices)
-        closing_collateral_B = entry_token_amount_2b * closing_rates['price_2B']
-        closing_loan_B = entry_token_amount_3b * closing_rates['price_3B']
+        closing_collateral_B = entry_token_amount_2b * closing_rates['price_2b']
+        closing_loan_B = entry_token_amount_3b * closing_rates['price_3b']
 
         # Leg 3: Protocol B - Lend token2 (lending side)
-        liq_result_2B = calc.calculate_liquidation_price(
+        liq_result_2b = calc.calculate_liquidation_price(
             collateral_value=closing_collateral_B,
             loan_value=closing_loan_B,
-            lending_token_price=closing_rates['price_2B'],
-            borrowing_token_price=closing_rates['price_3B'],
+            lending_token_price=closing_rates['price_2b'],
+            borrowing_token_price=closing_rates['price_3b'],
             lltv=position.get('entry_liquidation_threshold_2b', position['entry_collateral_ratio_2b']),
             side='lending',
             borrow_weight=position.get('entry_borrow_weight_3b', 1.0)
         )
 
         # Leg 4: Protocol B - Borrow token3 (borrowing side)
-        liq_result_3B = calc.calculate_liquidation_price(
+        liq_result_3b = calc.calculate_liquidation_price(
             collateral_value=closing_collateral_B,
             loan_value=closing_loan_B,
-            lending_token_price=closing_rates['price_2B'],
-            borrowing_token_price=closing_rates['price_3B'],
+            lending_token_price=closing_rates['price_2b'],
+            borrowing_token_price=closing_rates['price_3b'],
             lltv=position.get('entry_liquidation_threshold_2b', position['entry_collateral_ratio_2b']),
             side='borrowing',
             borrow_weight=position.get('entry_borrow_weight_3b', 1.0)
         )
 
         # 7. Determine rebalance actions
-        entry_action_1A = "Initial deployment"
-        entry_action_2A = "Initial deployment"
-        entry_action_2B = "Initial deployment"
-        entry_action_3B = "Initial deployment"
+        entry_action_1a = "Initial deployment"
+        entry_action_2a = "Initial deployment"
+        entry_action_2b = "Initial deployment"
+        entry_action_3b = "Initial deployment"
 
-        exit_action_1A = self._determine_rebalance_action('1A', entry_token_amount_1a, exit_token_amount_1A, 'Lend')
-        exit_action_2A = self._determine_rebalance_action('2A', entry_token_amount_2a, exit_token_amount_2A, 'Borrow')
-        exit_action_2B = self._determine_rebalance_action('2B', entry_token_amount_2b, exit_token_amount_2B, 'Lend')
-        exit_action_3B = self._determine_rebalance_action('3B', entry_token_amount_3b, exit_token_amount_3B, 'Borrow')
+        exit_action_1a = self._determine_rebalance_action('1a', entry_token_amount_1a, exit_token_amount_1a, 'Lend')
+        exit_action_2a = self._determine_rebalance_action('2a', entry_token_amount_2a, exit_token_amount_2a, 'Borrow')
+        exit_action_2b = self._determine_rebalance_action('2b', entry_token_amount_2b, exit_token_amount_2b, 'Lend')
+        exit_action_3b = self._determine_rebalance_action('3b', entry_token_amount_3b, exit_token_amount_3b, 'Borrow')
 
         # 8. Calculate fees for rebalance segments
         # For first segment: pv_result already includes full initial fees
@@ -1293,14 +1257,14 @@ class PositionService:
 
             # Token2@A: Only pay fees on ADDITIONAL borrowing (currently token2 is the only rebalanced token)
             # entry_token_amount_2a = amount at START of this segment (from position's entry_price_2a)
-            # exit_token_amount_2A = amount at END of this segment (same for now, will change after rebalance logic)
+            # exit_token_amount_2a = amount at END of this segment (same for now, will change after rebalance logic)
             # For now, token amounts don't change during the segment, so delta = 0
             # Fees will be calculated when actual rebalancing adjusts token amounts
-            delta_borrow_2A = exit_token_amount_2A - entry_token_amount_2a
-            if delta_borrow_2A > 0:
+            delta_borrow_2a = exit_token_amount_2a - entry_token_amount_2a
+            if delta_borrow_2a > 0:
                 # Get entry fee from position record
-                entry_fee_2A = position.get('entry_borrow_fee_2a', 0) or 0
-                rebalance_fees += delta_borrow_2A * closing_rates['price_2A'] * entry_fee_2A
+                entry_fee_2a = position.get('entry_borrow_fee_2a', 0) or 0
+                rebalance_fees += delta_borrow_2a * closing_rates['price_2a'] * entry_fee_2a
 
             # Token3@B: Not currently rebalanced, so no fees
             # If we rebalance token3 in the future, add similar logic here
@@ -1323,24 +1287,24 @@ class PositionService:
             'opening_price_2b': position['entry_price_2b'],
             'opening_price_3b': position['entry_price_3b'],
             # Closing rates/prices from rates_snapshot
-            'closing_lend_rate_1a': closing_rates['lend_rate_1A'],
-            'closing_borrow_rate_2a': closing_rates['borrow_rate_2A'],
-            'closing_lend_rate_2b': closing_rates['lend_rate_2B'],
-            'closing_borrow_rate_3b': closing_rates['borrow_rate_3B'],
-            'closing_price_1a': closing_rates['price_1A'],
-            'closing_price_2a': closing_rates['price_2A'],
-            'closing_price_2b': closing_rates['price_2B'],
-            'closing_price_3b': closing_rates['price_3B'],
+            'closing_lend_rate_1a': closing_rates['lend_rate_1a'],
+            'closing_borrow_rate_2a': closing_rates['borrow_rate_2a'],
+            'closing_lend_rate_2b': closing_rates['lend_rate_2b'],
+            'closing_borrow_rate_3b': closing_rates['borrow_rate_3b'],
+            'closing_price_1a': closing_rates['price_1a'],
+            'closing_price_2a': closing_rates['price_2a'],
+            'closing_price_2b': closing_rates['price_2b'],
+            'closing_price_3b': closing_rates['price_3b'],
             # Liquidation prices at rebalance time (using entry token amounts + closing prices)
-            'closing_liq_price_1a': liq_result_1A.get('liq_price'),
-            'closing_liq_price_2a': liq_result_2A.get('liq_price'),
-            'closing_liq_price_2b': liq_result_2B.get('liq_price'),
-            'closing_liq_price_3b': liq_result_3B.get('liq_price'),
+            'closing_liq_price_1a': liq_result_1a.get('liq_price'),
+            'closing_liq_price_2a': liq_result_2a.get('liq_price'),
+            'closing_liq_price_2b': liq_result_2b.get('liq_price'),
+            'closing_liq_price_3b': liq_result_3b.get('liq_price'),
             # Liquidation distances at rebalance time
-            'closing_liq_dist_1a': liq_result_1A.get('pct_distance'),
-            'closing_liq_dist_2a': liq_result_2A.get('pct_distance'),
-            'closing_liq_dist_2b': liq_result_2B.get('pct_distance'),
-            'closing_liq_dist_3b': liq_result_3B.get('pct_distance'),
+            'closing_liq_dist_1a': liq_result_1a.get('pct_distance'),
+            'closing_liq_dist_2a': liq_result_2a.get('pct_distance'),
+            'closing_liq_dist_2b': liq_result_2b.get('pct_distance'),
+            'closing_liq_dist_3b': liq_result_3b.get('pct_distance'),
             # Collateral ratios
             'collateral_ratio_1a': position['entry_collateral_ratio_1a'],
             'collateral_ratio_2b': position['entry_collateral_ratio_2b'],
@@ -1352,38 +1316,38 @@ class PositionService:
             'entry_token_amount_2a': entry_token_amount_2a,
             'entry_token_amount_2b': entry_token_amount_2b,
             'entry_token_amount_3b': entry_token_amount_3b,
-            'exit_token_amount_1a': exit_token_amount_1A,
-            'exit_token_amount_2a': exit_token_amount_2A,
-            'exit_token_amount_2b': exit_token_amount_2B,
-            'exit_token_amount_3b': exit_token_amount_3B,
+            'exit_token_amount_1a': exit_token_amount_1a,
+            'exit_token_amount_2a': exit_token_amount_2a,
+            'exit_token_amount_2b': exit_token_amount_2b,
+            'exit_token_amount_3b': exit_token_amount_3b,
             # USD sizes
-            'entry_size_usd_1a': entry_size_usd_1A,
-            'entry_size_usd_2a': entry_size_usd_2A,
-            'entry_size_usd_2b': entry_size_usd_2B,
-            'entry_size_usd_3b': entry_size_usd_3B,
-            'exit_size_usd_1a': exit_size_usd_1A,
-            'exit_size_usd_2a': exit_size_usd_2A,
-            'exit_size_usd_2b': exit_size_usd_2B,
-            'exit_size_usd_3b': exit_size_usd_3B,
+            'entry_size_usd_1a': entry_size_usd_1a,
+            'entry_size_usd_2a': entry_size_usd_2a,
+            'entry_size_usd_2b': entry_size_usd_2b,
+            'entry_size_usd_3b': entry_size_usd_3b,
+            'exit_size_usd_1a': exit_size_usd_1a,
+            'exit_size_usd_2a': exit_size_usd_2a,
+            'exit_size_usd_2b': exit_size_usd_2b,
+            'exit_size_usd_3b': exit_size_usd_3b,
             # Actions
-            'entry_action_1a': entry_action_1A,
-            'entry_action_2a': entry_action_2A,
-            'entry_action_2b': entry_action_2B,
-            'entry_action_3b': entry_action_3B,
-            'exit_action_1a': exit_action_1A,
-            'exit_action_2a': exit_action_2A,
-            'exit_action_2b': exit_action_2B,
-            'exit_action_3b': exit_action_3B,
+            'entry_action_1a': entry_action_1a,
+            'entry_action_2a': entry_action_2a,
+            'entry_action_2b': entry_action_2b,
+            'entry_action_3b': entry_action_3b,
+            'exit_action_1a': exit_action_1a,
+            'exit_action_2a': exit_action_2a,
+            'exit_action_2b': exit_action_2b,
+            'exit_action_3b': exit_action_3b,
             # Realised PnL
             'realised_pnl': pv_result['net_earnings'] - pv_result['fees'] + realised_fees,  # Adjust for correct fees
             'realised_fees': realised_fees,
             'realised_lend_earnings': pv_result['lend_earnings'],
             'realised_borrow_costs': pv_result['borrow_costs'],
             # Weightings (constant)
-            'l_a': L_A,
-            'b_a': B_A,
+            'l_a': l_a,
+            'b_a': b_a,
             'l_b': L_B,
-            'b_b': B_B,
+            'b_b': b_b,
             'deployment_usd': deployment
         }
 
@@ -1449,26 +1413,26 @@ class PositionService:
                 'borrow_weight': row.get('borrow_weight', 1.0) or 1.0
             }
 
-        leg_1A = get_leg_data(position['protocol_a'], position['token1_contract'])
-        leg_2A = get_leg_data(position['protocol_a'], position['token2_contract'])
-        leg_2B = get_leg_data(position['protocol_b'], position['token2_contract'])
-        leg_3B = get_leg_data(position['protocol_b'], position['token3_contract'])
+        leg_1a = get_leg_data(position['protocol_a'], position['token1_contract'])
+        leg_2a = get_leg_data(position['protocol_a'], position['token2_contract'])
+        leg_2b = get_leg_data(position['protocol_b'], position['token2_contract'])
+        leg_3b = get_leg_data(position['protocol_b'], position['token3_contract'])
 
         return {
-            'lend_rate_1A': leg_1A['lend_rate'],
-            'borrow_rate_2A': leg_2A['borrow_rate'],
-            'lend_rate_2B': leg_2B['lend_rate'],
-            'borrow_rate_3B': leg_3B['borrow_rate'],
-            'price_1A': leg_1A['price'],
-            'price_2A': leg_2A['price'],
-            'price_2B': leg_2B['price'],
-            'price_3B': leg_3B['price'],
-            'collateral_ratio_1A': leg_1A['collateral_ratio'],
-            'collateral_ratio_2B': leg_2B['collateral_ratio'],
-            'liquidation_threshold_1A': leg_1A['liquidation_threshold'],
-            'liquidation_threshold_2B': leg_2B['liquidation_threshold'],
-            'borrow_weight_2A': leg_2A['borrow_weight'],
-            'borrow_weight_3B': leg_3B['borrow_weight']
+            'lend_rate_1a': leg_1a['lend_rate'],
+            'borrow_rate_2a': leg_2a['borrow_rate'],
+            'lend_rate_2b': leg_2b['lend_rate'],
+            'borrow_rate_3b': leg_3b['borrow_rate'],
+            'price_1a': leg_1a['price'],
+            'price_2a': leg_2a['price'],
+            'price_2b': leg_2b['price'],
+            'price_3b': leg_3b['price'],
+            'collateral_ratio_1a': leg_1a['collateral_ratio'],
+            'collateral_ratio_2b': leg_2b['collateral_ratio'],
+            'liquidation_threshold_1a': leg_1a['liquidation_threshold'],
+            'liquidation_threshold_2b': leg_2b['liquidation_threshold'],
+            'borrow_weight_2a': leg_2a['borrow_weight'],
+            'borrow_weight_3b': leg_3b['borrow_weight']
         }
 
     def _determine_rebalance_action(
@@ -1487,7 +1451,7 @@ class PositionService:
         Returns: Action string (e.g., "Repay 100.0", "No change")
         """
         # Token1 and token3 don't change during rebalancing
-        if leg in ['1A', '3B']:
+        if leg in ['1a', '3b']:
             return "No change"
 
         # Token2 legs - calculate delta
@@ -1523,7 +1487,7 @@ class PositionService:
         DESIGN PRINCIPLES:
         - Convert Unix seconds (int) to datetime strings using to_datetime_str() for DB insertion
         - Store rates as decimals (not percentages)
-        - Weightings (L_A, B_A, L_B, B_B) remain CONSTANT
+        - Weightings (l_a, b_a, L_B, b_b) remain CONSTANT
         """
         # Generate rebalance ID
         rebalance_id = str(uuid.uuid4())
@@ -1746,7 +1710,7 @@ class PositionService:
             selected_timestamp: Unix seconds timestamp representing "current time"
 
         Returns:
-            Dictionary containing position state (L_A, B_A, L_B, B_B, rates, prices) as it
+            Dictionary containing position state (l_a, b_a, l_b, b_b, rates, prices) as it
             existed at selected_timestamp. Returns None if position doesn't exist.
 
         Logic:
@@ -1807,22 +1771,22 @@ class PositionService:
                 'protocol_a': position['protocol_a'],
                 'protocol_b': position['protocol_b'],
                 'deployment_usd': segment['deployment_usd'],
-                'L_A': segment['l_a'],
-                'B_A': segment['b_a'],
-                'L_B': segment['l_b'],
-                'B_B': segment['b_b'],
+                'l_a': segment['l_a'],
+                'b_a': segment['b_a'],
+                'l_b': segment['l_b'],
+                'b_b': segment['b_b'],
                 # Use opening rates/prices as the "current" state during this segment
-                'entry_lend_rate_1A': segment['opening_lend_rate_1a'],
-                'entry_borrow_rate_2A': segment['opening_borrow_rate_2a'],
-                'entry_lend_rate_2B': segment['opening_lend_rate_2b'],
+                'entry_lend_rate_1a': segment['opening_lend_rate_1a'],
+                'entry_borrow_rate_2a': segment['opening_borrow_rate_2a'],
+                'entry_lend_rate_2b': segment['opening_lend_rate_2b'],
                 'entry_borrow_rate_3b': segment['opening_borrow_rate_3b'],
                 'entry_price_1a': segment['opening_price_1a'],
                 'entry_price_2a': segment['opening_price_2a'],
                 'entry_price_2b': segment['opening_price_2b'],
                 'entry_price_3b': segment['opening_price_3b'],
-                'entry_collateral_ratio_1A': segment['collateral_ratio_1a'],
+                'entry_collateral_ratio_1a': segment['collateral_ratio_1a'],
                 'entry_collateral_ratio_2b': segment['collateral_ratio_2b'],
-                'entry_liquidation_threshold_1A': segment['liquidation_threshold_1a'],
+                'entry_liquidation_threshold_1a': segment['liquidation_threshold_1a'],
                 'entry_liquidation_threshold_2b': segment['liquidation_threshold_2b'],
                 'entry_timestamp': to_seconds(segment['opening_timestamp']),
                 'is_historical_segment': True,  # Flag to indicate this is from a segment
@@ -1907,12 +1871,12 @@ class PositionService:
                     'token2': str,
                     'protocol_a': str,
                     'protocol_b': str,
-                    'baseline_liq_dist_2A': float,  # Entry or most recent closing
-                    'live_liq_dist_2A': float,
-                    'baseline_liq_dist_2B': float,  # Entry or most recent closing
-                    'live_liq_dist_2B': float,
-                    'needs_rebalance_2A': bool,
-                    'needs_rebalance_2B': bool,
+                    'baseline_liq_dist_2a': float,  # Entry or most recent closing
+                    'live_liq_dist_2a': float,
+                    'baseline_liq_dist_2b': float,  # Entry or most recent closing
+                    'live_liq_dist_2b': float,
+                    'needs_rebalance_2a': bool,
+                    'needs_rebalance_2b': bool,
                     'needs_rebalance': bool  # True if either leg needs rebalancing
                 },
                 ...
@@ -1941,8 +1905,8 @@ class PositionService:
                 # Never rebalanced - need to calculate from entry data
                 # Note: entry_liquidation_distance is overall strategy value, not per-leg
                 # We need to calculate per-leg distances from entry data
-                baseline_liq_dist_2A = None  # Will calculate from entry
-                baseline_liq_dist_2B = None  # Will calculate from entry
+                baseline_liq_dist_2a = None  # Will calculate from entry
+                baseline_liq_dist_2b = None  # Will calculate from entry
                 use_entry_calc = True
             else:
                 # Has been rebalanced - get most recent segment's closing liquidation distances
@@ -1957,8 +1921,8 @@ class PositionService:
                 segment = pd.read_sql_query(query, self.conn, params=(position_id,))
 
                 if not segment.empty:
-                    baseline_liq_dist_2A = float(segment['closing_liq_dist_2a'].iloc[0])
-                    baseline_liq_dist_2B = float(segment['closing_liq_dist_2b'].iloc[0])
+                    baseline_liq_dist_2a = float(segment['closing_liq_dist_2a'].iloc[0])
+                    baseline_liq_dist_2b = float(segment['closing_liq_dist_2b'].iloc[0])
                     use_entry_calc = False
                 else:
                     # Fallback to entry calculation
@@ -2004,20 +1968,20 @@ class PositionService:
                         return None
                     return row.iloc[0]
 
-                data_1A = get_market_data(position['protocol_a'], position['token1_contract'])
-                data_2A = get_market_data(position['protocol_a'], position['token2_contract'])
-                data_2B = get_market_data(position['protocol_b'], position['token2_contract'])
+                data_1a = get_market_data(position['protocol_a'], position['token1_contract'])
+                data_2a = get_market_data(position['protocol_a'], position['token2_contract'])
+                data_2b = get_market_data(position['protocol_b'], position['token2_contract'])
 
-                if data_1A is None or data_2A is None or data_2B is None:
+                if data_1a is None or data_2a is None or data_2b is None:
                     # Missing data for some legs - skip position
                     continue
 
                 # Calculate entry token amounts (token amounts stay constant, assuming no interest accrual in paper trading)
                 deployment_usd = float(position['deployment_usd'])
-                L_A = float(position['l_a'])
-                B_A = float(position['b_a'])
+                l_a = float(position['l_a'])
+                b_a = float(position['b_a'])
                 L_B = float(position['l_b'])
-                B_B = float(position['b_b'])
+                b_b = float(position['b_b'])
 
                 entry_price_1a = float(position['entry_price_1a'])
                 entry_price_2a = float(position['entry_price_2a'])
@@ -2025,10 +1989,10 @@ class PositionService:
                 entry_price_3b = float(position['entry_price_3b'])
 
                 # Token amounts (constant throughout position life, unless manually rebalanced)
-                entry_token_amount_1a = (L_A * deployment_usd) / entry_price_1a if entry_price_1a > 0 else 0
-                entry_token_amount_2a = (B_A * deployment_usd) / entry_price_2a if entry_price_2a > 0 else 0
+                entry_token_amount_1a = (l_a * deployment_usd) / entry_price_1a if entry_price_1a > 0 else 0
+                entry_token_amount_2a = (b_a * deployment_usd) / entry_price_2a if entry_price_2a > 0 else 0
                 entry_token_amount_2b = (L_B * deployment_usd) / entry_price_2b if entry_price_2b > 0 else 0
-                entry_token_amount_3b = (B_B * deployment_usd) / entry_price_3b if entry_price_3b > 0 else 0
+                entry_token_amount_3b = (b_b * deployment_usd) / entry_price_3b if entry_price_3b > 0 else 0
 
                 # Calculate baseline liquidation distances if needed
                 if use_entry_calc:
@@ -2040,7 +2004,7 @@ class PositionService:
 
                     # Leg 2A: Borrow token2 from Protocol A
                     # Collateral: token1 lent (1A), Loan: token2 borrowed (2A)
-                    baseline_result_2A = calculator.calculate_liquidation_price(
+                    baseline_result_2a = calculator.calculate_liquidation_price(
                         collateral_value=baseline_collateral_A,
                         loan_value=baseline_loan_A,
                         lending_token_price=entry_price_1a,
@@ -2049,11 +2013,11 @@ class PositionService:
                         side='borrowing',  # Token2 price rise causes liquidation
                         borrow_weight=float(position.get('entry_borrow_weight_2a', 1.0))
                     )
-                    baseline_liq_dist_2A = baseline_result_2A['pct_distance']
+                    baseline_liq_dist_2a = baseline_result_2a['pct_distance']
 
                     # Leg 2B: Lend token2 to Protocol B
                     # Collateral: token2 lent (2B), Loan: token3 borrowed (3B)
-                    baseline_result_2B = calculator.calculate_liquidation_price(
+                    baseline_result_2b = calculator.calculate_liquidation_price(
                         collateral_value=baseline_collateral_B,
                         loan_value=baseline_loan_B,
                         lending_token_price=entry_price_2b,
@@ -2062,57 +2026,57 @@ class PositionService:
                         side='lending',  # Token2 price drop causes liquidation
                         borrow_weight=float(position.get('entry_borrow_weight_3b', 1.0))
                     )
-                    baseline_liq_dist_2B = baseline_result_2B['pct_distance']
+                    baseline_liq_dist_2b = baseline_result_2b['pct_distance']
 
                 # Calculate live liquidation distances using entry token amounts valued at live prices
-                live_price_1A = float(data_1A['price_usd'])
-                live_price_2A = float(data_2A['price_usd'])
-                live_price_2B = float(data_2B['price_usd'])
+                live_price_1a = float(data_1a['price_usd'])
+                live_price_2a = float(data_2a['price_usd'])
+                live_price_2b = float(data_2b['price_usd'])
 
                 # Need to get token3 data for leg 3B
-                data_3B = get_market_data(position['protocol_b'], position['token3_contract'])
-                if data_3B is None:
+                data_3b = get_market_data(position['protocol_b'], position['token3_contract'])
+                if data_3b is None:
                     continue
-                live_price_3B = float(data_3B['price_usd'])
+                live_price_3b = float(data_3b['price_usd'])
 
                 # Current USD values = entry token amounts × live prices
-                current_collateral_A = entry_token_amount_1a * live_price_1A
-                current_loan_A = entry_token_amount_2a * live_price_2A
-                current_collateral_B = entry_token_amount_2b * live_price_2B
-                current_loan_B = entry_token_amount_3b * live_price_3B
+                current_collateral_A = entry_token_amount_1a * live_price_1a
+                current_loan_A = entry_token_amount_2a * live_price_2a
+                current_collateral_B = entry_token_amount_2b * live_price_2b
+                current_loan_B = entry_token_amount_3b * live_price_3b
 
                 # Leg 2A: Borrow token2 from Protocol A
-                live_result_2A = calculator.calculate_liquidation_price(
+                live_result_2a = calculator.calculate_liquidation_price(
                     collateral_value=current_collateral_A,
                     loan_value=current_loan_A,
-                    lending_token_price=live_price_1A,
-                    borrowing_token_price=live_price_2A,
-                    lltv=float(data_1A['liquidation_threshold']),
+                    lending_token_price=live_price_1a,
+                    borrowing_token_price=live_price_2a,
+                    lltv=float(data_1a['liquidation_threshold']),
                     side='borrowing',
-                    borrow_weight=float(data_2A.get('borrow_weight', 1.0))
+                    borrow_weight=float(data_2a.get('borrow_weight', 1.0))
                 )
-                live_liq_dist_2A = live_result_2A['pct_distance']
+                live_liq_dist_2a = live_result_2a['pct_distance']
 
                 # Leg 2B: Lend token2 to Protocol B
-                live_result_2B = calculator.calculate_liquidation_price(
+                live_result_2b = calculator.calculate_liquidation_price(
                     collateral_value=current_collateral_B,
                     loan_value=current_loan_B,
-                    lending_token_price=live_price_2B,
-                    borrowing_token_price=live_price_3B,
-                    lltv=float(data_2B['liquidation_threshold']),
+                    lending_token_price=live_price_2b,
+                    borrowing_token_price=live_price_3b,
+                    lltv=float(data_2b['liquidation_threshold']),
                     side='lending',
-                    borrow_weight=float(data_3B.get('borrow_weight', 1.0))
+                    borrow_weight=float(data_3b.get('borrow_weight', 1.0))
                 )
-                live_liq_dist_2B = live_result_2B['pct_distance']
+                live_liq_dist_2b = live_result_2b['pct_distance']
 
                 # Check if rebalancing is needed
                 # Formula: abs(baseline) - abs(live) >= threshold
-                delta_2A = abs(baseline_liq_dist_2A) - abs(live_liq_dist_2A)
-                delta_2B = abs(baseline_liq_dist_2B) - abs(live_liq_dist_2B)
+                delta_2a = abs(baseline_liq_dist_2a) - abs(live_liq_dist_2a)
+                delta_2b = abs(baseline_liq_dist_2b) - abs(live_liq_dist_2b)
 
-                needs_rebalance_2A = delta_2A >= rebalance_threshold
-                needs_rebalance_2B = delta_2B >= rebalance_threshold
-                needs_rebalance = needs_rebalance_2A or needs_rebalance_2B
+                needs_rebalance_2a = delta_2a >= rebalance_threshold
+                needs_rebalance_2b = delta_2b >= rebalance_threshold
+                needs_rebalance = needs_rebalance_2a or needs_rebalance_2b
 
                 # Store result
                 results.append({
@@ -2120,14 +2084,14 @@ class PositionService:
                     'token2': position['token2'],
                     'protocol_a': position['protocol_a'],
                     'protocol_b': position['protocol_b'],
-                    'baseline_liq_dist_2A': baseline_liq_dist_2A,
-                    'live_liq_dist_2A': live_liq_dist_2A,
-                    'baseline_liq_dist_2B': baseline_liq_dist_2B,
-                    'live_liq_dist_2B': live_liq_dist_2B,
-                    'delta_2A': delta_2A,
-                    'delta_2B': delta_2B,
-                    'needs_rebalance_2A': needs_rebalance_2A,
-                    'needs_rebalance_2B': needs_rebalance_2B,
+                    'baseline_liq_dist_2a': baseline_liq_dist_2a,
+                    'live_liq_dist_2a': live_liq_dist_2a,
+                    'baseline_liq_dist_2b': baseline_liq_dist_2b,
+                    'live_liq_dist_2b': live_liq_dist_2b,
+                    'delta_2a': delta_2a,
+                    'delta_2b': delta_2b,
+                    'needs_rebalance_2a': needs_rebalance_2a,
+                    'needs_rebalance_2b': needs_rebalance_2b,
                     'needs_rebalance': needs_rebalance
                 })
 
