@@ -594,7 +594,7 @@ class RateAnalyzer:
                 by=['net_apr', 'is_stablecoin_only'],
                 ascending=[False, False]
             )
-            
+            #print(df_results)
             return df_results
         else:
             return pd.DataFrame()

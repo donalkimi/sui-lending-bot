@@ -325,7 +325,7 @@ def display_strategies_table(
     for idx, row in all_results.iterrows():
         # Get token symbols for display (logic uses contracts)
         token_pair = f"{row['token1']}/{row['token2']}/{row['token3']}"
-
+        #print(row)
         table_data.append({
             '_idx': idx,  # Hidden index for selection
             'Token Pair': token_pair,
@@ -968,34 +968,14 @@ def render_positions_table_tab(timestamp_seconds: int):
         # Get active positions (filtered by selected timestamp)
         active_positions = service.get_active_positions(live_timestamp=timestamp_seconds)
 
-        # # DEBUG: Show what we got
-        # if not active_positions.empty:
-        #     st.write("### DEBUG: Position Data Loaded")
-        #     st.write(f"- **Number of positions:** {len(active_positions)}")
-        #     st.write(f"- **Columns ({len(active_positions.columns)}):** {list(active_positions.columns)}")
-
-        #     # Check for l_a column variations
-        #     l_a_cols = [col for col in active_positions.columns if 'l_a' in col.lower()]
-        #     st.write(f"- **Columns containing 'l_a':** {l_a_cols if l_a_cols else '❌ NONE FOUND'}")
-
-        #     # Show first position sample
-        #     with st.expander("📋 First Position Data Sample"):
-        #         first_pos = active_positions.iloc[0]
-        #         st.write(f"**All keys in first position:**")
-        #         st.code('\n'.join(list(first_pos.index)))
-
-        #         # Try to access l_a
-        #         try:
-        #             l_a_value = first_pos['l_a']
-        #             st.success(f"✅ Successfully accessed l_a = {l_a_value} (type: {type(l_a_value)})")
-        #         except KeyError as e:
-        #             st.error(f"❌ KeyError accessing 'l_a': {e}")
-        #             st.write("Available keys:", list(first_pos.index))
+        
 
         if active_positions.empty:
             # Provide context-aware messaging based on whether viewing historical timestamp
+            from dashboard.db_utils import get_db_engine
+            engine = get_db_engine()
             latest_ts_query = "SELECT MAX(timestamp) FROM rates_snapshot"
-            latest_ts_result = pd.read_sql_query(latest_ts_query, conn)
+            latest_ts_result = pd.read_sql_query(latest_ts_query, engine)
 
             if not latest_ts_result.empty and latest_ts_result.iloc[0, 0] is not None:
                 latest_ts = to_seconds(latest_ts_result.iloc[0, 0])
@@ -1018,37 +998,39 @@ def render_positions_table_tab(timestamp_seconds: int):
         latest_timestamp_str = to_datetime_str(timestamp_seconds)
 
         # Query all rates and prices at latest timestamp
+        from dashboard.db_utils import get_db_engine
+        engine = get_db_engine()
         ph = service._get_placeholder()
         rates_query = f"""
         SELECT protocol, token, lend_total_apr, borrow_total_apr, borrow_fee, price_usd
         FROM rates_snapshot
         WHERE timestamp = {ph}
         """
-        rates_df = pd.read_sql_query(rates_query, conn, params=(latest_timestamp_str,))
+        rates_df = pd.read_sql_query(rates_query, engine, params=(latest_timestamp_str,))
 
         # Helper function to get rate
         def get_rate(token, protocol, rate_type):
             """Get lend or borrow rate for token/protocol, return 0 if not found"""
-            row = rates_df[(rates_df['token'] == token) & (rates_df['protocol'] == protocol)]
-            if row.empty:
-                return 0.0
-            return float(row[f'{rate_type}_total_apr'].iloc[0])
+            # OPTIMIZED: O(1) dictionary lookup instead of O(n) DataFrame filtering
+            key = (token, protocol)
+            data = rate_lookup.get(key, {})
+            return data.get(rate_type, 0.0)
 
         # Helper function to get borrow fee
         def get_borrow_fee(token, protocol):
             """Get borrow fee for token/protocol, return 0 if not found"""
-            row = rates_df[(rates_df['token'] == token) & (rates_df['protocol'] == protocol)]
-            if row.empty:
-                return 0.0
-            return float(row['borrow_fee'].iloc[0]) if pd.notna(row['borrow_fee'].iloc[0]) else 0.0
+            # OPTIMIZED: O(1) dictionary lookup instead of O(n) DataFrame filtering
+            key = (token, protocol)
+            data = rate_lookup.get(key, {})
+            return data.get('borrow_fee', 0.0)
 
         # Helper function to get price
         def get_price(token, protocol):
             """Get current price for token/protocol, return 0 if not found"""
-            row = rates_df[(rates_df['token'] == token) & (rates_df['protocol'] == protocol)]
-            if row.empty:
-                return 0.0
-            return float(row['price_usd'].iloc[0]) if pd.notna(row['price_usd'].iloc[0]) else 0.0
+            # OPTIMIZED: O(1) dictionary lookup instead of O(n) DataFrame filtering
+            key = (token, protocol)
+            data = rate_lookup.get(key, {})
+            return data.get('price', 0.0)
 
         # Helper function to calculate token amount precision
         def get_token_precision(price: float, target_usd: float = 10.0) -> int:
@@ -1093,6 +1075,18 @@ def render_positions_table_tab(timestamp_seconds: int):
                 return float(value)
             except (TypeError, ValueError):
                 return default
+
+        # OPTIMIZATION: Build rate lookup dictionary once for O(1) access
+        # This replaces O(n) DataFrame filtering with O(1) dictionary lookups
+        rate_lookup = {}
+        for _, row in rates_df.iterrows():
+            key = (row['token'], row['protocol'])
+            rate_lookup[key] = {
+                'lend': float(row['lend_total_apr']) if pd.notna(row['lend_total_apr']) else 0.0,
+                'borrow': float(row['borrow_total_apr']) if pd.notna(row['borrow_total_apr']) else 0.0,
+                'borrow_fee': float(row['borrow_fee']) if pd.notna(row['borrow_fee']) else 0.0,
+                'price': float(row['price_usd']) if pd.notna(row['price_usd']) else 0.0
+            }
 
         # Render expandable rows (Stages 1-4)
         for _, position in active_positions.iterrows():
@@ -1147,9 +1141,16 @@ def render_positions_table_tab(timestamp_seconds: int):
             current_net_apr_decimal = gross_apr - fee_cost
 
             # Calculate position value and realized APR
-            # Use last rebalance timestamp if available (for unrealized PnL of current segment only)
+            # For historical views, only use rebalance timestamp if it's before the viewing timestamp
             if pd.notna(position.get('last_rebalance_timestamp')):
-                start_ts = to_seconds(position['last_rebalance_timestamp'])
+                last_rebal_ts = to_seconds(position['last_rebalance_timestamp'])
+                # Only use last rebalance if it occurred before or at the viewing timestamp
+                if last_rebal_ts <= latest_timestamp:
+                    start_ts = last_rebal_ts
+                else:
+                    # Rebalance is in the "future" for this historical view
+                    # Calculate from entry instead
+                    start_ts = to_seconds(position['entry_timestamp'])
             else:
                 start_ts = to_seconds(position['entry_timestamp'])
             pv_result = service.calculate_position_value(position, start_ts, latest_timestamp)
@@ -2208,7 +2209,8 @@ When a rate was missing, the previous valid rate was carried forward (following 
                             apr = 0.0
 
                         # Build enhanced expander title (using same format as position expander)
-                        rebalance_title = f"▼ Rebalance #{int(rebalance['sequence_number'])}: {rebalance['opening_timestamp']} → {rebalance['closing_timestamp']} ({duration_days:.1f} days) | Realised PnL: ${realised_pnl:.2f} (APR: {apr:.2f}%) | base earnings ${total_base_earnings:.2f}, rewards ${total_reward_earnings:.2f}, Fees ${total_fees:.2f}"
+                        rebalance_title = f"▼ Rebalance #{int(rebalance['sequence_number'])}: {rebalance['opening_timestamp']} → {rebalance['closing_timestamp']} ({duration_days:.1f} days) | Realised PnL: \\${realised_pnl:,.2f} (APR: {apr:,.2f}%) | base earnings \\${total_base_earnings:.2f}, rewards \\${total_reward_earnings:.2f}, Fees \\${total_fees:.2f}"
+#title = f"▶ {to_datetime_str(position['entry_timestamp'])} | {token_flow} | {protocol_pair} | Entry {position['entry_net_apr'] * 100:.2f}% | Current {current_net_apr_decimal * 100:.2f}% | Net APR {strategy_net_apr * 100:.2f}% | Value ${strategy_value:,.2f}"
 
                         with st.expander(rebalance_title, expanded=False):
                             # Get next rebalance for "Rebalance Out" calculation
@@ -2777,18 +2779,20 @@ def render_dashboard(data_loader: DataLoader, mode: str):
     # Check database cache FIRST
     print(f"[CACHE] Checking: timestamp={timestamp_seconds}, liq_dist={liquidation_distance}")
     cached_results = tracker.load_analysis_cache(timestamp_seconds, liquidation_distance)
-
+    #print(cached_results)
     if cached_results is not None:
         # Use cached analysis from database (returns DataFrame only)
         all_results = cached_results
+        #print(all_results)
         # Extract protocol_a and protocol_b from the best strategy (first row, sorted by net_apr desc)
-        if not all_results.empty:
-            best_strategy = all_results.iloc[0]
-            protocol_a = best_strategy['protocol_a']  # Strategy data uses mixed-case
-            protocol_b = best_strategy['protocol_b']  # Strategy data uses mixed-case
-        else:
-            protocol_a = None
-            protocol_b = None
+        # if not all_results.empty:
+        #     best_strategy = all_results.iloc[0]
+        #     #print(best_strategy)
+        #     protocol_a = best_strategy['protocol_A']  # Strategy data uses mixed-case
+        #     protocol_b = best_strategy['protocol_B']  # Strategy data uses mixed-case
+        # else:
+        #     protocol_a = None
+        #     protocol_b = None
 
         st.sidebar.caption("✅ Using cached analysis from database")
         print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] ✅ Cache HIT: {len(all_results)} strategies")

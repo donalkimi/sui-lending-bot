@@ -36,9 +36,13 @@ def get_latest_timestamp(conn: Optional[Any] = None) -> Optional[str]:
     else:
         should_close = False
 
+    # Get SQLAlchemy engine for pandas operations
+    from dashboard.db_utils import get_db_engine
+    engine = get_db_engine()
+
     try:
         query = "SELECT MAX(timestamp) as latest FROM rates_snapshot"
-        result = pd.read_sql_query(query, conn)
+        result = pd.read_sql_query(query, engine)
 
         if result.empty or pd.isna(result['latest'].iloc[0]):
             return None
@@ -66,10 +70,14 @@ def get_available_timestamps(conn: Optional[Any] = None) -> List[str]:
     else:
         should_close = False
 
+    # Get SQLAlchemy engine for pandas operations
+    from dashboard.db_utils import get_db_engine
+    engine = get_db_engine()
+
     try:
         print(f"[INIT] Querying available timestamps from database")
         query = "SELECT DISTINCT timestamp FROM rates_snapshot ORDER BY timestamp DESC"
-        df = pd.read_sql_query(query, conn)
+        df = pd.read_sql_query(query, engine)
         timestamps = df['timestamp'].tolist()
         print(f"[INIT] Found {len(timestamps)} historical snapshots")
         # Return timestamps as strings to avoid precision issues
@@ -122,6 +130,10 @@ def load_historical_snapshot(timestamp: str, conn: Optional[Any] = None) -> Tupl
     else:
         should_close = False
 
+    # Get SQLAlchemy engine for pandas operations
+    from dashboard.db_utils import get_db_engine
+    engine = get_db_engine()
+
     try:
         print(f"[DATA LOAD] Loading snapshot: timestamp={timestamp}")
         # Query rates_snapshot at this timestamp
@@ -149,7 +161,7 @@ def load_historical_snapshot(timestamp: str, conn: Optional[Any] = None) -> Tupl
         # Use timestamp directly (should be string from get_available_timestamps)
         timestamp_param = timestamp
 
-        df = pd.read_sql_query(query, conn, params=(timestamp_param,))
+        df = pd.read_sql_query(query, engine, params=(timestamp_param,))
         print(f"[DATA LOAD] Loaded {len(df)} rows from rates_snapshot table")
 
         if df.empty:
@@ -261,6 +273,10 @@ def fetch_historical_rates(conn: Any, token1_contract: str, token2_contract: str
     if conn is None:
         return pd.DataFrame()
 
+    # Get SQLAlchemy engine for pandas operations
+    from dashboard.db_utils import get_db_engine
+    engine = get_db_engine()
+
     try:
         if strategy_seconds is None:
             raise ValueError("strategy_seconds is required")
@@ -323,7 +339,7 @@ def fetch_historical_rates(conn: Any, token1_contract: str, token2_contract: str
                 token3_contract, protocol_b
             )
 
-        df = pd.read_sql_query(query, conn, params=params)
+        df = pd.read_sql_query(query, engine, params=params)
 
         # DEBUG: Print query results
         print(f"\n{'='*80}")

@@ -208,21 +208,21 @@ def refresh_pipeline(
                               f"({check['token2']} in {check['protocol_a']}/{check['protocol_b']})")
 
                         # Log liquidation distance changes
-                        if check['needs_rebalance_2A']:
-                            print(f"[AUTO-REBALANCE]    Leg 2A: baseline={check['baseline_liq_dist_2A']:.2%} → "
-                                  f"live={check['live_liq_dist_2A']:.2%} "
-                                  f"(Δ={check['delta_2A']:.2%})")
-                        if check['needs_rebalance_2B']:
-                            print(f"[AUTO-REBALANCE]    Leg 2B: baseline={check['baseline_liq_dist_2B']:.2%} → "
-                                  f"live={check['live_liq_dist_2B']:.2%} "
-                                  f"(Δ={check['delta_2B']:.2%})")
+                        if check['needs_rebalance_2a']:
+                            print(f"[AUTO-REBALANCE]    Leg 2A: baseline={check['baseline_liq_dist_2a']:.2%} → "
+                                  f"live={check['live_liq_dist_2a']:.2%} "
+                                  f"(Δ={check['delta_2a']:.2%})")
+                        if check['needs_rebalance_2b']:
+                            print(f"[AUTO-REBALANCE]    Leg 2B: baseline={check['baseline_liq_dist_2b']:.2%} → "
+                                  f"live={check['live_liq_dist_2b']:.2%} "
+                                  f"(Δ={check['delta_2b']:.2%})")
 
                         # Execute rebalance
                         try:
                             rebalance_notes = (
                                 f"Auto-rebalance triggered by threshold ({REBALANCE_THRESHOLD:.1%}). "
-                                f"Leg 2A Δ: {check['delta_2A']:.2%}, "
-                                f"Leg 2B Δ: {check['delta_2B']:.2%}"
+                                f"Leg 2A Δ: {check['delta_2a']:.2%}, "
+                                f"Leg 2B Δ: {check['delta_2b']:.2%}"
                             )
 
                             rebalance_id = service.rebalance_position(

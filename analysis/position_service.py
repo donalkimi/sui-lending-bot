@@ -13,6 +13,12 @@ try:
 except ImportError:
     psycopg2 = None
 
+# SQLAlchemy support
+try:
+    from sqlalchemy import Engine
+except ImportError:
+    Engine = None
+
 # Add parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -31,9 +37,23 @@ class PositionService:
     - Timestamps in Unix seconds (int) internally
     """
 
-    def __init__(self, conn: Union[sqlite3.Connection, 'psycopg2.extensions.connection']):
-        """Initialize with database connection (SQLite or PostgreSQL)"""
+    def __init__(self,
+                 conn: Union[sqlite3.Connection, 'psycopg2.extensions.connection'],
+                 engine: Optional['Engine'] = None):
+        """
+        Initialize with database connection (SQLite or PostgreSQL).
+
+        Args:
+            conn: Raw database connection for cursor operations
+            engine: SQLAlchemy engine for pandas operations (if None, will be created from config)
+        """
         self.conn = conn
+        self.engine = engine
+
+        # If no engine provided, create one on-demand from config
+        if self.engine is None:
+            from dashboard.db_utils import get_db_engine
+            self.engine = get_db_engine()
 
     def _get_placeholder(self):
         """Get SQL placeholder based on connection type"""
@@ -383,7 +403,7 @@ class PositionService:
         WHERE status = 'active'
         ORDER BY entry_timestamp DESC
         """
-        positions = pd.read_sql_query(query, self.conn)
+        positions = pd.read_sql_query(query, self.engine)
 
         # Convert timestamps to Unix seconds (DESIGN_NOTES principle)
         # IMPORTANT: Use Int64 dtype to handle nulls without converting to float64
@@ -490,7 +510,7 @@ class PositionService:
         FROM positions
         WHERE position_id = {ph}
         """
-        result = pd.read_sql_query(query, self.conn, params=(position_id,))
+        result = pd.read_sql_query(query, self.engine, params=(position_id,))
 
         if result.empty:
             return None
@@ -609,7 +629,10 @@ class PositionService:
             raise TypeError(f"end_timestamp must be int (Unix seconds), got {type(end_timestamp).__name__}")
 
         if end_timestamp < start_timestamp:
-            raise ValueError("end_timestamp cannot be before start_timestamp")
+            raise ValueError(
+                f"end_timestamp ({end_timestamp}) cannot be before start_timestamp ({start_timestamp}). "
+                f"When viewing historical data, ensure calculation periods don't reference future events."
+            )
 
         # Extract position parameters
         deployment = position['deployment_usd']
@@ -653,7 +676,7 @@ class PositionService:
         WHERE timestamp >= {ph} AND timestamp <= {ph}
         ORDER BY timestamp ASC
         """
-        timestamps_df = pd.read_sql_query(query_timestamps, self.conn, params=(start_str, end_str))
+        timestamps_df = pd.read_sql_query(query_timestamps, self.engine, params=(start_str, end_str))
 
         if timestamps_df.empty:
             raise ValueError(f"No rate data found between {start_str} and {end_str}")
@@ -679,7 +702,7 @@ class PositionService:
                      protocol_b, token2,
                      protocol_b, token3)
 
-            leg_rates = pd.read_sql_query(leg_query, self.conn, params=params)
+            leg_rates = pd.read_sql_query(leg_query, self.engine, params=params)
 
             rates_data.append({
                 'timestamp': to_seconds(ts_str),
@@ -987,72 +1010,88 @@ class PositionService:
         if end_timestamp == start_timestamp:
             return 0.0, 0.0
 
-        # Query all timestamps in period
+        # OPTIMIZATION: Batch load all rates for the entire segment at once
+        # This replaces the N+1 query problem with a single bulk query
         start_str = to_datetime_str(start_timestamp)
         end_str = to_datetime_str(end_timestamp)
 
         ph = self._get_placeholder()
-        query_timestamps = f"""
-        SELECT DISTINCT timestamp
-        FROM rates_snapshot
-        WHERE timestamp >= {ph} AND timestamp <= {ph}
-        ORDER BY timestamp ASC
-        """
-        timestamps_df = pd.read_sql_query(query_timestamps, self.conn, params=(start_str, end_str))
-        if timestamps_df.empty:
+
+        # Single bulk query for all rates in the period
+        # DESIGN PRINCIPLE: Use token_contract for lookups, not token symbol
+        if action == 'Lend':
+            bulk_query = f"""
+            SELECT timestamp, lend_base_apr, lend_reward_apr
+            FROM rates_snapshot
+            WHERE timestamp >= {ph} AND timestamp <= {ph}
+              AND protocol = {ph} AND token_contract = {ph}
+            ORDER BY timestamp ASC
+            """
+        else:  # Borrow
+            bulk_query = f"""
+            SELECT timestamp, borrow_base_apr, borrow_reward_apr
+            FROM rates_snapshot
+            WHERE timestamp >= {ph} AND timestamp <= {ph}
+              AND protocol = {ph} AND token_contract = {ph}
+            ORDER BY timestamp ASC
+            """
+
+        # Execute ONCE - get all rates for this leg's segment
+        all_rates = pd.read_sql_query(bulk_query, self.engine,
+                                       params=(start_str, end_str, protocol, token_contract))
+
+        if all_rates.empty:
             # No rate data available, return zeros
+            return 0.0, 0.0
+
+        # Create lookup dictionary for O(1) timestamp access
+        rates_lookup = {}
+        for _, row in all_rates.iterrows():
+            ts = to_seconds(row['timestamp'])
+            if action == 'Lend':
+                base_apr = row['lend_base_apr']
+                reward_apr = row['lend_reward_apr']
+            else:  # Borrow
+                base_apr = row['borrow_base_apr']
+                reward_apr = row['borrow_reward_apr']
+
+            # Handle None/NULL values defensively
+            rates_lookup[ts] = {
+                'base_apr': float(base_apr) if base_apr is not None and pd.notna(base_apr) else 0.0,
+                'reward_apr': float(reward_apr) if reward_apr is not None and pd.notna(reward_apr) else 0.0
+            }
+
+        # Get all timestamps for period calculation
+        timestamps = sorted(rates_lookup.keys())
+
+        if len(timestamps) < 2:
+            # Need at least 2 timestamps to calculate a period
             return 0.0, 0.0
 
         base_total = 0.0
         reward_total = 0.0
 
-        # For each period, calculate earnings using forward-looking rate principle
-        for i in range(len(timestamps_df) - 1):
-            ts_current = to_seconds(timestamps_df.iloc[i]['timestamp'])
-            ts_next = to_seconds(timestamps_df.iloc[i + 1]['timestamp'])
+        # Loop through periods - NO QUERIES in this loop (optimization)
+        for i in range(len(timestamps) - 1):
+            ts_current = timestamps[i]
+            ts_next = timestamps[i + 1]
             period_years = (ts_next - ts_current) / (365.25 * 86400)
 
-            # Query rates at current timestamp
-            # DESIGN PRINCIPLE: Use token_contract for lookups, not token symbol
-            ph = self._get_placeholder()
-            if action == 'Lend':
-                rate_query = f"""
-                SELECT lend_base_apr, lend_reward_apr
-                FROM rates_snapshot
-                WHERE timestamp = {ph} AND protocol = {ph} AND token_contract = {ph}
-                """
-            else:  # Borrow
-                rate_query = f"""
-                SELECT borrow_base_apr, borrow_reward_apr
-                FROM rates_snapshot
-                WHERE timestamp = {ph} AND protocol = {ph} AND token_contract = {ph}
-                """
+            # O(1) lookup - no database query
+            rate_data = rates_lookup.get(ts_current, {'base_apr': 0.0, 'reward_apr': 0.0})
+            base_apr = rate_data['base_apr']
+            reward_apr = rate_data['reward_apr']
 
-            ts_str = to_datetime_str(ts_current)
-            rates = pd.read_sql_query(rate_query, self.conn, params=(ts_str, protocol, token_contract))
-           # rates.to_csv("out.csv")
-            if not rates.empty:
-                if action == 'Lend':
-                    base_apr = rates.iloc[0]['lend_base_apr']
-                    reward_apr = rates.iloc[0]['lend_reward_apr']
-                    if base_apr is None or reward_apr is None:
-                        print(f"{ts_current}\t{ts_next}\t{protocol}\t{token_contract}")
-                    # Handle None/NULL values
-                    base_apr = float(base_apr) if base_apr is not None else 0.0
-                    reward_apr = float(reward_apr) if reward_apr is not None else 0.0
-                    # Lend earnings are positive
-                    base_total += deployment * weight * base_apr * period_years
-                    reward_total += deployment * weight * reward_apr * period_years
-                else:  # Borrow
-                    base_apr = rates.iloc[0]['borrow_base_apr']
-                    reward_apr = rates.iloc[0]['borrow_reward_apr']
-                    # Handle None/NULL values
-                    base_apr = float(base_apr) if base_apr is not None else 0.0
-                    reward_apr = float(reward_apr) if reward_apr is not None else 0.0
-                    # Borrow costs are accumulated as positive
-                    base_total += deployment * weight * base_apr * period_years
-                    # Borrow rewards are earnings, accumulated as positive
-                    reward_total += deployment * weight * reward_apr * period_years
+            # Accumulate earnings
+            if action == 'Lend':
+                # Lend earnings are positive
+                base_total += deployment * weight * base_apr * period_years
+                reward_total += deployment * weight * reward_apr * period_years
+            else:  # Borrow
+                # Borrow costs are accumulated as positive
+                base_total += deployment * weight * base_apr * period_years
+                # Borrow rewards are earnings, accumulated as positive
+                reward_total += deployment * weight * reward_apr * period_years
 
         return base_total, reward_total
 
@@ -1160,7 +1199,7 @@ class PositionService:
         # Entry token amounts (based on entry prices from position record)
         entry_token_amount_1a = (l_a * deployment) / position['entry_price_1a']
         entry_token_amount_2a = (b_a * deployment) / position['entry_price_2a']
-        entry_token_amount_2b = (L_B * deployment) / position['entry_price_2b']
+        entry_token_amount_2b = entry_token_amount_2a  # Same tokens moved from A to B
         entry_token_amount_3b = (b_b * deployment) / position['entry_price_3b']
 
         # Exit token amounts (token amounts don't change during rebalancing - only $$$ changes with price)
@@ -1386,7 +1425,7 @@ class PositionService:
             position['protocol_b'], position['token3_contract']
         )
 
-        rates_df = pd.read_sql_query(query, self.conn, params=params)
+        rates_df = pd.read_sql_query(query, self.engine, params=params)
 
         # Extract rates for each leg
         def get_leg_data(protocol, token_contract):
@@ -1626,7 +1665,7 @@ class PositionService:
         WHERE position_id = {ph}
         ORDER BY sequence_number ASC
         """
-        rebalances = pd.read_sql_query(query, self.conn, params=(position_id,))
+        rebalances = pd.read_sql_query(query, self.engine, params=(position_id,))
 
         # DEFENSIVE CONVERSION: Convert bytes to proper numeric types
         # (SQLite sometimes stores DECIMAL fields as BLOB)
@@ -1751,7 +1790,7 @@ class PositionService:
         """
         segments = pd.read_sql_query(
             query,
-            self.conn,
+            self.engine,
             params=(position_id, selected_timestamp_str, selected_timestamp_str)
         )
 
@@ -1834,7 +1873,7 @@ class PositionService:
         """
         result = pd.read_sql_query(
             query,
-            self.conn,
+            self.engine,
             params=(position_id, selected_timestamp_str)
         )
 
@@ -1855,8 +1894,9 @@ class PositionService:
 
         DESIGN PRINCIPLES:
         - Timestamps are Unix seconds (int) internally
-        - Use stored closing_liq_dist from most recent rebalance segment for rebalanced positions
-        - Calculate live liquidation distances using PositionCalculator.calculate_liquidation_price()
+        - Baseline liquidation distances calculated from entry token amounts at entry prices
+        - These entry distances represent the TARGET maintained through rebalancing
+        - Live liquidation distances calculated using current market prices
         - Check both leg 2A (borrow from protocol A) and leg 2B (lend to protocol B)
 
         Args:
@@ -1871,9 +1911,9 @@ class PositionService:
                     'token2': str,
                     'protocol_a': str,
                     'protocol_b': str,
-                    'baseline_liq_dist_2a': float,  # Entry or most recent closing
+                    'baseline_liq_dist_2a': float,  # Entry target (calculated from entry data)
                     'live_liq_dist_2a': float,
-                    'baseline_liq_dist_2b': float,  # Entry or most recent closing
+                    'baseline_liq_dist_2b': float,  # Entry target (calculated from entry data)
                     'live_liq_dist_2b': float,
                     'needs_rebalance_2a': bool,
                     'needs_rebalance_2b': bool,
@@ -1898,35 +1938,10 @@ class PositionService:
 
         for _, position in active_positions.iterrows():
             position_id = position['position_id']
-            rebalance_count = position.get('rebalance_count', 0)
 
-            # Get baseline liquidation distances (entry or most recent closing)
-            if rebalance_count == 0:
-                # Never rebalanced - need to calculate from entry data
-                # Note: entry_liquidation_distance is overall strategy value, not per-leg
-                # We need to calculate per-leg distances from entry data
-                baseline_liq_dist_2a = None  # Will calculate from entry
-                baseline_liq_dist_2b = None  # Will calculate from entry
-                use_entry_calc = True
-            else:
-                # Has been rebalanced - get most recent segment's closing liquidation distances
-                ph = self._get_placeholder()
-                query = f"""
-                SELECT closing_liq_dist_2a, closing_liq_dist_2b
-                FROM position_rebalances
-                WHERE position_id = {ph}
-                ORDER BY sequence_number DESC
-                LIMIT 1
-                """
-                segment = pd.read_sql_query(query, self.conn, params=(position_id,))
-
-                if not segment.empty:
-                    baseline_liq_dist_2a = float(segment['closing_liq_dist_2a'].iloc[0])
-                    baseline_liq_dist_2b = float(segment['closing_liq_dist_2b'].iloc[0])
-                    use_entry_calc = False
-                else:
-                    # Fallback to entry calculation
-                    use_entry_calc = True
+            # ALWAYS calculate baseline from entry data
+            # Entry liquidation distances are the TARGET maintained through rebalancing
+            use_entry_calc = True
 
             # Get current market data at live_timestamp
             try:
@@ -1944,7 +1959,7 @@ class PositionService:
                 """
                 rates_df = pd.read_sql_query(
                     query_rates,
-                    self.conn,
+                    self.engine,
                     params=(
                         live_timestamp_str,
                         position['protocol_a'], position['token1_contract'],  # Leg 1A
@@ -1991,7 +2006,7 @@ class PositionService:
                 # Token amounts (constant throughout position life, unless manually rebalanced)
                 entry_token_amount_1a = (l_a * deployment_usd) / entry_price_1a if entry_price_1a > 0 else 0
                 entry_token_amount_2a = (b_a * deployment_usd) / entry_price_2a if entry_price_2a > 0 else 0
-                entry_token_amount_2b = (L_B * deployment_usd) / entry_price_2b if entry_price_2b > 0 else 0
+                entry_token_amount_2b = entry_token_amount_2a  # Same tokens moved from A to B
                 entry_token_amount_3b = (b_b * deployment_usd) / entry_price_3b if entry_price_3b > 0 else 0
 
                 # Calculate baseline liquidation distances if needed
