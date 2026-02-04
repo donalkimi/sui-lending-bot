@@ -347,3 +347,63 @@ def analyze_strategy(
 - ✅ PositionCalculator: Requires both as parameters
 - ✅ PositionService: Stores both in positions table
 - ✅ All function signatures enforce pairing through type hints
+
+### 11. Dashboard as Pure View Layer
+
+**Core Principle:** Dashboard files should contain NO calculations. All metrics must be pre-calculated and stored in the database.
+
+**Why:**
+- **Performance:** Dashboard loads instantly without expensive calculations
+- **Consistency:** Single source of truth (database), no discrepancies between views
+- **Auditability:** All values are stored and can be inspected/debugged
+- **Separation of concerns:** Data collection (refresh_pipeline) vs. data display (dashboard)
+
+**Architecture:**
+```
+┌──────────────────────┐
+│  refresh_pipeline.py │  Calculate once per hour
+│  (data collection)   │  - Fetch protocol data
+│                      │  - Run rate analysis
+│                      │  - Calculate position statistics ← ALL CALCULATIONS HERE
+│                      │  - Store in database
+└──────────┬───────────┘
+           │
+           ▼
+┌──────────────────────┐
+│      Database        │  Single source of truth
+│  position_statistics │  - All pre-calculated metrics
+│  rates_snapshot      │  - Historical rate data
+│  positions           │  - Position details
+└──────────┬───────────┘
+           │
+           ▼
+┌──────────────────────┐
+│  dashboard_renderer  │  Pure view layer
+│  (display only)      │  - Read from database
+│                      │  - Format for display
+│                      │  - NO calculations
+└──────────────────────┘
+```
+
+**What belongs in dashboard:**
+- ✅ Database queries (read-only)
+- ✅ Formatting (percentages, currency, colors)
+- ✅ UI layout and organization
+- ✅ Simple aggregations (sum, average) for display groups
+- ✅ Filters and sorting
+
+**What does NOT belong in dashboard:**
+- ❌ Position PnL calculations
+- ❌ Earnings breakdowns (base/reward)
+- ❌ APR calculations
+- ❌ Fee calculations
+- ❌ Rate interpolations or estimations
+- ❌ Complex business logic
+
+**Verification status (as of 2026-02-04):**
+- ✅ position_statistics table: All metrics pre-calculated
+- ✅ Portfolio Summary: Aggregates stored values
+- ✅ Strategy Summary: Displays stored values
+- ⚠️ Rebalance details: Still calculating some metrics (to be moved to database)
+
+**Exception:** Formatting calculations like `(value / deployment * 100)` for percentage display are acceptable since they're view-layer transformations, not business logic.

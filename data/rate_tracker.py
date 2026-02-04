@@ -114,7 +114,119 @@ class RateTracker:
             raise
         finally:
             conn.close()
-    
+
+    def save_position_statistics(self, stats: dict):
+        """
+        Save position statistics to database.
+
+        Args:
+            stats: Dictionary containing position statistics
+                {
+                    'position_id': str,
+                    'timestamp': int,  # Unix seconds
+                    'total_pnl': float,
+                    'total_earnings': float,
+                    'base_earnings': float,
+                    'reward_earnings': float,
+                    'total_fees': float,
+                    'current_value': float,
+                    'realized_apr': float,
+                    'current_apr': float,
+                    'live_pnl': float,
+                    'realized_pnl': float,
+                    'calculation_timestamp': int  # Unix seconds when calculated
+                }
+        """
+        conn = self._get_connection()
+
+        try:
+            # Convert Unix timestamps to datetime strings for database
+            from datetime import datetime
+            timestamp_str = datetime.fromtimestamp(stats['timestamp']).strftime('%Y-%m-%d %H:%M:%S')
+            calc_timestamp_str = datetime.fromtimestamp(stats['calculation_timestamp']).strftime('%Y-%m-%d %H:%M:%S')
+
+            # Convert all numeric values to native Python types (handle numpy types)
+            total_pnl = self._convert_to_native_types(stats['total_pnl'])
+            total_earnings = self._convert_to_native_types(stats['total_earnings'])
+            base_earnings = self._convert_to_native_types(stats['base_earnings'])
+            reward_earnings = self._convert_to_native_types(stats['reward_earnings'])
+            total_fees = self._convert_to_native_types(stats['total_fees'])
+            current_value = self._convert_to_native_types(stats['current_value'])
+            realized_apr = self._convert_to_native_types(stats['realized_apr'])
+            current_apr = self._convert_to_native_types(stats['current_apr'])
+            live_pnl = self._convert_to_native_types(stats['live_pnl'])
+            realized_pnl = self._convert_to_native_types(stats['realized_pnl'])
+
+            if self.db_type == 'postgresql':
+                # PostgreSQL INSERT ... ON CONFLICT DO UPDATE
+                cursor = conn.cursor()
+                cursor.execute("""
+                    INSERT INTO position_statistics (
+                        position_id, timestamp, total_pnl, total_earnings, base_earnings,
+                        reward_earnings, total_fees, current_value, realized_apr, current_apr,
+                        live_pnl, realized_pnl, calculation_timestamp
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (position_id, timestamp) DO UPDATE SET
+                        total_pnl = EXCLUDED.total_pnl,
+                        total_earnings = EXCLUDED.total_earnings,
+                        base_earnings = EXCLUDED.base_earnings,
+                        reward_earnings = EXCLUDED.reward_earnings,
+                        total_fees = EXCLUDED.total_fees,
+                        current_value = EXCLUDED.current_value,
+                        realized_apr = EXCLUDED.realized_apr,
+                        current_apr = EXCLUDED.current_apr,
+                        live_pnl = EXCLUDED.live_pnl,
+                        realized_pnl = EXCLUDED.realized_pnl,
+                        calculation_timestamp = EXCLUDED.calculation_timestamp
+                """, (
+                    stats['position_id'],
+                    timestamp_str,
+                    total_pnl,
+                    total_earnings,
+                    base_earnings,
+                    reward_earnings,
+                    total_fees,
+                    current_value,
+                    realized_apr,
+                    current_apr,
+                    live_pnl,
+                    realized_pnl,
+                    calc_timestamp_str
+                ))
+            else:
+                # SQLite INSERT OR REPLACE
+                cursor = conn.cursor()
+                cursor.execute("""
+                    INSERT OR REPLACE INTO position_statistics (
+                        position_id, timestamp, total_pnl, total_earnings, base_earnings,
+                        reward_earnings, total_fees, current_value, realized_apr, current_apr,
+                        live_pnl, realized_pnl, calculation_timestamp
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    stats['position_id'],
+                    timestamp_str,
+                    total_pnl,
+                    total_earnings,
+                    base_earnings,
+                    reward_earnings,
+                    total_fees,
+                    current_value,
+                    realized_apr,
+                    current_apr,
+                    live_pnl,
+                    realized_pnl,
+                    calc_timestamp_str
+                ))
+
+            conn.commit()
+
+        except Exception as e:
+            conn.rollback()
+            print(f"[ERROR] Error saving position statistics for {stats['position_id']}: {e}")
+            raise
+        finally:
+            conn.close()
+
     def _save_rates_snapshot(
         self,
         conn,

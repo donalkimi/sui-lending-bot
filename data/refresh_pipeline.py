@@ -25,6 +25,7 @@ from analysis.rate_analyzer import RateAnalyzer
 from data.rate_tracker import RateTracker
 from alerts.slack_notifier import SlackNotifier
 from utils.time_helpers import to_seconds, to_datetime_str
+from analysis.position_statistics_calculator import calculate_position_statistics
 
 
 @dataclass
@@ -255,6 +256,76 @@ def refresh_pipeline(
             # Clean up database connection
             if 'conn' in locals():
                 conn.close()
+
+        # Calculate and save position statistics (AFTER rebalancing so stats include new rebalances)
+        print("[POSITION STATS] Calculating position statistics...")
+        try:
+            from analysis.position_service import PositionService
+            from dashboard.dashboard_utils import get_db_connection
+
+            # Create database connection for position service
+            conn = get_db_connection()  # Respects USE_CLOUD_DB setting
+            service = PositionService(conn)
+
+            # Get all active positions at this timestamp
+            active_positions = service.get_active_positions(live_timestamp=current_seconds)
+
+            if not active_positions.empty:
+                # Helper functions for rate lookups
+                def get_rate(token_contract: str, protocol: str, side: str) -> float:
+                    """Get rate from merged data for a specific token/protocol/side"""
+                    if side == 'lend':
+                        row = lend_rates[lend_rates['Contract'] == token_contract]
+                        if not row.empty and protocol in row.columns:
+                            rate = row.iloc[0][protocol]
+                            return rate if pd.notna(rate) else 0.0
+                    else:  # borrow
+                        row = borrow_rates[borrow_rates['Contract'] == token_contract]
+                        if not row.empty and protocol in row.columns:
+                            rate = row.iloc[0][protocol]
+                            return rate if pd.notna(rate) else 0.0
+                    return 0.0
+
+                def get_borrow_fee(token_contract: str, protocol: str) -> float:
+                    """Get borrow fee from merged data for a specific token/protocol"""
+                    row = borrow_fees[borrow_fees['Contract'] == token_contract]
+                    if not row.empty and protocol in row.columns:
+                        fee = row.iloc[0][protocol]
+                        return fee if pd.notna(fee) else 0.0
+                    return 0.0
+
+                # Calculate statistics for each active position
+                stats_saved = 0
+                for _, position in active_positions.iterrows():
+                    try:
+                        stats = calculate_position_statistics(
+                            position_id=position['position_id'],
+                            timestamp=current_seconds,
+                            service=service,
+                            get_rate_func=get_rate,
+                            get_borrow_fee_func=get_borrow_fee
+                        )
+
+                        # Save to database
+                        tracker.save_position_statistics(stats)
+                        stats_saved += 1
+
+                    except Exception as e:
+                        print(f"[POSITION STATS] Failed to calculate/save stats for position {position['position_id'][:8]}...: {e}")
+                        # Continue to next position even if this one fails
+
+                print(f"[POSITION STATS] Successfully calculated and saved statistics for {stats_saved}/{len(active_positions)} position(s)")
+            else:
+                print("[POSITION STATS] No active positions to calculate statistics for")
+
+            # Clean up database connection
+            conn.close()
+
+        except Exception as e:
+            print(f"[POSITION STATS] Error in position statistics calculation: {e}")
+            import traceback
+            traceback.print_exc()
+            # Don't fail entire pipeline if position statistics fails
 
     except Exception as e:
         error_msg = f"Error during analysis: {str(e)}"

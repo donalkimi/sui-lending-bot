@@ -326,3 +326,61 @@ CREATE TABLE IF NOT EXISTS position_rebalances (
 CREATE INDEX IF NOT EXISTS idx_rebalances_position ON position_rebalances(position_id);
 CREATE INDEX IF NOT EXISTS idx_rebalances_sequence ON position_rebalances(position_id, sequence_number);
 CREATE INDEX IF NOT EXISTS idx_rebalances_timestamps ON position_rebalances(opening_timestamp, closing_timestamp);
+
+
+-- Table 6: position_statistics
+-- Pre-calculated position summary statistics for fast dashboard loading
+-- Follows event sourcing pattern: immutable snapshots of position state at each timestamp
+CREATE TABLE IF NOT EXISTS position_statistics (
+    -- Identification
+    position_id TEXT NOT NULL,
+    timestamp TIMESTAMP NOT NULL,
+
+    -- Core Metrics (all in USD)
+    total_pnl DECIMAL(20, 10) NOT NULL,           -- Realized + Unrealized PnL
+    total_earnings DECIMAL(20, 10) NOT NULL,      -- Total protocol earnings + rewards
+    base_earnings DECIMAL(20, 10) NOT NULL,       -- Net protocol interest (lend - borrow)
+    reward_earnings DECIMAL(20, 10) NOT NULL,     -- Total reward distributions
+    total_fees DECIMAL(20, 10) NOT NULL,          -- Total borrow fees paid
+
+    -- Position Value
+    current_value DECIMAL(20, 10) NOT NULL,       -- deployment_usd + total_pnl
+
+    -- APR Metrics (as decimals: 0.05 = 5%)
+    realized_apr DECIMAL(10, 6),                  -- Annualized return from entry to now
+    current_apr DECIMAL(10, 6),                   -- Current APR based on live rates
+
+    -- Segment Breakdown
+    live_pnl DECIMAL(20, 10),                     -- PnL from current live segment
+    realized_pnl DECIMAL(20, 10),                 -- PnL from all closed rebalance segments
+
+    -- Metadata
+    calculation_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,  -- When this was calculated
+
+    PRIMARY KEY (position_id, timestamp),
+    FOREIGN KEY (position_id) REFERENCES positions(position_id) ON DELETE CASCADE
+);
+
+-- Indexes for position_statistics
+CREATE INDEX IF NOT EXISTS idx_position_statistics_timestamp ON position_statistics(timestamp);
+CREATE INDEX IF NOT EXISTS idx_position_statistics_position_id ON position_statistics(position_id);
+CREATE INDEX IF NOT EXISTS idx_position_statistics_position_time ON position_statistics(position_id, timestamp);
+
+-- Enable RLS for position_statistics
+ALTER TABLE position_statistics ENABLE ROW LEVEL SECURITY;
+
+-- RLS Policies for position_statistics
+-- Allow service role full access (for backend data collection)
+CREATE POLICY "Service role has full access to position_statistics"
+ON position_statistics
+FOR ALL
+TO service_role
+USING (true)
+WITH CHECK (true);
+
+-- Allow authenticated users to read position statistics
+CREATE POLICY "Authenticated users can read position_statistics"
+ON position_statistics
+FOR SELECT
+TO authenticated
+USING (true);
