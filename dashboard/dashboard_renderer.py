@@ -1088,8 +1088,200 @@ def render_positions_table_tab(timestamp_seconds: int):
                 'price': float(row['price_usd']) if pd.notna(row['price_usd']) else 0.0
             }
 
-        # Render expandable rows (Stages 1-4)
+        # ========================================================================
+        # PHASE 1 & 2: PRE-CALCULATE PORTFOLIO METRICS
+        # ========================================================================
+        # Initialize portfolio aggregators
+        portfolio_total_deployed = 0.0
+        portfolio_total_pnl = 0.0
+        portfolio_total_earnings = 0.0
+        portfolio_base_earnings = 0.0
+        portfolio_reward_earnings = 0.0
+        portfolio_fees = 0.0
+
+        # For time-and-capital-weighted average APR calculations
+        weighted_realised_apr_sum = 0.0  # Sum(strategy_time × deployUSD × RealisedAPR)
+        weighted_current_apr_sum = 0.0   # Sum(strategy_time × deployUSD × CurrentAPR)
+        total_weight = 0.0  # Sum(strategy_time × deployUSD)
+
+        # Store position results for rendering
+        position_results = []
+
+        # First pass: Calculate metrics for all positions
         for _, position in active_positions.iterrows():
+            deployment_usd = safe_float(position['deployment_usd'])
+            entry_ts = to_seconds(position['entry_timestamp'])
+            strategy_days = (latest_timestamp - entry_ts) / 86400
+
+            # Calculate strategy metrics (simplified version for portfolio aggregation)
+            # We'll use the same calculation logic that's used for the title
+
+            # Check if position has been rebalanced
+            has_rebalances = position.get('rebalance_count', 0) > 0
+
+            # Calculate live segment PnL
+            if pd.notna(position.get('last_rebalance_timestamp')):
+                segment_start_ts = to_seconds(position['last_rebalance_timestamp'])
+            else:
+                segment_start_ts = entry_ts
+            live_ts = latest_timestamp
+
+            # Calculate live segment base/reward earnings for all 4 legs
+            try:
+                live_base_1A, live_reward_1A = service.calculate_leg_earnings_split(position, '1a', 'Lend', segment_start_ts, live_ts)
+                live_base_2A, live_reward_2A = service.calculate_leg_earnings_split(position, '2a', 'Borrow', segment_start_ts, live_ts)
+                live_base_2B, live_reward_2B = service.calculate_leg_earnings_split(position, '2b', 'Lend', segment_start_ts, live_ts)
+                live_base_3B, live_reward_3B = service.calculate_leg_earnings_split(position, '3b', 'Borrow', segment_start_ts, live_ts)
+
+                # Calculate live segment totals
+                live_base_lend = live_base_1A + live_base_2B
+                live_base_borrow = live_base_2A + live_base_3B
+                live_base_earnings = live_base_lend - live_base_borrow
+                live_reward_earnings = live_reward_1A + live_reward_2A + live_reward_2B + live_reward_3B
+                live_total_earnings = live_base_earnings + live_reward_earnings
+
+                # Calculate live segment fees
+                # Only include initial fees if position has never been rebalanced
+                # If rebalanced, initial fees are already in rebalance records
+                include_initial = not has_rebalances
+                pv_result_for_fees = service.calculate_position_value(position, segment_start_ts, live_ts, include_initial_fees=include_initial)
+                live_fees = pv_result_for_fees.get('fees', 0.0)
+                live_pnl = live_total_earnings - live_fees
+            except Exception:
+                # Fallback: Use simple position value calculation
+                # Use same logic: only include initial fees if never rebalanced
+                include_initial = not has_rebalances
+                pv_result_fallback = service.calculate_position_value(position, segment_start_ts, live_ts, include_initial_fees=include_initial)
+                live_pnl = pv_result_fallback['net_earnings']
+                live_total_earnings = pv_result_fallback['lend_earnings'] - pv_result_fallback['borrow_costs']
+                live_base_earnings = 0.0
+                live_reward_earnings = 0.0
+                live_fees = pv_result_fallback.get('fees', 0.0)
+
+            # Sum rebalanced segments
+            rebalanced_pnl = 0.0
+            rebalanced_total_earnings = 0.0
+            rebalanced_base_earnings = 0.0
+            rebalanced_reward_earnings = 0.0
+            rebalanced_fees = 0.0
+
+            if has_rebalances:
+                rebalances_for_portfolio = service.get_rebalance_history(position['position_id'])
+                if not rebalances_for_portfolio.empty:
+                    for _, rebal in rebalances_for_portfolio.iterrows():
+                        # Use stored realised metrics from database
+                        rebalanced_pnl += rebal.get('realised_pnl', 0.0) or 0.0
+                        rebalanced_fees += rebal.get('realised_fees', 0.0) or 0.0
+
+                        # Calculate earnings components if we have the data
+                        rebalanced_total_earnings += rebal.get('realised_lend_earnings', 0.0) or 0.0
+                        rebalanced_total_earnings -= rebal.get('realised_borrow_costs', 0.0) or 0.0
+
+            # Strategy totals (Real + Unreal)
+            strategy_pnl = live_pnl + rebalanced_pnl
+            strategy_total_earnings = live_total_earnings + rebalanced_total_earnings
+            strategy_base_earnings = live_base_earnings + rebalanced_base_earnings
+            strategy_reward_earnings = live_reward_earnings + rebalanced_reward_earnings
+            strategy_fees = live_fees + rebalanced_fees
+
+            # Calculate strategy Net APR
+            if strategy_days > 0 and deployment_usd > 0:
+                strategy_net_apr = (strategy_pnl / deployment_usd) * (365 / strategy_days)
+            else:
+                strategy_net_apr = 0.0
+
+            # Calculate current Net APR from live rates
+            l_a = safe_float(position['l_a'])
+            b_a = safe_float(position['b_a'])
+            l_b = safe_float(position['l_b'])
+            b_b = safe_float(position['b_b'])
+
+            lend_1A = get_rate(position['token1'], position['protocol_a'], 'lend')
+            borrow_2A = get_rate(position['token2'], position['protocol_a'], 'borrow')
+            lend_2B = get_rate(position['token2'], position['protocol_b'], 'lend')
+            borrow_3B = get_rate(position['token3'], position['protocol_b'], 'borrow')
+            borrow_fee_2A = get_borrow_fee(position['token2'], position['protocol_a'])
+            borrow_fee_3B = get_borrow_fee(position['token3'], position['protocol_b'])
+
+            gross_apr = (l_a * lend_1A) + (l_b * lend_2B) - (b_a * borrow_2A) - (b_b * borrow_3B)
+            fee_cost = b_a * borrow_fee_2A + b_b * borrow_fee_3B
+            current_net_apr_decimal = gross_apr - fee_cost
+
+            # Accumulate portfolio totals
+            portfolio_total_deployed += deployment_usd
+            portfolio_total_pnl += strategy_pnl
+            portfolio_total_earnings += strategy_total_earnings
+            portfolio_base_earnings += strategy_base_earnings
+            portfolio_reward_earnings += strategy_reward_earnings
+            portfolio_fees += strategy_fees
+
+            # Time-and-capital-weighted APR calculations
+            # Weight = strategy_time × deployment_usd
+            weight = strategy_days * deployment_usd
+            weighted_realised_apr_sum += weight * strategy_net_apr
+            weighted_current_apr_sum += weight * current_net_apr_decimal
+            total_weight += weight
+
+            # Store for rendering (Phase 4)
+            position_results.append({
+                'position': position,
+                'deployment_usd': deployment_usd,
+                'strategy_pnl': strategy_pnl,
+                'strategy_net_apr': strategy_net_apr,
+                'current_net_apr_decimal': current_net_apr_decimal,
+                'strategy_days': strategy_days,
+            })
+
+        # Calculate derived metrics
+        portfolio_roi = (portfolio_total_pnl / portfolio_total_deployed * 100) if portfolio_total_deployed > 0 else 0.0
+        portfolio_avg_realised_apr = (weighted_realised_apr_sum / total_weight) if total_weight > 0 else 0.0
+        portfolio_avg_current_apr = (weighted_current_apr_sum / total_weight) if total_weight > 0 else 0.0
+
+        # ========================================================================
+        # PHASE 3: RENDER PORTFOLIO SUMMARY
+        # ========================================================================
+        st.markdown("### 📊 Portfolio Summary")
+
+        # Row 1: 4 columns
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Total Deployed", f"${portfolio_total_deployed:,.2f}")
+        with col2:
+            roi_display = f"ROI: {portfolio_roi:.2f}%"
+            st.metric("Total PnL (Real+Unreal)", f"${portfolio_total_pnl:,.2f}", delta=roi_display)
+        with col3:
+            st.metric("Total Earnings", f"${portfolio_total_earnings:,.2f}")
+        with col4:
+            st.metric("Base Earnings", f"${portfolio_base_earnings:,.2f}")
+
+        # Row 2: 3 columns
+        col5, col6, col7 = st.columns(3)
+        with col5:
+            st.metric("Reward Earnings", f"${portfolio_reward_earnings:,.2f}")
+        with col6:
+            st.metric("Fees", f"${portfolio_fees:,.2f}")
+        with col7:
+            st.metric("Avg Realised APR", f"{portfolio_avg_realised_apr * 100:.2f}%")
+
+        # Row 3: 1 column
+        col8, _, _ = st.columns(3)
+        with col8:
+            st.metric("Avg Current APR", f"{portfolio_avg_current_apr * 100:.2f}%")
+
+        st.markdown("---")  # Separator before individual positions
+
+        # ========================================================================
+        # PHASE 4: Render expandable rows using PRE-CALCULATED metrics
+        # ========================================================================
+        for result in position_results:
+            # Extract position and pre-calculated metrics
+            position = result['position']
+            deployment_usd = result['deployment_usd']
+            strategy_pnl = result['strategy_pnl']
+            strategy_net_apr = result['strategy_net_apr']
+            current_net_apr_decimal = result['current_net_apr_decimal']
+            strategy_days = result['strategy_days']
+
             # Build token flow string (all positions are 4-leg levered)
             token_flow = f"{position['token1']} → {position['token2']} → {position['token3']}"
 
@@ -1173,27 +1365,15 @@ When a rate was missing, the previous valid rate was carried forward (following 
                     else:
                         st.write("No details available")
 
-            # STAGE 1: Build summary title for expander
-            # Calculate strategy-level metrics for title (from entry to current)
-            # Calculate days from entry to current timestamp
-            entry_ts = to_seconds(position['entry_timestamp'])
-            strategy_days = (latest_timestamp - entry_ts) / 86400
+            # STAGE 1: Build summary title using PRE-CALCULATED metrics
+            # Values already calculated in Phase 1:
+            # - strategy_pnl: Total PnL (live + rebalanced)
+            # - strategy_net_apr: Annualized return
+            # - current_net_apr_decimal: Current APR from live rates
+            # - strategy_days: Days from entry to current
 
-            # For title: We need to calculate strategy_pnl from strategy summary
-            # This requires calculating all segments. We'll do a simplified calculation here.
-            # Calculate from ENTRY to CURRENT (not from last rebalance)
-            strategy_pv_result = service.calculate_position_value(position, entry_ts, latest_timestamp)
-            strategy_total_pnl = strategy_pv_result['net_earnings']
-
-            # Calculate strategy value: deployment + total PnL
-            strategy_value = deployment_usd + strategy_total_pnl
-
-            # Calculate Net APR from strategy start
-            if strategy_days > 0 and deployment_usd > 0:
-                # Net APR = (Total PnL / deployment) * (365 / days)
-                strategy_net_apr = (strategy_total_pnl / deployment_usd) * (365 / strategy_days)
-            else:
-                strategy_net_apr = 0.0
+            # Calculate strategy value using pre-calculated PnL
+            strategy_value = deployment_usd + strategy_pnl
 
             title = f"▶ {to_datetime_str(position['entry_timestamp'])} | {token_flow} | {protocol_pair} | Entry {position['entry_net_apr'] * 100:.2f}% | Current {current_net_apr_decimal * 100:.2f}% | Net APR {strategy_net_apr * 100:.2f}% | Value ${strategy_value:,.2f}"
 
