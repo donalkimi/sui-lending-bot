@@ -1,0 +1,44 @@
+# .dockerignore
+# Exclude files not needed in Railway deployment
+
+# Local development files
+.env
+.venv/
+venv/
+env/
+
+# Local database (use Supabase on Railway)
+data/*.db
+data/lending_rates.db
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local scheduler (not used on Railway)
+local_scheduler.py
+
+# Documentation
+*.md
+docs/
+
+# Charts and outputs
+dashboard/charts/
+*.html

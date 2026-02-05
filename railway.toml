@@ -1,15 +1,7 @@
 # railway.toml
+# Cron schedule configuration
+# Build is handled by Dockerfile
 
-[build]# Python 3.11 (stable)
-nixPkgs = ["python311", "nodejs-18_x", "npm-9_x"]
-builder = "NIXPACKS"
-
-[deploy]
-startCommand = "python main.py"
-restartPolicyType = "ON_FAILURE"
-restartPolicyMaxRetries = 3
-
-# Cron schedule
 [[cron]]
-schedule = "0 * * * *"
+schedule = "0 * * * *"  # Every hour
 command = "python main.py"
