@@ -4,52 +4,66 @@ Configuration settings for the Sui Lending Bot
 import os
 from dotenv import load_dotenv
 
-# Load environment variables from .env file
+# Load environment variables from .env file (local development only)
 load_dotenv()
 
-# RPC Configuration
-SUI_RPC_URL = "https://side-flashy-isle.sui-mainnet.quiknode.pro/6acae20a62b8a6842e8d407b4f6d7f98372dc8bb/"
+# ==============================================================================
+# HELPER FUNCTION
+# ==============================================================================
 
-# Strategy Parameters
-DEFAULT_LIQUIDATION_DISTANCE = 0.20  # 315 default safety buffer
-MIN_NET_APR_THRESHOLD = -1  # for now, i want to see all strategies, even ones that are not profitable (lose up to -1%)
-RATE_SPREAD_THRESHOLD = 0.00  # Strategies must have at least one of token2 lend-borrow and token 1 lend -token3 borrow be positive. 
+def get_bool_env(key: str, default: bool = False) -> bool:
+    """
+    Convert environment variable string to boolean.
+    
+    Accepts: 'true', '1', 'yes', 'on' (case-insensitive) as True
+    Accepts: 'false', '0', 'no', 'off', '' (case-insensitive) as False
+    """
+    value = os.getenv(key, str(default)).lower()
+    return value in ('true', '1', 'yes', 'on')
+
+# ==============================================================================
+# RAILWAY ENVIRONMENT VARIABLES
+# ==============================================================================
+
+# Now you can use the helper - much cleaner!
+USE_CLOUD_DB = get_bool_env('USE_CLOUD_DB', default=True)
+SUPABASE_URL = os.getenv('SUPABASE_URL')  # PostgreSQL connection string
+
+# RPC Configuration  
+SUI_RPC_URL = os.getenv('SUI_RPC_URL', 'https://side-flashy-isle.sui-mainnet.quiknode.pro/6acae20a62b8a6842e8d407b4f6d7f98372dc8bb/')
 
 # Alert Configuration
-SLACK_WEBHOOK_URL = "https://hooks.slack.com/triggers/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"
-ALERT_RATE_SPREAD_THRESHOLD = 2.0  # Alert when spread > 2%
-ALERT_NET_APR_THRESHOLD = 5.0  # Alert when net APR > 5%
+SLACK_WEBHOOK_URL = os.getenv('SLACK_WEBHOOK_URL', 'https://hooks.slack.com/triggers/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')
 
-# Scheduler Configuration
-CHECK_INTERVAL_MINUTES = 15  # Daytime: 15min (8am-6pm), Nighttime: 2hr (6pm-8am)
+# ==============================================================================
+# VALIDATION (Fail fast if required env vars missing)
+# ==============================================================================
 
-# Dashboard Configuration
+if USE_CLOUD_DB and not SUPABASE_URL:
+    raise ValueError(
+        "SUPABASE_URL environment variable is required when USE_CLOUD_DB=True. "
+        "Set this in Railway: Project Settings → Environment Variables"
+    )
+
+if not SLACK_WEBHOOK_URL:
+    print("WARNING: SLACK_WEBHOOK_URL not set - notifications will be disabled")
+
+# ==============================================================================
+# STRATEGY PARAMETERS (Can be overridden via environment variables)
+# ==============================================================================
+
+DEFAULT_LIQUIDATION_DISTANCE = float(os.getenv('DEFAULT_LIQUIDATION_DISTANCE', '0.20'))
+MIN_NET_APR_THRESHOLD = float(os.getenv('MIN_NET_APR_THRESHOLD', '-1'))
+RATE_SPREAD_THRESHOLD = float(os.getenv('RATE_SPREAD_THRESHOLD', '0.00'))
+ALERT_RATE_SPREAD_THRESHOLD = float(os.getenv('ALERT_RATE_SPREAD_THRESHOLD', '2.0'))
+ALERT_NET_APR_THRESHOLD = float(os.getenv('ALERT_NET_APR_THRESHOLD', '5.0'))
+CHECK_INTERVAL_MINUTES = int(os.getenv('CHECK_INTERVAL_MINUTES', '60'))
+REBALANCE_THRESHOLD = float(os.getenv('REBALANCE_THRESHOLD', '0.02'))
+SAVE_SNAPSHOTS = get_bool_env('SAVE_SNAPSHOTS', default=True)
+# ==============================================================================
+# LOCAL DEVELOPMENT ONLY
+# ==============================================================================
+
+SQLITE_PATH = "data/lending_rates.db"
 DASHBOARD_PORT = 8501
 DASHBOARD_TITLE = "Sui Lending Bot - Cross-Protocol Yield Optimizer"
-
-# Database Configuration
-USE_CLOUD_DB = True  # Set to True to use Supabase PostgreSQL
-SQLITE_PATH = "data/lending_rates.db"  # Keep for local development
-SUPABASE_URL = os.getenv('SUPABASE_URL')  # Loaded from .env file
-
-# Validation: Ensure SUPABASE_URL is set when using cloud database
-if USE_CLOUD_DB and not SUPABASE_URL:
-    raise ValueError("USE_CLOUD_DB=True but SUPABASE_URL not set. Check your .env file.")
-
-# Rebalancing Settings
-# REBALANCE_THRESHOLD: Trigger auto-rebalance detection when liquidation distance changes by this amount
-#
-# Formula: abs(entry_liq_dist) - abs(current_liq_dist) < REBALANCE_THRESHOLD
-#
-# Example: 0.02 means the dashboard will show a warning when liq distance changes by more than 2%
-#
-# Note: Manual rebalance button does NOT check this threshold - user can rebalance anytime.
-# This threshold is only used for auto-detection warnings (Phase 5, future implementation).
-#
-# Recommended values:
-#   - Conservative: 0.01 (1%) - More frequent warnings
-#   - Moderate: 0.02 (2%) - Balanced approach (default)
-#   - Relaxed: 0.05 (5%) - Fewer warnings
-REBALANCE_THRESHOLD = 0.02
-# Database Settings
-SAVE_SNAPSHOTS = True  # Set to False to disable database tracking

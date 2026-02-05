@@ -1,0 +1,7 @@
+# railway.toml
+# Railway Cron Configuration
+
+# Run data collection every hour
+[[cron]]
+schedule = "0 * * * *"  # At minute 0 of every hour
+command = "python main.py"
