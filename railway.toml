@@ -1,10 +1,15 @@
 # railway.toml
-# Combined configuration for build and cron
 
 [build]
 nixPkgs = ["nodejs-18_x", "npm-9_x"]
+builder = "NIXPACKS"
 
-# Run data collection every hour
+[deploy]
+startCommand = "python main.py"
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3
+
+# Cron schedule
 [[cron]]
 schedule = "0 * * * *"
 command = "python main.py"
