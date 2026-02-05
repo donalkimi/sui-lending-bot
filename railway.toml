@@ -1,7 +1,7 @@
 # railway.toml
 
-[build]
-nixPkgs = ["nodejs-18_x", "npm-9_x"]
+[build]# Python 3.11 (stable)
+nixPkgs = ["python311", "nodejs-18_x", "npm-9_x"]
 builder = "NIXPACKS"
 
 [deploy]
