@@ -298,6 +298,14 @@ class SlackNotifier:
         # Prepare variables for Slack Workflow
         liq_dist_pct = int(liquidation_distance * 100)
         timestamp_str = to_datetime_str(timestamp) + ' UTC'
+
+        print(f"[DEBUG] Building variables dict...")
+        print(f"[DEBUG] liq_dist_pct={liq_dist_pct}")
+        print(f"[DEBUG] timestamp_str={timestamp_str}")
+        print(f"[DEBUG] set1_lines count={len(set1_lines)}")
+        print(f"[DEBUG] set2_lines count={len(set2_lines)}")
+        print(f"[DEBUG] set3_lines count={len(set3_lines)}")
+
         variables = {
             "liq_dist": str(liq_dist_pct),
             "timestamp": timestamp_str,
@@ -315,6 +323,10 @@ class SlackNotifier:
             "set3_line3": set3_lines[2] if len(set3_lines) > 2 else "",
         }
 
+        print(f"[DEBUG] Variables dict created with {len(variables)} keys")
+        print(f"[DEBUG] Variables dict: {variables}")  # Print entire dict
+
+# Build fallback message...
         # Build fallback message for classic webhooks
         message_lines = [
             f"🚀 Top Lending Strategies",
