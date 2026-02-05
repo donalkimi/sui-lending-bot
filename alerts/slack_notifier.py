@@ -13,7 +13,7 @@ import pandas as pd  # ADDED: Required for DataFrame operations
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import settings
-from utils.time_helpers import to_datetime_str  # ADDED: CRITICAL for timestamp formatting
+from utils.time_helpers import to_datetime_str  # ADDED: CRITICAL - required for timestamp formatting
 
 
 def format_usd_abbreviated(value: float) -> str:
@@ -112,7 +112,10 @@ class SlackNotifier:
                 # For Slack Workflows, send variables directly
                 payload = variables
                 print(f"[DEBUG] ✅ Using workflow mode with variables")
-                print(f"[DEBUG] Payload preview: {json.dumps({k: v[:50] if isinstance(v, str) and len(v) > 50 else v for k, v in list(variables.items())[:3]}, indent=2)}")
+                # Show first 3 variables as preview
+                preview = {k: v[:50] if isinstance(v, str) and len(v) > 50 else v 
+                          for k, v in list(variables.items())[:3]}
+                print(f"[DEBUG] Payload preview (first 3 vars): {json.dumps(preview, indent=2)}")
             else:
                 # For classic Incoming Webhooks, use text/blocks
                 payload = {"text": message}
@@ -264,8 +267,8 @@ class SlackNotifier:
             print("[DEBUG] all_results is empty - calling alert_error")
             return self.alert_error("No valid strategies found in this refresh run.")
         
-        # Wrap entire variable creation in try-catch
-        variables = None  # Initialize to None
+        # Initialize variables to None (will be set in try block)
+        variables = None
         
         try:
             print(f"[DEBUG] Starting strategy filtering...")
@@ -303,6 +306,7 @@ class SlackNotifier:
             for idx, row in filtered_set2.iterrows():
                 line = format_strategy_summary_line(row.to_dict(), liquidation_distance)
                 set2_lines.append(line)
+                print(f"[DEBUG] Set2 line {len(set2_lines)}: {line[:80] if line else 'EMPTY'}...")
             
             # Build formatted lines for Set 3
             print(f"[DEBUG] Building Set 3 lines...")
@@ -310,6 +314,7 @@ class SlackNotifier:
             for idx, row in filtered_set3.iterrows():
                 line = format_strategy_summary_line(row.to_dict(), liquidation_distance)
                 set3_lines.append(line)
+                print(f"[DEBUG] Set3 line {len(set3_lines)}: {line[:80] if line else 'EMPTY'}...")
             
             print(f"[DEBUG] All line sets built: set1={len(set1_lines)}, set2={len(set2_lines)}, set3={len(set3_lines)}")
             
@@ -351,17 +356,24 @@ class SlackNotifier:
             variables = None  # Ensure it stays None if exception
         
         # Build fallback message for classic webhooks
+        timestamp_str_fallback = to_datetime_str(timestamp) + ' UTC' if timestamp and variables is None else (variables.get('timestamp', 'N/A') if variables else 'N/A')
+        
         message_lines = [
             f"🚀 Top Lending Strategies",
-            f"📅 {to_datetime_str(timestamp) + ' UTC' if timestamp else 'N/A'}",
+            f"📅 {timestamp_str_fallback}",
             ""
         ]
         
-        # Add Set 1 (only if variables was created successfully)
+        # Build message from variables if available, otherwise from filtered results
         if variables:
             set1_lines_temp = [variables.get(f'set1_line{i}', '') for i in [1, 2, 3]]
+            set2_lines_temp = [variables.get(f'set2_line{i}', '') for i in [1, 2, 3]]
+            set3_lines_temp = [variables.get(f'set3_line{i}', '') for i in [1, 2, 3]]
         else:
+            # Fallback if variables creation failed
             set1_lines_temp = []
+            set2_lines_temp = []
+            set3_lines_temp = []
         
         message_lines.append("📊 All Strategies (Top 3):")
         if set1_lines_temp and any(set1_lines_temp):
@@ -373,27 +385,19 @@ class SlackNotifier:
         
         message_lines.append("")
         message_lines.append("💰 USDC-Only Strategies (Top 3):")
-        if variables:
-            set2_lines_temp = [variables.get(f'set2_line{i}', '') for i in [1, 2, 3]]
-            if set2_lines_temp and any(set2_lines_temp):
-                for i, line in enumerate(set2_lines_temp, 1):
-                    if line:
-                        message_lines.append(f"{i}. {line}")
-            else:
-                message_lines.append("No strategies found")
+        if set2_lines_temp and any(set2_lines_temp):
+            for i, line in enumerate(set2_lines_temp, 1):
+                if line:
+                    message_lines.append(f"{i}. {line}")
         else:
             message_lines.append("No strategies found")
         
         message_lines.append("")
         message_lines.append("🔧 Top Unlevered Strategies:")
-        if variables:
-            set3_lines_temp = [variables.get(f'set3_line{i}', '') for i in [1, 2, 3]]
-            if set3_lines_temp and any(set3_lines_temp):
-                for i, line in enumerate(set3_lines_temp, 1):
-                    if line:
-                        message_lines.append(f"{i}. {line}")
-            else:
-                message_lines.append("No strategies found")
+        if set3_lines_temp and any(set3_lines_temp):
+            for i, line in enumerate(set3_lines_temp, 1):
+                if line:
+                    message_lines.append(f"{i}. {line}")
         else:
             message_lines.append("No strategies found")
         
@@ -532,9 +536,11 @@ if __name__ == "__main__":
     example_strategy = {
         'token1': 'USDY',
         'token2': 'DEEP',
+        'token3': 'USDY',
         'protocol_a': 'NAVI',
         'protocol_b': 'SuiLend',
         'net_apr': 15.5,
+        'liquidation_distance': 20,
         'leverage': 1.09,
         'l_a': 1.09,
         'b_a': 0.63,
@@ -543,7 +549,7 @@ if __name__ == "__main__":
         'lend_rate_1a': 9.7,
         'borrow_rate_2a': 19.5,
         'lend_rate_2b': 31.0,
-        'borrow_rate_1b': 5.9
+        'borrow_rate_3b': 5.9
     }
     
     print("Sending test alert...")
