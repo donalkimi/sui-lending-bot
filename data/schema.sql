@@ -62,6 +62,8 @@ CREATE INDEX IF NOT EXISTS idx_rates_protocol_contract ON rates_snapshot(protoco
 CREATE TABLE IF NOT EXISTS token_registry (
     token_contract TEXT PRIMARY KEY,
     symbol TEXT,
+    decimals INTEGER,              -- ADD THIS
+    default_price DECIMAL(20,10),  -- ADD THIS
     pyth_id TEXT,
     coingecko_id TEXT,
 

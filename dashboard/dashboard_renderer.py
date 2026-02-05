@@ -21,6 +21,7 @@ from config.stablecoins import STABLECOIN_CONTRACTS, STABLECOIN_SYMBOLS
 from dashboard.data_loaders import DataLoader
 from data.rate_tracker import RateTracker
 from analysis.position_calculator import PositionCalculator
+from analysis.position_statistics_calculator import calculate_position_statistics
 
 
 def format_days_to_breakeven(days: float) -> str:
@@ -1273,8 +1274,58 @@ def render_positions_table_tab(timestamp_seconds: int):
             stats = all_stats.get(position['position_id'])
 
             if stats is None:
-                st.warning(f"⚠️ No statistics found for position {position['position_id'][:8]}... at {latest_timestamp_str}")
-                # Skip this position if no statistics are available
+                # Statistics missing - show button to calculate on-the-fly
+                position_short_id = position['position_id'][:8]
+
+                with st.expander(f"⚠️ Position {position_short_id}... - Missing statistics at {latest_timestamp_str}", expanded=True):
+                    st.warning("Statistics not found in database for this timestamp.")
+                    st.info("You can calculate statistics on-the-fly (takes ~1-2 seconds) or run the backfill script to pre-populate all historical data.")
+
+                    col1, col2 = st.columns([1, 3])
+                    with col1:
+                        button_key = f"calc_stats_{position['position_id']}_{latest_timestamp}"
+                        if st.button("📊 Calculate Statistics", key=button_key, type="primary"):
+                            try:
+                                with st.spinner(f"Calculating statistics for position {position_short_id}..."):
+                                    # Wrapper functions to match expected signature
+                                    def get_rate_wrapper(token_contract, protocol, side):
+                                        """Wrapper to match calculate_position_statistics signature"""
+                                        return get_rate(token_contract, protocol, side)
+
+                                    def get_borrow_fee_wrapper(token_contract, protocol):
+                                        """Wrapper to match calculate_position_statistics signature"""
+                                        return get_borrow_fee(token_contract, protocol)
+
+                                    # Calculate statistics using existing proven logic
+                                    stats_dict = calculate_position_statistics(
+                                        position_id=position['position_id'],
+                                        timestamp=latest_timestamp,
+                                        service=service,
+                                        get_rate_func=get_rate_wrapper,
+                                        get_borrow_fee_func=get_borrow_fee_wrapper
+                                    )
+
+                                    # Save to database for future use
+                                    tracker = RateTracker()
+                                    tracker.save_position_statistics(stats_dict)
+
+                                    st.success(f"✅ Statistics calculated and saved! Refresh the page to see the position in the table.")
+                                    st.info("💡 Tip: Run the backfill script (see `addStatisticsBackfill.md`) to pre-populate all historical statistics.")
+
+                            except ValueError as e:
+                                st.error(f"❌ Cannot calculate: {e}")
+                                st.caption("This usually means rate data is not available for this timestamp (position may predate data collection).")
+                            except Exception as e:
+                                st.error(f"❌ Calculation failed: {e}")
+                                import traceback
+                                with st.expander("Error details"):
+                                    st.code(traceback.format_exc())
+
+                    with col2:
+                        st.caption(f"Position ID: {position['position_id']}")
+                        st.caption(f"Entry: {position['entry_timestamp']}")
+
+                # Skip this position for now in the main table
                 continue
 
             # Extract statistics
