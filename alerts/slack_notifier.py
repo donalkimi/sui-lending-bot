@@ -14,6 +14,15 @@ import pandas as pd  # ADDED: Required for DataFrame operations
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import settings
 from utils.time_helpers import to_datetime_str  # ADDED: CRITICAL - required for timestamp formatting
+from utils.time_helpers import to_datetime_str
+
+# MODULE LOAD DEBUG
+print("=" * 80)
+print("[MODULE] slack_notifier.py loaded")
+print(f"[MODULE] to_datetime_str function: {to_datetime_str}")
+print(f"[MODULE] pandas version: {pd.__version__}")
+print("=" * 80)
+
 
 
 def format_usd_abbreviated(value: float) -> str:
