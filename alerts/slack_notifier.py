@@ -102,14 +102,22 @@ class SlackNotifier:
             # Check if this is a Slack Workflow webhook (contains '/workflows/' or '/triggers/')
             is_workflow = '/workflows/' in self.webhook_url or '/triggers/' in self.webhook_url
             
+            print(f"[DEBUG] Webhook URL check: is_workflow={is_workflow}")
+            print(f"[DEBUG] Webhook URL contains: {self.webhook_url[:50]}...")  # Show first 50 chars
+            
             if is_workflow and variables:
                 # For Slack Workflows, send variables directly
                 payload = variables
+                print(f"[DEBUG] Sending Workflow payload with {len(variables)} variables")
+                print(f"[DEBUG] Sample variables: liq_dist={variables.get('liq_dist')}, timestamp={variables.get('timestamp')}")
             else:
                 # For classic Incoming Webhooks, use text/blocks
                 payload = {"text": message}
+                print(f"[DEBUG] Sending classic webhook (NOT workflow)")
                 if blocks:
                     payload["blocks"] = blocks
+            
+            print(f"[DEBUG] Final payload keys: {list(payload.keys())}")
             
             response = requests.post(
                 self.webhook_url,
