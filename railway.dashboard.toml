@@ -7,7 +7,5 @@ dockerfilePath = "Dockerfile"
 
 [deploy]
 startCommand = "streamlit run dashboard/streamlit_app.py --server.port=8501 --server.address=0.0.0.0 --server.headless=true"
-healthcheckPath = "/_stcore/health"
-healthcheckTimeout = 100
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 10
