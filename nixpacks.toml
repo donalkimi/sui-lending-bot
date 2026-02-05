@@ -1,0 +1,12 @@
+# nixpacks.toml
+# Railway configuration for multi-language projects
+
+[phases.setup]
+nixPkgs = ["python39", "nodejs-18_x"]
+
+[phases.install]
+cmds = ["pip install -r requirements.txt"]
+
+[start]
+cmd = "python main.py"
+```
