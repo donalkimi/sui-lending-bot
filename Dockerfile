@@ -24,16 +24,23 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy entire application
 COPY . .
 
-# Install npm packages for each protocol that needs them
-# Check if package.json exists before running npm install
+# Install npm packages in subdirectories (separate RUN for each for better caching)
 RUN if [ -f data/alphalend/package.json ]; then cd data/alphalend && npm install; fi
 RUN if [ -f data/suilend/package.json ]; then cd data/suilend && npm install; fi
 RUN if [ -f data/scallop_shared/package.json ]; then cd data/scallop_shared && npm install; fi
 RUN if [ -f data/navi/package.json ]; then cd data/navi && npm install; fi
 RUN if [ -f data/pebble/package.json ]; then cd data/pebble && npm install; fi
-
-# Also install from root if package.json exists there
 RUN if [ -f package.json ]; then npm install; fi
+
+# Set NODE_PATH to include all subdirectory node_modules
+# This tells Node.js where to find packages when scripts are called from Python
+ENV NODE_PATH=/app/data/alphalend/node_modules:/app/data/suilend/node_modules:/app/data/scallop_shared/node_modules:/app/data/navi/node_modules:/app/data/pebble/node_modules:/app/node_modules
+
+# Verify node_modules directories exist and show their locations
+RUN echo "=== Verifying node_modules directories ===" && \
+    find /app/data -name "node_modules" -type d && \
+    echo "=== NODE_PATH set to: ===" && \
+    echo $NODE_PATH
 
 # Default command (Railway cron will override this)
 CMD ["python", "main.py"]
