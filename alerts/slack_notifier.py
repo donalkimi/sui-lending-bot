@@ -9,9 +9,11 @@ from typing import Dict, List
 import sys
 import os
 import numpy as np
+import pandas as pd  # ADDED: Required for DataFrame operations
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import settings
+from utils.time_helpers import to_datetime_str  # ADDED: CRITICAL for timestamp formatting
 
 
 def format_usd_abbreviated(value: float) -> str:
@@ -103,12 +105,14 @@ class SlackNotifier:
             is_workflow = '/workflows/' in self.webhook_url or '/triggers/' in self.webhook_url
             
             print(f"[DEBUG] Webhook URL check: is_workflow={is_workflow}")
-            print(f"[DEBUG] Webhook URL contains: {self.webhook_url[:50]}...")  # Show first 50 chars
+            print(f"[DEBUG] Webhook URL contains: {self.webhook_url[:50]}...")
+            print(f"[DEBUG] Variables received: {'None' if variables is None else f'{len(variables)} keys'}")
             
             if is_workflow and variables:
                 # For Slack Workflows, send variables directly
                 payload = variables
                 print(f"[DEBUG] ✅ Using workflow mode with variables")
+                print(f"[DEBUG] Payload preview: {json.dumps({k: v[:50] if isinstance(v, str) and len(v) > 50 else v for k, v in list(variables.items())[:3]}, indent=2)}")
             else:
                 # For classic Incoming Webhooks, use text/blocks
                 payload = {"text": message}
@@ -133,6 +137,8 @@ class SlackNotifier:
 
         except Exception as e:
             print(f"[ERROR] Error sending Slack notification: {e}")
+            import traceback
+            traceback.print_exc()
             return False
     
     def alert_high_apr(self, strategy: Dict) -> bool:
@@ -229,135 +235,172 @@ class SlackNotifier:
         ]
         
         return self.send_message(message, blocks, variables)
-
+    
     def alert_top_strategies(
         self,
-        all_results,  # pd.DataFrame
-        liquidation_distance: float = 0.20,
+        all_results: pd.DataFrame,
+        liquidation_distance: float,
         deployment_usd: float = 100.0,
         timestamp: int = None
     ) -> bool:
         """
-        Alert with top 3 strategies in two configurations
-
+        Alert top lending strategies across multiple categories
+        
         Args:
             all_results: DataFrame of all analyzed strategies
-            liquidation_distance: Liq dist % for display (default 20%)
-            deployment_usd: Min deployment size filter (default 100)
-            timestamp: Unix timestamp in seconds (required)
-
+            liquidation_distance: Liquidation distance as decimal (e.g., 0.20)
+            deployment_usd: Deployment amount in USD (for filtering)
+            timestamp: Unix timestamp in seconds
+            
         Returns:
             True if successful
         """
-        import pandas as pd
-        from utils.time_helpers import to_datetime_str
-
-        # Fail loudly if timestamp is missing (per DESIGN_NOTES.md Rule #2)
-        if timestamp is None:
-            raise ValueError("timestamp is required - datetime.now() should only be called when collecting fresh market data")
-
-        # Filter Set 1: Unrestricted (only deployment size filter)
-        filtered_set1 = all_results[
-            (all_results['max_size'].notna()) &
-            (all_results['max_size'] >= deployment_usd)
-        ].head(3)
-
-        # Filter Set 2: USDC-Only (token1=USDC, token3=token1, deployment filter)
-        filtered_set2 = all_results[
-            (all_results['token1'] == 'USDC') &
-            (all_results['token3'] == all_results['token1']) &
-            (all_results['max_size'].notna()) &
-            (all_results['max_size'] >= deployment_usd)
-        ].head(3)
-
-        # Filter Set 3: Top strategies by Net APR (no token restrictions, deployment filter)
-        filtered_set3 = all_results[
-            (all_results['max_size'].notna()) &
-            (all_results['max_size'] >= deployment_usd)
-        ].sort_values(by='apr_net', ascending=False).head(3)
-
-        # Build formatted lines for Set 1
-        set1_lines = []
-        for _, row in filtered_set1.iterrows():
-            line = format_strategy_summary_line(row.to_dict(), liquidation_distance)
-            set1_lines.append(line)
-
-        # Build formatted lines for Set 2
-        set2_lines = []
-        for _, row in filtered_set2.iterrows():
-            line = format_strategy_summary_line(row.to_dict(), liquidation_distance)
-            set2_lines.append(line)
-
-        # Build formatted lines for Set 3
-        set3_lines = []
-        for _, row in filtered_set3.iterrows():
-            line = format_strategy_summary_line(row.to_dict(), liquidation_distance)
-            set3_lines.append(line)
-
-        # Prepare variables for Slack Workflow
-        liq_dist_pct = int(liquidation_distance * 100)
-        timestamp_str = to_datetime_str(timestamp) + ' UTC'
-
-        print(f"[DEBUG] Building variables dict...")
-        print(f"[DEBUG] liq_dist_pct={liq_dist_pct}")
-        print(f"[DEBUG] timestamp_str={timestamp_str}")
-        print(f"[DEBUG] set1_lines count={len(set1_lines)}")
-        print(f"[DEBUG] set2_lines count={len(set2_lines)}")
-        print(f"[DEBUG] set3_lines count={len(set3_lines)}")
-
-        variables = {
-            "liq_dist": str(liq_dist_pct),
-            "timestamp": timestamp_str,
-            "set1_count": str(len(set1_lines)),
-            "set1_line1": set1_lines[0] if len(set1_lines) > 0 else "",
-            "set1_line2": set1_lines[1] if len(set1_lines) > 1 else "",
-            "set1_line3": set1_lines[2] if len(set1_lines) > 2 else "",
-            "set2_count": str(len(set2_lines)),
-            "set2_line1": set2_lines[0] if len(set2_lines) > 0 else "",
-            "set2_line2": set2_lines[1] if len(set2_lines) > 1 else "",
-            "set2_line3": set2_lines[2] if len(set2_lines) > 2 else "",
-            "set3_count": str(len(set3_lines)),
-            "set3_line1": set3_lines[0] if len(set3_lines) > 0 else "",
-            "set3_line2": set3_lines[1] if len(set3_lines) > 1 else "",
-            "set3_line3": set3_lines[2] if len(set3_lines) > 2 else "",
-        }
-
-        print(f"[DEBUG] Variables dict created with {len(variables)} keys")
-        print(f"[DEBUG] Variables dict: {variables}")  # Print entire dict
-
-# Build fallback message...
+        print(f"[DEBUG] alert_top_strategies called")
+        print(f"[DEBUG] all_results shape: {all_results.shape if all_results is not None else 'None'}")
+        print(f"[DEBUG] liquidation_distance: {liquidation_distance}")
+        print(f"[DEBUG] timestamp: {timestamp}")
+        
+        if all_results is None or all_results.empty:
+            print("[DEBUG] all_results is empty - calling alert_error")
+            return self.alert_error("No valid strategies found in this refresh run.")
+        
+        # Wrap entire variable creation in try-catch
+        variables = None  # Initialize to None
+        
+        try:
+            print(f"[DEBUG] Starting strategy filtering...")
+            
+            # Filter Set 1: All strategies (top 3 by net_apr)
+            filtered_set1 = all_results.nlargest(3, 'net_apr')
+            print(f"[DEBUG] Set 1 filtered: {len(filtered_set1)} strategies")
+            
+            # Filter Set 2: USDC-only strategies (top 3)
+            filtered_set2 = all_results[
+                (all_results['token1'] == 'USDC') &
+                (all_results['token2'] == 'USDC') &
+                (all_results['token3'] == 'USDC')
+            ].nlargest(3, 'net_apr')
+            print(f"[DEBUG] Set 2 filtered: {len(filtered_set2)} strategies")
+            
+            # Filter Set 3: Unlevered strategies (top 3)
+            # Unlevered = simple lend/borrow with no recursion
+            filtered_set3 = all_results[
+                all_results.get('is_levered', True) == False
+            ].nlargest(3, 'net_apr') if 'is_levered' in all_results.columns else pd.DataFrame()
+            print(f"[DEBUG] Set 3 filtered: {len(filtered_set3)} strategies")
+            
+            # Build formatted lines for Set 1
+            print(f"[DEBUG] Building Set 1 lines...")
+            set1_lines = []
+            for idx, row in filtered_set1.iterrows():
+                line = format_strategy_summary_line(row.to_dict(), liquidation_distance)
+                set1_lines.append(line)
+                print(f"[DEBUG] Set1 line {len(set1_lines)}: {line[:80]}...")
+            
+            # Build formatted lines for Set 2
+            print(f"[DEBUG] Building Set 2 lines...")
+            set2_lines = []
+            for idx, row in filtered_set2.iterrows():
+                line = format_strategy_summary_line(row.to_dict(), liquidation_distance)
+                set2_lines.append(line)
+            
+            # Build formatted lines for Set 3
+            print(f"[DEBUG] Building Set 3 lines...")
+            set3_lines = []
+            for idx, row in filtered_set3.iterrows():
+                line = format_strategy_summary_line(row.to_dict(), liquidation_distance)
+                set3_lines.append(line)
+            
+            print(f"[DEBUG] All line sets built: set1={len(set1_lines)}, set2={len(set2_lines)}, set3={len(set3_lines)}")
+            
+            # Prepare variables for Slack Workflow
+            print(f"[DEBUG] Creating variables dict...")
+            liq_dist_pct = int(liquidation_distance * 100)
+            print(f"[DEBUG] liq_dist_pct={liq_dist_pct}")
+            
+            timestamp_str = to_datetime_str(timestamp) + ' UTC'
+            print(f"[DEBUG] timestamp_str={timestamp_str}")
+            
+            variables = {
+                "liq_dist": str(liq_dist_pct),
+                "timestamp": timestamp_str,
+                "set1_count": str(len(set1_lines)),
+                "set1_line1": set1_lines[0] if len(set1_lines) > 0 else "",
+                "set1_line2": set1_lines[1] if len(set1_lines) > 1 else "",
+                "set1_line3": set1_lines[2] if len(set1_lines) > 2 else "",
+                "set2_count": str(len(set2_lines)),
+                "set2_line1": set2_lines[0] if len(set2_lines) > 0 else "",
+                "set2_line2": set2_lines[1] if len(set2_lines) > 1 else "",
+                "set2_line3": set2_lines[2] if len(set2_lines) > 2 else "",
+                "set3_count": str(len(set3_lines)),
+                "set3_line1": set3_lines[0] if len(set3_lines) > 0 else "",
+                "set3_line2": set3_lines[1] if len(set3_lines) > 1 else "",
+                "set3_line3": set3_lines[2] if len(set3_lines) > 2 else "",
+            }
+            
+            print(f"[DEBUG] ✅ Variables dict created with {len(variables)} keys")
+            print(f"[DEBUG] Sample variable values:")
+            print(f"[DEBUG]   liq_dist: {variables['liq_dist']}")
+            print(f"[DEBUG]   timestamp: {variables['timestamp']}")
+            print(f"[DEBUG]   set1_line1: {variables['set1_line1'][:80] if variables['set1_line1'] else 'EMPTY'}...")
+            
+        except Exception as e:
+            print(f"[ERROR] ❌ EXCEPTION building variables dict: {e}")
+            import traceback
+            traceback.print_exc()
+            variables = None  # Ensure it stays None if exception
+        
         # Build fallback message for classic webhooks
         message_lines = [
             f"🚀 Top Lending Strategies",
-            f"📅 {timestamp_str}",
+            f"📅 {to_datetime_str(timestamp) + ' UTC' if timestamp else 'N/A'}",
             ""
         ]
-
+        
+        # Add Set 1 (only if variables was created successfully)
+        if variables:
+            set1_lines_temp = [variables.get(f'set1_line{i}', '') for i in [1, 2, 3]]
+        else:
+            set1_lines_temp = []
+        
         message_lines.append("📊 All Strategies (Top 3):")
-        if set1_lines:
-            for i, line in enumerate(set1_lines, 1):
-                message_lines.append(f"{i}. {line}")
+        if set1_lines_temp and any(set1_lines_temp):
+            for i, line in enumerate(set1_lines_temp, 1):
+                if line:
+                    message_lines.append(f"{i}. {line}")
         else:
             message_lines.append("No strategies found")
-
+        
         message_lines.append("")
         message_lines.append("💰 USDC-Only Strategies (Top 3):")
-        if set2_lines:
-            for i, line in enumerate(set2_lines, 1):
-                message_lines.append(f"{i}. {line}")
+        if variables:
+            set2_lines_temp = [variables.get(f'set2_line{i}', '') for i in [1, 2, 3]]
+            if set2_lines_temp and any(set2_lines_temp):
+                for i, line in enumerate(set2_lines_temp, 1):
+                    if line:
+                        message_lines.append(f"{i}. {line}")
+            else:
+                message_lines.append("No strategies found")
         else:
             message_lines.append("No strategies found")
-
+        
         message_lines.append("")
         message_lines.append("🔧 Top Unlevered Strategies:")
-        if set3_lines:
-            for i, line in enumerate(set3_lines, 1):
-                message_lines.append(f"{i}. {line}")
+        if variables:
+            set3_lines_temp = [variables.get(f'set3_line{i}', '') for i in [1, 2, 3]]
+            if set3_lines_temp and any(set3_lines_temp):
+                for i, line in enumerate(set3_lines_temp, 1):
+                    if line:
+                        message_lines.append(f"{i}. {line}")
+            else:
+                message_lines.append("No strategies found")
         else:
             message_lines.append("No strategies found")
-
+        
         message = "\n".join(message_lines)
-
+        
+        print(f"[DEBUG] About to call send_message with variables={'None' if variables is None else f'{len(variables)} keys'}")
+        
         return self.send_message(message, blocks=None, variables=variables)
 
     def alert_rebalance_opportunity(
