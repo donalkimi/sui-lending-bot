@@ -1,7 +1,10 @@
 # railway.toml
-# Railway Cron Configuration
+# Combined configuration for build and cron
+
+[build]
+nixPkgs = ["nodejs-18_x", "npm-9_x"]
 
 # Run data collection every hour
 [[cron]]
-schedule = "0 * * * *"  # At minute 0 of every hour
+schedule = "0 * * * *"
 command = "python main.py"
