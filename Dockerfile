@@ -24,5 +24,16 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy entire application
 COPY . .
 
+# Install npm packages for each protocol that needs them
+# Check if package.json exists before running npm install
+RUN if [ -f data/alphalend/package.json ]; then cd data/alphalend && npm install; fi
+RUN if [ -f data/suilend/package.json ]; then cd data/suilend && npm install; fi
+RUN if [ -f data/scallop_shared/package.json ]; then cd data/scallop_shared && npm install; fi
+RUN if [ -f data/navi/package.json ]; then cd data/navi && npm install; fi
+RUN if [ -f data/pebble/package.json ]; then cd data/pebble && npm install; fi
+
+# Also install from root if package.json exists there
+RUN if [ -f package.json ]; then npm install; fi
+
 # Default command (Railway cron will override this)
 CMD ["python", "main.py"]
