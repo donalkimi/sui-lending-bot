@@ -108,12 +108,11 @@ class SlackNotifier:
             if is_workflow and variables:
                 # For Slack Workflows, send variables directly
                 payload = variables
-                print(f"[DEBUG] Sending Workflow payload with {len(variables)} variables")
-                print(f"[DEBUG] Sample variables: liq_dist={variables.get('liq_dist')}, timestamp={variables.get('timestamp')}")
+                print(f"[DEBUG] ✅ Using workflow mode with variables")
             else:
                 # For classic Incoming Webhooks, use text/blocks
                 payload = {"text": message}
-                print(f"[DEBUG] Sending classic webhook (NOT workflow)")
+                print(f"[DEBUG] ❌ Using classic mode: is_workflow={is_workflow}, variables={'None' if variables is None else f'{len(variables)} keys'}")
                 if blocks:
                     payload["blocks"] = blocks
             
