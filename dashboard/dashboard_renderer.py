@@ -1176,7 +1176,7 @@ def render_positions_table_tab(timestamp_seconds: int):
                     'last_updated': row['last_updated']
                 }
 
-        # Check if oracle data is stale (max age > 5 minutes) and refresh if needed
+        # Check if oracle data is stale (max age > 60 minutes) and refresh if needed
         if oracle_lookup:
             # Find oldest update timestamp
             oldest_update = min(
@@ -1186,7 +1186,7 @@ def render_positions_table_tab(timestamp_seconds: int):
             )
             age_minutes = (datetime.now() - oldest_update).total_seconds() / 60
 
-            if age_minutes > 5:
+            if age_minutes > 60:
                 st.info("🔄 Oracle prices are stale. Refreshing from APIs...")
                 try:
                     # Import and call oracle price fetcher
@@ -1388,6 +1388,11 @@ def render_positions_table_tab(timestamp_seconds: int):
             # Look up pre-loaded statistics from batch
             stats = all_stats.get(position['position_id'])
 
+            # Check if stats are for the exact timestamp we're viewing
+            if stats is not None and to_seconds(stats.get('timestamp')) != latest_timestamp:
+                # Stats exist but for different timestamp - treat as missing for button display
+                stats = None
+
             if stats is None:
                 # Statistics missing - show button to calculate on-the-fly
                 position_short_id = position['position_id'][:8]
@@ -1421,7 +1426,10 @@ def render_positions_table_tab(timestamp_seconds: int):
                                     )
 
                                     # Save to database for future use
-                                    tracker = RateTracker()
+                                    tracker = RateTracker(
+                                        use_cloud=settings.USE_CLOUD_DB,
+                                        connection_url=settings.SUPABASE_URL
+                                    )
                                     tracker.save_position_statistics(stats_dict)
 
                                     st.success(f"✅ Statistics calculated and saved! Refresh the page to see the position in the table.")
@@ -2320,7 +2328,7 @@ def render_positions_table_tab(timestamp_seconds: int):
                 total_reward_earnings = reward_1A + reward_2A + reward_2B + reward_3B
                 total_fees = fees_2A + fees_3B
                 total_earnings = total_base_earnings + total_reward_earnings
-                realised_pnl = total_earnings - total_fees
+                live_pnl = total_earnings - total_fees
 
                 # Get deployment for percentage calculation
                 deployment = position['deployment_usd']
@@ -2329,8 +2337,8 @@ def render_positions_table_tab(timestamp_seconds: int):
                 if deployment > 0:
                     col1, col2, col3, col4, col5 = st.columns(5)
                     with col1:
-                        pnl_pct = (realised_pnl / deployment) * 100
-                        st.metric("Realised PnL", f"${realised_pnl:,.2f} ({pnl_pct:.2f}%)")
+                        pnl_pct = (live_pnl / deployment) * 100
+                        st.metric("Live PnL", f"${live_pnl:,.2f} ({pnl_pct:.2f}%)")
                     with col2:
                         earnings_pct = (total_earnings / deployment) * 100
                         st.metric("Total Earnings", f"${total_earnings:,.2f} ({earnings_pct:.2f}%)")
@@ -2467,7 +2475,7 @@ def render_positions_table_tab(timestamp_seconds: int):
                     with col1:
                         if st.button("✅ Confirm Close", key=f"confirm_close_{position['position_id']}"):
                             try:
-                                service.close_position_with_snapshot(
+                                service.close_position(
                                     position_id=pending['position_id'],
                                     close_timestamp=pending['timestamp'],
                                     close_reason='manual_close',
@@ -3431,7 +3439,10 @@ def render_dashboard(data_loader: DataLoader, mode: str):
     print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] Starting analysis...")
 
     # Initialize RateTracker for database cache
-    tracker = RateTracker()
+    tracker = RateTracker(
+        use_cloud=settings.USE_CLOUD_DB,
+        connection_url=settings.SUPABASE_URL
+    )
 
     # Check database cache FIRST
     print(f"[CACHE] Checking: timestamp={timestamp_seconds}, liq_dist={liquidation_distance}")

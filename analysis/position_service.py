@@ -226,7 +226,7 @@ class PositionService:
         # Insert position
         cursor = self.conn.cursor()
         ph = self._get_placeholder()
-        placeholders = ', '.join([ph] * 46)  # 46 values
+        placeholders = ', '.join([ph] * 47)  # 47 values
         
         try:
             cursor.execute(f"""

@@ -1,6 +1,7 @@
 from datetime import datetime
 from data.refresh_pipeline import refresh_pipeline
 from data.rate_tracker import RateTracker
+from config import settings
 
 
 def main():
@@ -30,7 +31,10 @@ def main():
     # -------------------------
     # DB table counts (sanity check)
     # -------------------------
-    tracker = RateTracker()
+    tracker = RateTracker(
+        use_cloud=settings.USE_CLOUD_DB,
+        connection_url=settings.SUPABASE_URL
+    )
     table_counts = tracker.get_table_counts()
 
     print("=== DATABASE STATE ===")
