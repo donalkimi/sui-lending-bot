@@ -1161,6 +1161,54 @@ def render_positions_table_tab(timestamp_seconds: int):
         """
         rates_df = pd.read_sql_query(rates_query, engine, params=(latest_timestamp_str,))
 
+        # Load oracle prices for fallback when protocol prices are missing
+        oracle_prices_df = pd.read_sql_query(
+            "SELECT symbol, latest_price, last_updated FROM oracle_prices",
+            engine
+        )
+
+        # Build oracle lookup dictionary
+        oracle_lookup = {}  # {symbol: {'price': float, 'last_updated': datetime}}
+        for _, row in oracle_prices_df.iterrows():
+            if pd.notna(row['latest_price']):  # Only include valid prices
+                oracle_lookup[row['symbol']] = {
+                    'price': float(row['latest_price']),
+                    'last_updated': row['last_updated']
+                }
+
+        # Check if oracle data is stale (max age > 5 minutes) and refresh if needed
+        if oracle_lookup:
+            # Find oldest update timestamp
+            oldest_update = min(
+                data['last_updated']
+                for data in oracle_lookup.values()
+                if data.get('last_updated') is not None
+            )
+            age_minutes = (datetime.now() - oldest_update).total_seconds() / 60
+
+            if age_minutes > 5:
+                st.info("🔄 Oracle prices are stale. Refreshing from APIs...")
+                try:
+                    # Import and call oracle price fetcher
+                    from utils.fetch_oracle_prices import fetch_all_oracle_prices
+                    fetch_all_oracle_prices(dry_run=False)
+
+                    # Reload oracle prices after refresh
+                    oracle_prices_df = pd.read_sql_query(
+                        "SELECT symbol, latest_price, last_updated FROM oracle_prices",
+                        engine
+                    )
+                    oracle_lookup = {}
+                    for _, row in oracle_prices_df.iterrows():
+                        if pd.notna(row['latest_price']):
+                            oracle_lookup[row['symbol']] = {
+                                'price': float(row['latest_price']),
+                                'last_updated': row['last_updated']
+                            }
+                    st.success("✓ Oracle prices refreshed")
+                except Exception as e:
+                    st.warning(f"⚠️ Failed to refresh oracle prices: {e}. Using stale data.")
+
         # Helper function to get rate
         def get_rate(token, protocol, rate_type):
             """Get lend or borrow rate for token/protocol, return 0 if not found"""
@@ -1184,6 +1232,33 @@ def render_positions_table_tab(timestamp_seconds: int):
             key = (token, protocol)
             data = rate_lookup.get(key, {})
             return data.get('price', 0.0)
+
+        # Helper function to get oracle price
+        def get_oracle_price(token_symbol):
+            """Get oracle price for token symbol, return 0 if not found"""
+            oracle_data = oracle_lookup.get(token_symbol, {})
+            return oracle_data.get('price', 0.0)
+
+        # Helper function to get price with oracle fallback
+        def get_price_with_fallback(token, protocol):
+            """
+            Get price with 3-tier fallback: protocol → oracle → missing.
+
+            Returns:
+                Tuple of (price, source) where source is 'protocol', 'oracle', or 'missing'
+            """
+            # Tier 1: Try protocol price
+            protocol_price = get_price(token, protocol)
+            if protocol_price > 0:
+                return (protocol_price, 'protocol')
+
+            # Tier 2: Try oracle price
+            oracle_price = get_oracle_price(token)
+            if oracle_price > 0:
+                return (oracle_price, 'oracle')
+
+            # Tier 3: No price available
+            return (0.0, 'missing')
 
         # Helper function to safely calculate liquidation price with missing price handling
         def calculate_liquidation_price_safe(
@@ -1571,13 +1646,23 @@ def render_positions_table_tab(timestamp_seconds: int):
                 entry_token_amount_2B = entry_token_amount_2  # Same tokens lent to Protocol B
                 entry_token_amount_3B = (b_b * deployment_usd) / entry_price_3b if entry_price_3b > 0 else 0
 
-                # STAGE 4: Get live prices for all tokens
-                live_price_1A = get_price(position['token1'], position['protocol_a'])
-                live_price_2A = get_price(position['token2'], position['protocol_a'])
-                live_price_2B = get_price(position['token2'], position['protocol_b'])
-                live_price_3B = get_price(position['token3'], position['protocol_b'])
+                # STAGE 4: Get live prices for all tokens (with oracle fallback)
+                live_price_1A, source_1A = get_price_with_fallback(position['token1'], position['protocol_a'])
+                live_price_2A, source_2A = get_price_with_fallback(position['token2'], position['protocol_a'])
+                live_price_2B, source_2B = get_price_with_fallback(position['token2'], position['protocol_b'])
+                live_price_3B, source_3B = get_price_with_fallback(position['token3'], position['protocol_b'])
 
-                # Track missing prices for user feedback
+                # Track oracle-sourced tokens for this position
+                oracle_tokens = []
+                if source_1A == 'oracle':
+                    oracle_tokens.append(position['token1'])
+                if source_2A == 'oracle' or source_2B == 'oracle':
+                    if position['token2'] not in oracle_tokens:
+                        oracle_tokens.append(position['token2'])
+                if source_3B == 'oracle':
+                    oracle_tokens.append(position['token3'])
+
+                # Track missing prices (neither protocol nor oracle)
                 missing_prices = set()
                 if live_price_1A <= 0:
                     missing_prices.add(f"{position['token1']} on {position['protocol_a']}")
@@ -1587,6 +1672,19 @@ def render_positions_table_tab(timestamp_seconds: int):
                     missing_prices.add(f"{position['token2']} on {position['protocol_b']}")
                 if live_price_3B <= 0:
                     missing_prices.add(f"{position['token3']} on {position['protocol_b']}")
+
+                # Display info message if oracle prices are used
+                if oracle_tokens:
+                    oracle_list = ', '.join(set(oracle_tokens))
+                    # Get timestamp age from first oracle token
+                    first_oracle_token = oracle_tokens[0]
+                    last_update = oracle_lookup.get(first_oracle_token, {}).get('last_updated')
+                    if last_update:
+                        from dashboard.oracle_price_utils import compute_timestamp_age
+                        age = compute_timestamp_age(last_update)
+                        st.info(f"ℹ️ Using oracle price for: {oracle_list}. Last updated: {age} ago")
+                    else:
+                        st.info(f"ℹ️ Using oracle price for: {oracle_list}.")
 
                 # Display warning if any prices are missing
                 if missing_prices:
@@ -2951,6 +3049,9 @@ def render_oracle_prices_tab(timestamp_seconds: int):
         coingecko_time,
         pyth,
         pyth_time,
+        defillama,
+        defillama_time,
+        defillama_confidence,
         latest_price,
         latest_oracle,
         latest_time
@@ -2967,15 +3068,18 @@ def render_oracle_prices_tab(timestamp_seconds: int):
             return
 
         # Display metrics
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
         with col1:
             st.metric("Total Tokens", len(df))
         with col2:
             cg_count = df['coingecko'].notna().sum()
-            st.metric("CoinGecko Coverage", f"{cg_count}/{len(df)}")
+            st.metric("CoinGecko", f"{cg_count}/{len(df)}")
         with col3:
             pyth_count = df['pyth'].notna().sum()
-            st.metric("Pyth Coverage", f"{pyth_count}/{len(df)}")
+            st.metric("Pyth", f"{pyth_count}/{len(df)}")
+        with col4:
+            dl_count = df['defillama'].notna().sum()
+            st.metric("DeFi Llama", f"{dl_count}/{len(df)}")
 
         st.markdown("---")
 
@@ -2984,9 +3088,12 @@ def render_oracle_prices_tab(timestamp_seconds: int):
         display_df['Token'] = df['symbol']
         display_df['Contract'] = df['token_contract'].apply(format_contract_address)
         display_df['CoinGecko'] = df['coingecko']
-        display_df['CoinGecko Time'] = pd.to_datetime(df['coingecko_time'])
+        display_df['CG Time'] = pd.to_datetime(df['coingecko_time'])
         display_df['Pyth'] = df['pyth']
         display_df['Pyth Time'] = pd.to_datetime(df['pyth_time'])
+        display_df['DeFi Llama'] = df['defillama']
+        display_df['DL Time'] = pd.to_datetime(df['defillama_time'])
+        display_df['Confidence'] = df['defillama_confidence']
         display_df['Latest Price'] = df['latest_price']
         display_df['Source'] = df['latest_oracle']
         display_df['Age'] = df['latest_time'].apply(compute_timestamp_age)
@@ -2998,22 +3105,31 @@ def render_oracle_prices_tab(timestamp_seconds: int):
                 "Token": st.column_config.TextColumn("Token", width="small"),
                 "Contract": st.column_config.TextColumn("Contract", width="medium"),
                 "CoinGecko": st.column_config.NumberColumn(
-                    "CoinGecko Price", format="$%.6f"
+                    "CoinGecko", format="$%.6f"
                 ),
-                "CoinGecko Time": st.column_config.DatetimeColumn(
-                    "CG Updated", format="MMM DD, HH:mm"
+                "CG Time": st.column_config.DatetimeColumn(
+                    "CG Time", format="MMM DD, HH:mm"
                 ),
                 "Pyth": st.column_config.NumberColumn(
-                    "Pyth Price", format="$%.6f"
+                    "Pyth", format="$%.6f"
                 ),
                 "Pyth Time": st.column_config.DatetimeColumn(
-                    "Pyth Updated", format="MMM DD, HH:mm"
+                    "Pyth Time", format="MMM DD, HH:mm"
+                ),
+                "DeFi Llama": st.column_config.NumberColumn(
+                    "DeFi Llama", format="$%.6f"
+                ),
+                "DL Time": st.column_config.DatetimeColumn(
+                    "DL Time", format="MMM DD, HH:mm"
+                ),
+                "Confidence": st.column_config.NumberColumn(
+                    "Conf", format="%.2f"
                 ),
                 "Latest Price": st.column_config.NumberColumn(
-                    "Latest Price", format="$%.6f"
+                    "Latest", format="$%.6f"
                 ),
                 "Source": st.column_config.TextColumn("Source", width="small"),
-                "Age": st.column_config.TextColumn("Age", width="small"),
+                "Age": st.column_config.NumberColumn("Age (sec)", width="small"),
             },
             hide_index=True,
             use_container_width=True

@@ -99,6 +99,11 @@ CREATE TABLE IF NOT EXISTS oracle_prices (
     pyth DECIMAL(20,10),
     pyth_time TIMESTAMP,
 
+    -- DeFi Llama oracle
+    defillama DECIMAL(20,10),
+    defillama_time TIMESTAMP,
+    defillama_confidence DECIMAL(3,2),
+
     -- Aggregate latest price (computed from all oracles)
     latest_price DECIMAL(20,10),
     latest_oracle TEXT,
@@ -115,6 +120,7 @@ CREATE INDEX IF NOT EXISTS idx_oracle_prices_symbol ON oracle_prices(symbol);
 CREATE INDEX IF NOT EXISTS idx_oracle_prices_latest_time ON oracle_prices(latest_time);
 CREATE INDEX IF NOT EXISTS idx_oracle_prices_coingecko_time ON oracle_prices(coingecko_time);
 CREATE INDEX IF NOT EXISTS idx_oracle_prices_pyth_time ON oracle_prices(pyth_time);
+CREATE INDEX IF NOT EXISTS idx_oracle_prices_defillama_time ON oracle_prices(defillama_time);
 
 
 -- Table 4: reward_token_prices

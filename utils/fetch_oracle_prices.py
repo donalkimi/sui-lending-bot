@@ -209,6 +209,61 @@ def fetch_pyth_prices_batch(pyth_ids: list) -> dict:
         return {}
 
 
+def fetch_defillama_prices_batch(token_contracts: list) -> dict:
+    """
+    Fetch multiple prices from DeFi Llama in a single request.
+
+    Args:
+        token_contracts: List of Sui contract addresses (e.g., '0x2::sui::SUI')
+
+    Returns:
+        Dict mapping token_contract to (price_usd, timestamp, confidence) or empty dict if failed
+    """
+    if not token_contracts:
+        return {}
+
+    try:
+        import requests
+
+        # Build comma-separated coin identifiers with "sui:" prefix
+        coin_ids = [f"sui:{contract}" for contract in token_contracts]
+        coins_param = ','.join(coin_ids)
+
+        # DeFi Llama API endpoint
+        url = f"https://coins.llama.fi/prices/current/{coins_param}"
+
+        response = requests.get(url, timeout=30)
+        response.raise_for_status()
+
+        data = response.json()
+
+        if 'coins' not in data:
+            print(f"[WARNING] DeFi Llama response missing 'coins' field")
+            return {}
+
+        results = {}
+        for contract in token_contracts:
+            coin_key = f"sui:{contract}"
+            if coin_key in data['coins']:
+                coin_data = data['coins'][coin_key]
+
+                price = float(coin_data.get('price', 0))
+                timestamp_unix = int(coin_data.get('timestamp', 0))
+                confidence = coin_data.get('confidence', None)
+
+                # Convert Unix timestamp to datetime
+                timestamp = datetime.fromtimestamp(timestamp_unix)
+
+                # Store tuple: (price, timestamp, confidence)
+                results[contract] = (price, timestamp, confidence)
+
+        return results
+
+    except Exception as e:
+        print(f"[ERROR] DeFi Llama batch fetch failed: {e}")
+        return {}
+
+
 def update_oracle_price(
     token_contract: str,
     symbol: str,
@@ -216,6 +271,9 @@ def update_oracle_price(
     coingecko_time: Optional[datetime],
     pyth_price: Optional[float],
     pyth_time: Optional[datetime],
+    defillama_price: Optional[float],
+    defillama_time: Optional[datetime],
+    defillama_confidence: Optional[float],
     dry_run: bool = False
 ) -> bool:
     """
@@ -236,7 +294,8 @@ def update_oracle_price(
     """
     # Compute latest price across all oracles
     latest_price, latest_oracle, latest_time = compute_latest_price(
-        coingecko_price, coingecko_time, pyth_price, pyth_time
+        coingecko_price, coingecko_time, pyth_price, pyth_time,
+        defillama_price, defillama_time
     )
 
     if dry_run:
@@ -260,6 +319,9 @@ def update_oracle_price(
             'coingecko_time': coingecko_time,
             'pyth': pyth_price,
             'pyth_time': pyth_time,
+            'defillama': defillama_price,
+            'defillama_time': defillama_time,
+            'defillama_confidence': defillama_confidence,
             'latest_price': latest_price,
             'latest_oracle': latest_oracle,
             'latest_time': latest_time,
@@ -273,6 +335,7 @@ def update_oracle_price(
             token_contract, symbol,
             coingecko, coingecko_time,
             pyth, pyth_time,
+            defillama, defillama_time, defillama_confidence,
             latest_price, latest_oracle, latest_time,
             last_updated
         )
@@ -280,6 +343,7 @@ def update_oracle_price(
             :token_contract, :symbol,
             :coingecko, :coingecko_time,
             :pyth, :pyth_time,
+            :defillama, :defillama_time, :defillama_confidence,
             :latest_price, :latest_oracle, :latest_time,
             :last_updated
         )
@@ -299,6 +363,18 @@ def update_oracle_price(
             pyth_time = CASE
                 WHEN :pyth IS NOT NULL THEN :pyth_time
                 ELSE oracle_prices.pyth_time
+            END,
+            defillama = CASE
+                WHEN :defillama IS NOT NULL THEN :defillama
+                ELSE oracle_prices.defillama
+            END,
+            defillama_time = CASE
+                WHEN :defillama IS NOT NULL THEN :defillama_time
+                ELSE oracle_prices.defillama_time
+            END,
+            defillama_confidence = CASE
+                WHEN :defillama_confidence IS NOT NULL THEN :defillama_confidence
+                ELSE oracle_prices.defillama_confidence
             END,
             latest_price = CASE
                 WHEN :latest_price IS NOT NULL THEN :latest_price
@@ -395,6 +471,12 @@ def fetch_all_oracle_prices(dry_run: bool = False) -> dict:
     else:
         pyth_prices = {}
 
+    # Batch fetch DeFi Llama prices
+    token_contracts = df['token_contract'].tolist()
+    print(f"[INFO] Batch fetching {len(token_contracts)} DeFi Llama prices...")
+    defillama_prices = fetch_defillama_prices_batch(token_contracts)
+    print(f"[SUCCESS] Fetched {len(defillama_prices)} DeFi Llama prices")
+
     # Process each token
     total = len(df)
     updated = 0
@@ -428,15 +510,32 @@ def fetch_all_oracle_prices(dry_run: bool = False) -> dict:
             else:
                 print(f"  ✗ Pyth: No price for {pyth_id[:16]}...")
 
+        # Get DeFi Llama price from batch results
+        defillama_result = None
+        if token_contract in defillama_prices:
+            defillama_result = defillama_prices[token_contract]
+            dl_price, _, dl_confidence = defillama_result
+            conf_str = f" (confidence: {dl_confidence:.2f})" if dl_confidence else ""
+            print(f"  ✓ DeFi Llama: ${dl_price:.6f}{conf_str}")
+        else:
+            print(f"  ✗ DeFi Llama: No price for {token_contract[:20]}...")
+
         # Update database
-        if coingecko_result or pyth_result:
+        if coingecko_result or pyth_result or defillama_result:
             cg_price, cg_time = coingecko_result if coingecko_result else (None, None)
             pyth_price, pyth_time = pyth_result if pyth_result else (None, None)
+
+            # Extract DeFi Llama data
+            if defillama_result:
+                dl_price, dl_time, dl_confidence = defillama_result
+            else:
+                dl_price, dl_time, dl_confidence = None, None, None
 
             success = update_oracle_price(
                 token_contract, symbol,
                 cg_price, cg_time,
                 pyth_price, pyth_time,
+                dl_price, dl_time, dl_confidence,
                 dry_run=dry_run
             )
 

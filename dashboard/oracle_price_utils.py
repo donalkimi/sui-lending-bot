@@ -10,7 +10,9 @@ def compute_latest_price(
     coingecko_price: Optional[float],
     coingecko_time: Optional[datetime],
     pyth_price: Optional[float],
-    pyth_time: Optional[datetime]
+    pyth_time: Optional[datetime],
+    defillama_price: Optional[float] = None,
+    defillama_time: Optional[datetime] = None
 ) -> Tuple[Optional[float], Optional[str], Optional[datetime]]:
     """
     Determine the latest price across all oracles based on timestamps.
@@ -20,6 +22,8 @@ def compute_latest_price(
         coingecko_time: CoinGecko timestamp or None
         pyth_price: Pyth price or None
         pyth_time: Pyth timestamp or None
+        defillama_price: DeFi Llama price or None
+        defillama_time: DeFi Llama timestamp or None
 
     Returns:
         Tuple of (latest_price, latest_oracle, latest_time) or (None, None, None) if no valid data
@@ -38,6 +42,13 @@ def compute_latest_price(
             'price': pyth_price,
             'oracle': 'pyth',
             'time': pyth_time
+        })
+
+    if defillama_price is not None and defillama_time is not None:
+        candidates.append({
+            'price': defillama_price,
+            'oracle': 'defillama',
+            'time': defillama_time
         })
 
     if not candidates:
@@ -64,18 +75,18 @@ def format_contract_address(contract: str) -> str:
     return f"{contract[:6]}...{contract[-4:]}"
 
 
-def compute_timestamp_age(timestamp) -> str:
+def compute_timestamp_age(timestamp) -> int:
     """
-    Compute human-readable age from timestamp.
+    Compute age from timestamp in seconds.
 
     Args:
         timestamp: Datetime or timestamp string
 
     Returns:
-        Age string (e.g., "5m", "2h", "3d")
+        Age in seconds (integer), or -1 if N/A
     """
     if pd.isna(timestamp):
-        return "N/A"
+        return -1
 
     try:
         dt = pd.to_datetime(timestamp)
@@ -87,15 +98,8 @@ def compute_timestamp_age(timestamp) -> str:
             now = datetime.now(timezone.utc)
 
         delta = now - dt
-        seconds = delta.total_seconds()
+        seconds = int(delta.total_seconds())
 
-        if seconds < 60:
-            return f"{int(seconds)}s"
-        elif seconds < 3600:
-            return f"{int(seconds / 60)}m"
-        elif seconds < 86400:
-            return f"{int(seconds / 3600)}h"
-        else:
-            return f"{int(seconds / 86400)}d"
+        return seconds
     except Exception:
-        return "N/A"
+        return -1
