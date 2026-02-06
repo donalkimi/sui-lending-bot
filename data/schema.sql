@@ -85,7 +85,39 @@ CREATE INDEX IF NOT EXISTS idx_token_registry_pyth_id ON token_registry(pyth_id)
 CREATE INDEX IF NOT EXISTS idx_token_registry_coingecko_id ON token_registry(coingecko_id);
 
 
--- Table 3: reward_token_prices
+-- Table 3: oracle_prices
+-- Stores latest oracle price data for each token from multiple sources
+CREATE TABLE IF NOT EXISTS oracle_prices (
+    token_contract TEXT PRIMARY KEY,
+    symbol TEXT NOT NULL,
+
+    -- CoinGecko oracle
+    coingecko DECIMAL(20,10),
+    coingecko_time TIMESTAMP,
+
+    -- Pyth oracle
+    pyth DECIMAL(20,10),
+    pyth_time TIMESTAMP,
+
+    -- Aggregate latest price (computed from all oracles)
+    latest_price DECIMAL(20,10),
+    latest_oracle TEXT,
+    latest_time TIMESTAMP,
+
+    -- Metadata
+    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    FOREIGN KEY (token_contract) REFERENCES token_registry(token_contract) ON DELETE CASCADE
+);
+
+-- Indexes for oracle_prices
+CREATE INDEX IF NOT EXISTS idx_oracle_prices_symbol ON oracle_prices(symbol);
+CREATE INDEX IF NOT EXISTS idx_oracle_prices_latest_time ON oracle_prices(latest_time);
+CREATE INDEX IF NOT EXISTS idx_oracle_prices_coingecko_time ON oracle_prices(coingecko_time);
+CREATE INDEX IF NOT EXISTS idx_oracle_prices_pyth_time ON oracle_prices(pyth_time);
+
+
+-- Table 4: reward_token_prices
 -- Stores prices for reward tokens (no protocol - last write wins)
 CREATE TABLE IF NOT EXISTS reward_token_prices (
     timestamp TIMESTAMP NOT NULL,
@@ -125,7 +157,7 @@ SELECT
 FROM reward_token_prices;
 
 
--- Table 4: positions
+-- Table 5: positions
 -- Stores paper trading position records (Phase 1) with support for real capital (Phase 2)
 CREATE TABLE IF NOT EXISTS positions (
     -- Position Identification
@@ -149,6 +181,9 @@ CREATE TABLE IF NOT EXISTS positions (
 
     -- Entry Timestamp (references rates_snapshot timestamp)
     entry_timestamp TIMESTAMP NOT NULL,
+
+    -- Execution tracking (Unix seconds as integer)
+    execution_time INTEGER NOT NULL DEFAULT -1,  -- -1 = pending execution, Unix timestamp = executed on-chain
 
     -- Position Sizing (normalized multipliers, scale by deployment_usd for USD amounts)
     deployment_usd DECIMAL(20, 10) NOT NULL,
@@ -231,7 +266,7 @@ CREATE INDEX IF NOT EXISTS idx_positions_tokens ON positions(token1, token2, tok
 CREATE INDEX IF NOT EXISTS idx_positions_is_paper ON positions(is_paper_trade);
 
 
--- Table 5: position_rebalances
+-- Table 6: position_rebalances
 -- Stores historical position segments created through rebalancing
 -- Follows event sourcing pattern: records are immutable historical truth
 CREATE TABLE IF NOT EXISTS position_rebalances (
@@ -330,7 +365,7 @@ CREATE INDEX IF NOT EXISTS idx_rebalances_sequence ON position_rebalances(positi
 CREATE INDEX IF NOT EXISTS idx_rebalances_timestamps ON position_rebalances(opening_timestamp, closing_timestamp);
 
 
--- Table 6: position_statistics
+-- Table 7: position_statistics
 -- Pre-calculated position summary statistics for fast dashboard loading
 -- Follows event sourcing pattern: immutable snapshots of position state at each timestamp
 CREATE TABLE IF NOT EXISTS position_statistics (

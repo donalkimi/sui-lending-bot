@@ -2691,6 +2691,342 @@ def render_positions_table_tab(timestamp_seconds: int):
         st.code(traceback.format_exc())
 
 
+def calculate_acceptable_ranges(
+    expected_price: float,
+    expected_rate: float,
+    price_tolerance: float = 0.0025,  # 0.25% default
+    rate_tolerance: float = 0.03       # 3% default
+) -> Dict[str, float]:
+    """
+    Calculate acceptable ranges for prices and rates
+
+    Args:
+        expected_price: Expected token price (USD)
+        expected_rate: Expected interest rate (decimal, e.g., 0.08 = 8%)
+        price_tolerance: Price tolerance as decimal (0.0025 = 0.25%)
+        rate_tolerance: Rate tolerance as decimal (0.03 = 3%)
+
+    Returns:
+        Dict with 'price_low', 'price_high', 'rate_low', 'rate_high'
+    """
+    return {
+        'price_low': expected_price * (1 - price_tolerance),
+        'price_high': expected_price * (1 + price_tolerance),
+        'rate_low': expected_rate * (1 - rate_tolerance),
+        'rate_high': expected_rate * (1 + rate_tolerance)
+    }
+
+
+def render_pending_deployments_tab():
+    """
+    Render Pending Deployments tab showing positions awaiting execution
+
+    Displays all positions with execution_time = -1 regardless of selected timestamp.
+    Shows detailed execution instructions for each leg of the position.
+    """
+    st.header("🚀 Pending Deployments")
+    st.markdown("Positions awaiting on-chain execution. Follow the instructions below to execute each leg.")
+
+    try:
+        # Connect to database
+        conn = get_db_connection()
+        service = PositionService(conn)
+
+        # Query pending positions (execution_time = -1)
+        from dashboard.db_utils import get_db_engine
+        engine = get_db_engine()
+        query = """
+        SELECT *
+        FROM positions
+        WHERE execution_time = -1
+        ORDER BY created_at DESC
+        """
+        pending_positions = pd.read_sql_query(query, engine)
+
+        # Handle empty state
+        if pending_positions.empty:
+            st.info("📭 No pending deployments. Deploy a strategy from the 'All Strategies' tab to see positions here.")
+            conn.close()
+            return
+
+        # Display count
+        st.metric("Pending Positions", len(pending_positions))
+        st.markdown("---")
+
+        # Render each position
+        for _, position in pending_positions.iterrows():
+            render_pending_position_instructions(position, service)
+
+        conn.close()
+
+    except Exception as e:
+        st.error(f"❌ Error loading pending deployments: {e}")
+        import traceback
+        st.code(traceback.format_exc())
+
+
+def render_pending_position_instructions(position: pd.Series, service: PositionService):
+    """
+    Render execution instructions for a single pending position
+
+    Args:
+        position: Position row from database
+        service: PositionService instance for database operations
+    """
+    # Extract core info
+    position_id = position['position_id']
+    position_short_id = position_id[:8]
+    token1, token2, token3 = position['token1'], position['token2'], position['token3']
+    protocol_a, protocol_b = position['protocol_a'], position['protocol_b']
+    deployment_usd = float(position['deployment_usd'])
+
+    # Extract multipliers
+    l_a, b_a = float(position['l_a']), float(position['b_a'])
+    l_b, b_b = float(position['l_b']), float(position['b_b'])
+
+    # Extract prices and rates
+    price_1a, price_2a = float(position['entry_price_1a']), float(position['entry_price_2a'])
+    price_2b, price_3b = float(position['entry_price_2b']), float(position['entry_price_3b'])
+
+    rate_1a = float(position['entry_lend_rate_1a'])
+    rate_2a = float(position['entry_borrow_rate_2a'])
+    rate_2b = float(position['entry_lend_rate_2b'])
+    rate_3b = float(position['entry_borrow_rate_3b'])
+
+    fee_2a = float(position.get('entry_borrow_fee_2a', 0))
+    fee_3b = float(position.get('entry_borrow_fee_3b', 0))
+
+    # Calculate USD amounts per leg
+    lend_1a_usd = l_a * deployment_usd
+    borrow_2a_usd = b_a * deployment_usd
+    lend_2b_usd = l_b * deployment_usd
+    borrow_3b_usd = b_b * deployment_usd
+
+    # Calculate token amounts
+    amt_1a = lend_1a_usd / price_1a
+    amt_2a = borrow_2a_usd / price_2a
+    amt_2b = lend_2b_usd / price_2b
+    amt_3b = borrow_3b_usd / price_3b
+
+    # Calculate acceptable ranges (using defaults for now)
+    ranges_1a = calculate_acceptable_ranges(price_1a, rate_1a)
+    ranges_2a = calculate_acceptable_ranges(price_2a, rate_2a)
+    ranges_2b = calculate_acceptable_ranges(price_2b, rate_2b)
+    ranges_3b = calculate_acceptable_ranges(price_3b, rate_3b)
+
+    # Build title
+    token_flow = f"{token1} → {token2} → {token3}"
+    protocol_pair = f"{protocol_a} ↔ {protocol_b}"
+    created_at = position['created_at']
+    title = f"Position {position_short_id} | {token_flow} | {protocol_pair} | ${deployment_usd:,.0f} | Created: {created_at}"
+
+    # Expandable section
+    with st.expander(title, expanded=True):
+        # Position summary
+        st.markdown(f"**Position ID:** `{position_id}`")
+        st.markdown(f"**Strategy:** {token_flow} via {protocol_pair}")
+        st.markdown(f"**Deployment Amount:** ${deployment_usd:,.2f}")
+        st.markdown(f"**Entry Net APR:** {position['entry_net_apr'] * 100:.2f}%")
+
+        st.markdown("---")
+        st.markdown("### 📋 Execution Instructions")
+        st.markdown("Execute the following 4 legs in order:")
+        st.markdown("")
+
+        # Leg 1: Lend token1 to Protocol A
+        st.markdown(f"**Leg 1: Lend {token1} to {protocol_a}**")
+        st.markdown(f"- **Action:** Lend **{amt_1a:,.6f} {token1}** to {protocol_a}")
+        st.markdown(f"- **Expected USD Value:** ${lend_1a_usd:,.2f}")
+        st.markdown(f"- **Expected Price:** ${price_1a:.6f} USD per {token1}")
+        st.markdown(f"- **Acceptable Price:** ≥ ${ranges_1a['price_low']:.6f} USD")
+        st.markdown(f"- **Expected Rate:** {rate_1a * 100:.2f}%")
+        st.markdown(f"- **Acceptable Rate:** ≥ {ranges_1a['rate_low'] * 100:.2f}%")
+        st.markdown("")
+
+        # Leg 2: Borrow token2 from Protocol A
+        st.markdown(f"**Leg 2: Borrow {token2} from {protocol_a}**")
+        st.markdown(f"- **Action:** Borrow **{amt_2a:,.6f} {token2}** from {protocol_a}")
+        st.markdown(f"- **Expected USD Value:** ${borrow_2a_usd:,.2f}")
+        st.markdown(f"- **Expected Price:** ${price_2a:.6f} USD per {token2}")
+        st.markdown(f"- **Acceptable Price:** ≤ ${ranges_2a['price_high']:.6f} USD")
+        st.markdown(f"- **Expected Rate:** {rate_2a * 100:.2f}%")
+        st.markdown(f"- **Acceptable Rate:** ≤ {ranges_2a['rate_high'] * 100:.2f}%")
+        st.markdown(f"- **Borrow Fee:** {fee_2a * 100:.3f}% (${borrow_2a_usd * fee_2a:,.2f})")
+        st.markdown("")
+
+        # Leg 3: Lend token2 to Protocol B
+        st.markdown(f"**Leg 3: Lend {token2} to {protocol_b}**")
+        st.markdown(f"- **Action:** Lend **{amt_2b:,.6f} {token2}** to {protocol_b}")
+        st.markdown(f"- **Expected USD Value:** ${lend_2b_usd:,.2f}")
+        st.markdown(f"- **Expected Price:** ${price_2b:.6f} USD per {token2}")
+        st.markdown(f"- **Acceptable Price:** ≥ ${ranges_2b['price_low']:.6f} USD")
+        st.markdown(f"- **Expected Rate:** {rate_2b * 100:.2f}%")
+        st.markdown(f"- **Acceptable Rate:** ≥ {ranges_2b['rate_low'] * 100:.2f}%")
+        st.markdown("")
+
+        # Leg 4: Borrow token3 from Protocol B
+        st.markdown(f"**Leg 4: Borrow {token3} from {protocol_b}**")
+        st.markdown(f"- **Action:** Borrow **{amt_3b:,.6f} {token3}** from {protocol_b}")
+        st.markdown(f"- **Expected USD Value:** ${borrow_3b_usd:,.2f}")
+        st.markdown(f"- **Expected Price:** ${price_3b:.6f} USD per {token3}")
+        st.markdown(f"- **Acceptable Price:** ≤ ${ranges_3b['price_high']:.6f} USD")
+        st.markdown(f"- **Expected Rate:** {rate_3b * 100:.2f}%")
+        st.markdown(f"- **Acceptable Rate:** ≤ {ranges_3b['rate_high'] * 100:.2f}%")
+        st.markdown(f"- **Borrow Fee:** {fee_3b * 100:.3f}% (${borrow_3b_usd * fee_3b:,.2f})")
+
+        st.markdown("---")
+        st.markdown("### 🔧 Actions")
+
+        col1, col2, col3 = st.columns(3)
+
+        with col1:
+            if st.button("✅ Mark as Executed", key=f"execute_{position_id}", type="primary"):
+                service.mark_position_executed(position_id)
+                st.success(f"✅ Position {position_short_id} marked as executed!")
+                st.rerun()
+
+        with col2:
+            if st.button("🗑️ Delete Position", key=f"delete_{position_id}", type="secondary"):
+                service.delete_position(position_id)
+                st.success(f"🗑️ Position {position_short_id} deleted!")
+                st.rerun()
+
+        with col3:
+            # Copy instructions to clipboard
+            instructions_text = f"""Position ID: {position_id}
+Strategy: {token_flow} via {protocol_pair}
+Deployment: ${deployment_usd:,.2f}
+
+Leg 1: Lend {amt_1a:,.6f} {token1} to {protocol_a}
+  Expected price: ${price_1a:.6f}, rate: {rate_1a*100:.2f}%
+  Acceptable price: ≥${ranges_1a['price_low']:.6f}, rate: ≥{ranges_1a['rate_low']*100:.2f}%
+
+Leg 2: Borrow {amt_2a:,.6f} {token2} from {protocol_a}
+  Expected price: ${price_2a:.6f}, rate: {rate_2a*100:.2f}%
+  Acceptable price: ≤${ranges_2a['price_high']:.6f}, rate: ≤{ranges_2a['rate_high']*100:.2f}%
+  Fee: {fee_2a*100:.3f}%
+
+Leg 3: Lend {amt_2b:,.6f} {token2} to {protocol_b}
+  Expected price: ${price_2b:.6f}, rate: {rate_2b*100:.2f}%
+  Acceptable price: ≥${ranges_2b['price_low']:.6f}, rate: ≥{ranges_2b['rate_low']*100:.2f}%
+
+Leg 4: Borrow {amt_3b:,.6f} {token3} from {protocol_b}
+  Expected price: ${price_3b:.6f}, rate: {rate_3b*100:.2f}%
+  Acceptable price: ≤${ranges_3b['price_high']:.6f}, rate: ≤{ranges_3b['rate_high']*100:.2f}%
+  Fee: {fee_3b*100:.3f}%"""
+
+            st.download_button(
+                label="📋 Copy Instructions",
+                data=instructions_text,
+                file_name=f"position_{position_short_id}_instructions.txt",
+                mime="text/plain",
+                key=f"copy_{position_id}"
+            )
+
+
+def render_oracle_prices_tab(timestamp_seconds: int):
+    """
+    Render Oracle Prices tab showing latest prices from multiple oracles.
+
+    Args:
+        timestamp_seconds: Current timestamp (for consistency with other tabs)
+    """
+    import streamlit as st
+    import pandas as pd
+    from dashboard.db_utils import get_db_engine
+    from dashboard.oracle_price_utils import (
+        format_contract_address,
+        compute_timestamp_age
+    )
+
+    st.header("💎 Oracle Prices")
+
+    engine = get_db_engine()
+
+    query = """
+    SELECT
+        symbol,
+        token_contract,
+        coingecko,
+        coingecko_time,
+        pyth,
+        pyth_time,
+        latest_price,
+        latest_oracle,
+        latest_time
+    FROM oracle_prices
+    ORDER BY symbol ASC
+    """
+
+    try:
+        df = pd.read_sql_query(query, engine)
+
+        if df.empty:
+            st.warning("⚠️ No oracle price data available.")
+            st.info("💡 Run: `python data/migrations/init_oracle_prices.py` to populate initial prices.")
+            return
+
+        # Display metrics
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Total Tokens", len(df))
+        with col2:
+            cg_count = df['coingecko'].notna().sum()
+            st.metric("CoinGecko Coverage", f"{cg_count}/{len(df)}")
+        with col3:
+            pyth_count = df['pyth'].notna().sum()
+            st.metric("Pyth Coverage", f"{pyth_count}/{len(df)}")
+
+        st.markdown("---")
+
+        # Transform data for display
+        display_df = pd.DataFrame()
+        display_df['Token'] = df['symbol']
+        display_df['Contract'] = df['token_contract'].apply(format_contract_address)
+        display_df['CoinGecko'] = df['coingecko']
+        display_df['CoinGecko Time'] = pd.to_datetime(df['coingecko_time'])
+        display_df['Pyth'] = df['pyth']
+        display_df['Pyth Time'] = pd.to_datetime(df['pyth_time'])
+        display_df['Latest Price'] = df['latest_price']
+        display_df['Source'] = df['latest_oracle']
+        display_df['Age'] = df['latest_time'].apply(compute_timestamp_age)
+
+        # Display table
+        st.dataframe(
+            display_df,
+            column_config={
+                "Token": st.column_config.TextColumn("Token", width="small"),
+                "Contract": st.column_config.TextColumn("Contract", width="medium"),
+                "CoinGecko": st.column_config.NumberColumn(
+                    "CoinGecko Price", format="$%.6f"
+                ),
+                "CoinGecko Time": st.column_config.DatetimeColumn(
+                    "CG Updated", format="MMM DD, HH:mm"
+                ),
+                "Pyth": st.column_config.NumberColumn(
+                    "Pyth Price", format="$%.6f"
+                ),
+                "Pyth Time": st.column_config.DatetimeColumn(
+                    "Pyth Updated", format="MMM DD, HH:mm"
+                ),
+                "Latest Price": st.column_config.NumberColumn(
+                    "Latest Price", format="$%.6f"
+                ),
+                "Source": st.column_config.TextColumn("Source", width="small"),
+                "Age": st.column_config.TextColumn("Age", width="small"),
+            },
+            hide_index=True,
+            use_container_width=True
+        )
+
+        st.caption("💡 Latest Price shows the most recent price across all oracles.")
+
+    except Exception as e:
+        st.error(f"❌ Error loading oracle prices: {e}")
+        import traceback
+        st.code(traceback.format_exc())
+
+
 def render_zero_liquidity_tab(zero_liquidity_results: pd.DataFrame, deployment_usd: float,
                               mode: str,
                               timestamp: Optional[int] = None):
@@ -3127,7 +3463,7 @@ def render_dashboard(data_loader: DataLoader, mode: str):
 
         col1, col2 = st.columns([3, 1])
         with col1:
-            st.info("📊 View your position details in the **Positions** tab")
+            st.info("🚀 View execution instructions in the **Pending Deployments** tab, and track performance in the **Positions** tab")
         with col2:
             if st.button("✓ Dismiss", type="secondary"):
                 del st.session_state.deployment_success
@@ -3144,11 +3480,13 @@ def render_dashboard(data_loader: DataLoader, mode: str):
     tabs_start = time.time()
     print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] Rendering tabs...")
 
-    tab1, tab2, tab3, tab4 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         "📊 All Strategies",
         "📈 Rate Tables",
         "⚠️ 0 Liquidity",
-        "💼 Positions"
+        "💼 Positions",
+        "💎 Oracle Prices",
+        "🚀 Pending Deployments"
     ])
 
     with tab1:
@@ -3196,6 +3534,18 @@ def render_dashboard(data_loader: DataLoader, mode: str):
         render_positions_table_tab(timestamp_seconds)
         tab4_time = (time.time() - tab4_start) * 1000
         print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] Tab4 (Positions) rendered in {tab4_time:.1f}ms")
+
+    with tab5:
+        tab5_start = time.time()
+        render_oracle_prices_tab(timestamp_seconds)
+        tab5_time = (time.time() - tab5_start) * 1000
+        print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] Tab5 (Oracle Prices) rendered in {tab5_time:.1f}ms")
+
+    with tab6:
+        tab6_start = time.time()
+        render_pending_deployments_tab()
+        tab6_time = (time.time() - tab6_start) * 1000
+        print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] Tab6 (Pending Deployments) rendered in {tab6_time:.1f}ms")
 
     total_dashboard_time = (time.time() - dashboard_start) * 1000
     print(f"[{total_dashboard_time:7.1f}ms] [DASHBOARD] ✅ Dashboard render complete (total: {total_dashboard_time:.1f}ms)\n")

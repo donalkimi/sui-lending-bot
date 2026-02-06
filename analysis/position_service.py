@@ -1,5 +1,6 @@
 import sqlite3
 import uuid
+import time
 from typing import Dict, List, Optional, Tuple, Union
 import pandas as pd
 from datetime import datetime
@@ -125,6 +126,7 @@ class PositionService:
         protocol_b: str,
         deployment_usd: float,
         is_paper_trade: bool = True,
+        execution_time: int = -1,
         user_id: Optional[str] = None,
         notes: Optional[str] = None,
         wallet_address: Optional[str] = None,
@@ -147,6 +149,7 @@ class PositionService:
             protocol_b: Second protocol name
             deployment_usd: USD amount to deploy
             is_paper_trade: True for Phase 1 (paper), False for Phase 2 (real capital)
+            execution_time: Unix timestamp when executed (-1 = pending execution)
             user_id: Optional user ID for multi-user support (Phase 2)
             notes: Optional user notes
             wallet_address: Optional wallet address (Phase 2)
@@ -233,7 +236,7 @@ class PositionService:
                     token1, token2, token3,
                     token1_contract, token2_contract, token3_contract,
                     protocol_a, protocol_b,
-                    entry_timestamp,
+                    entry_timestamp, execution_time,
                     deployment_usd, l_a, b_a, l_b, b_b,
                     entry_lend_rate_1a, entry_borrow_rate_2a, entry_lend_rate_2b, entry_borrow_rate_3b,
                     entry_price_1a, entry_price_2a, entry_price_2b, entry_price_3b,
@@ -250,7 +253,7 @@ class PositionService:
                 token1, token2, token3,
                 token1_contract, token2_contract, token3_contract,
                 protocol_a, protocol_b,
-                entry_timestamp_str,
+                entry_timestamp_str, execution_time,
                 self._to_native_type(deployment_usd), 
                 self._to_native_type(l_a), 
                 self._to_native_type(b_a), 
@@ -290,6 +293,27 @@ class PositionService:
             raise Exception(f"Failed to create position: {e}")
 
         return position_id
+
+    def mark_position_executed(self, position_id: str, execution_time: int = -1) -> None:
+        """
+        Mark a pending position as executed
+
+        Args:
+            position_id: Position UUID
+            execution_time: Unix timestamp when executed (defaults to current time if -1)
+        """
+        # If -1 passed (or default), use current timestamp
+        if execution_time == -1:
+            execution_time = int(time.time())
+
+        cursor = self.conn.cursor()
+        ph = self._get_placeholder()
+        cursor.execute(f"""
+            UPDATE positions
+            SET execution_time = {ph}, updated_at = CURRENT_TIMESTAMP
+            WHERE position_id = {ph}
+        """, (execution_time, position_id))
+        self.conn.commit()
 
     def close_position(
         self,
