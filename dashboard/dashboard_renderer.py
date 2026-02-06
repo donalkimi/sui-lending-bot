@@ -774,7 +774,7 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
     # ========================================
     # ACTION BUTTON
     # ========================================
-    if st.button("🚀 Deploy Position", type="primary", use_container_width=True):
+    if st.button("🚀 Deploy Position", type="primary", width='stretch'):
         print("[DEPLOY BUTTON] Deploy button clicked!")
         try:
             # Connect to database
@@ -2381,7 +2381,7 @@ def render_positions_table_tab(timestamp_seconds: int):
                                 "🔄 Rebalance Position",
                                 key=f"rebalance_{position['position_id']}",
                                 disabled=True,
-                                use_container_width=True
+                                width='stretch'
                             )
                             st.caption("⏰ Cannot rebalance: You are viewing a historical timestamp, "
                                      "and this position was already rebalanced in the future. "
@@ -2391,7 +2391,7 @@ def render_positions_table_tab(timestamp_seconds: int):
                                 "🔄 Rebalance Position",
                                 key=f"rebalance_{position['position_id']}",
                                 help="Snapshot current PnL and adjust token2 amounts to restore liquidation distance to target",
-                                use_container_width=True
+                                width='stretch'
                             ):
                                 st.session_state.pending_rebalance = {
                                     'position_id': position['position_id'],
@@ -2404,7 +2404,7 @@ def render_positions_table_tab(timestamp_seconds: int):
                             "❌ Close Position",
                             key=f"close_{position['position_id']}",
                             help="Close position and realize all PnL",
-                            use_container_width=True
+                            width='stretch'
                         ):
                             st.session_state.pending_close = {
                                 'position_id': position['position_id'],
@@ -3140,7 +3140,7 @@ def render_oracle_prices_tab(timestamp_seconds: int):
                 "Age": st.column_config.NumberColumn("Age (sec)", width="small"),
             },
             hide_index=True,
-            use_container_width=True
+            width='stretch'
         )
 
         st.caption("💡 Latest Price shows the most recent price across all oracles.")
