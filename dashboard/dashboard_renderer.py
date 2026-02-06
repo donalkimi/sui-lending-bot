@@ -750,17 +750,20 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
     # Apply color formatting to Liquidation Distance column
     def color_liq_distance(val):
         """Color liquidation distance based on risk level"""
-        if isinstance(val, str) and '%' in val and val != "N/A":
-            try:
-                numeric_val = abs(float(val.replace('%', '')))  # Use absolute value
-                if numeric_val < 10:
-                    return 'color: red'
-                elif numeric_val < 30:
-                    return 'color: orange'
-                else:
-                    return 'color: green'
-            except (ValueError, TypeError):
-                pass
+        if isinstance(val, str):
+            if val == "N/A":
+                return 'color: gray; font-style: italic'
+            elif '%' in val:
+                try:
+                    numeric_val = abs(float(val.replace('%', '')))  # Use absolute value
+                    if numeric_val < 10:
+                        return 'color: red'
+                    elif numeric_val < 30:
+                        return 'color: orange'
+                    else:
+                        return 'color: green'
+                except (ValueError, TypeError):
+                    pass
         return ''
 
     styled_detail_df = detail_df.style.map(color_rate, subset=['Rate']).map(color_liq_distance, subset=['Liq Distance'])
@@ -1182,6 +1185,43 @@ def render_positions_table_tab(timestamp_seconds: int):
             data = rate_lookup.get(key, {})
             return data.get('price', 0.0)
 
+        # Helper function to safely calculate liquidation price with missing price handling
+        def calculate_liquidation_price_safe(
+            collateral_value: float,
+            loan_value: float,
+            lending_token_price: float,
+            borrowing_token_price: float,
+            lltv: float,
+            side: str,
+            borrow_weight: float = 1.0
+        ):
+            """
+            Safely calculate liquidation price, handling missing price data.
+
+            Returns a result dict with 'missing_price' direction if prices are invalid.
+            """
+            # Check for missing/invalid prices
+            if lending_token_price <= 0 or borrowing_token_price <= 0:
+                return {
+                    'liq_price': 0.0,
+                    'current_price': 0.0,
+                    'pct_distance': 0.0,
+                    'current_ltv': 0.0,
+                    'lltv': lltv,
+                    'direction': 'missing_price'
+                }
+
+            # Prices are valid, proceed with normal calculation
+            return calc.calculate_liquidation_price(
+                collateral_value=collateral_value,
+                loan_value=loan_value,
+                lending_token_price=lending_token_price,
+                borrowing_token_price=borrowing_token_price,
+                lltv=lltv,
+                side=side,
+                borrow_weight=borrow_weight
+            )
+
         # Helper function to calculate token amount precision
         def get_token_precision(price: float, target_usd: float = 10.0) -> int:
             """
@@ -1537,6 +1577,22 @@ def render_positions_table_tab(timestamp_seconds: int):
                 live_price_2B = get_price(position['token2'], position['protocol_b'])
                 live_price_3B = get_price(position['token3'], position['protocol_b'])
 
+                # Track missing prices for user feedback
+                missing_prices = set()
+                if live_price_1A <= 0:
+                    missing_prices.add(f"{position['token1']} on {position['protocol_a']}")
+                if live_price_2A <= 0:
+                    missing_prices.add(f"{position['token2']} on {position['protocol_a']}")
+                if live_price_2B <= 0:
+                    missing_prices.add(f"{position['token2']} on {position['protocol_b']}")
+                if live_price_3B <= 0:
+                    missing_prices.add(f"{position['token3']} on {position['protocol_b']}")
+
+                # Display warning if any prices are missing
+                if missing_prices:
+                    st.warning(f"⚠️ **Missing Price Data**: Price data not available for: {', '.join(sorted(missing_prices))}. "
+                               f"Liquidation calculations will show N/A for affected legs.")
+
                 # Calculate dynamic precision for token amounts (based on live prices)
                 precision_1A = get_token_precision(live_price_1A)
                 precision_2A = get_token_precision(live_price_2A)
@@ -1560,6 +1616,8 @@ def render_positions_table_tab(timestamp_seconds: int):
                         return "LIQUIDATED"
                     elif liq_result['direction'] == 'impossible':
                         return ""
+                    elif liq_result['direction'] == 'missing_price':
+                        return "N/A"
                     else:
                         return f"${liq_result['liq_price']:.4f}"
 
@@ -1569,6 +1627,8 @@ def render_positions_table_tab(timestamp_seconds: int):
                         return "0.00%"
                     elif liq_result['direction'] == 'impossible':
                         return ""
+                    elif liq_result['direction'] == 'missing_price':
+                        return "N/A"
                     else:
                         return f"{liq_result['pct_distance'] * 100:.2f}%"
 
@@ -1644,7 +1704,7 @@ def render_positions_table_tab(timestamp_seconds: int):
                 current_loan_A = entry_token_amount_2A * live_price_2A
 
                 # Leg 1: Liquidation price for token1 (lending side - price must drop)
-                liq_1A = calc.calculate_liquidation_price(
+                liq_1A = calculate_liquidation_price_safe(
                     collateral_value=current_collateral_A,
                     loan_value=current_loan_A,
                     lending_token_price=live_price_1A,
@@ -1655,7 +1715,7 @@ def render_positions_table_tab(timestamp_seconds: int):
                 )
 
                 # Leg 2: Liquidation price for token2 (borrowing side - price must rise)
-                liq_2A = calc.calculate_liquidation_price(
+                liq_2A = calculate_liquidation_price_safe(
                     collateral_value=current_collateral_A,
                     loan_value=current_loan_A,
                     lending_token_price=live_price_1A,
@@ -1671,7 +1731,7 @@ def render_positions_table_tab(timestamp_seconds: int):
                 current_loan_B = entry_token_amount_3B * live_price_3B
 
                 # Leg 3: Liquidation price for token2 (lending side - price must drop)
-                liq_2B = calc.calculate_liquidation_price(
+                liq_2B = calculate_liquidation_price_safe(
                     collateral_value=current_collateral_B,
                     loan_value=current_loan_B,
                     lending_token_price=live_price_2B,
@@ -1682,7 +1742,7 @@ def render_positions_table_tab(timestamp_seconds: int):
                 )
 
                 # Leg 4: Liquidation price for token3 (borrowing side - price must rise)
-                liq_3B = calc.calculate_liquidation_price(
+                liq_3B = calculate_liquidation_price_safe(
                     collateral_value=current_collateral_B,
                     loan_value=current_loan_B,
                     lending_token_price=live_price_2B,
@@ -1697,7 +1757,7 @@ def render_positions_table_tab(timestamp_seconds: int):
                 entry_collateral_A = entry_token_amount_1A * position['entry_price_1a']
                 entry_loan_A = entry_token_amount_2A * position['entry_price_2a']
 
-                entry_liq_1A = calc.calculate_liquidation_price(
+                entry_liq_1A = calculate_liquidation_price_safe(
                     collateral_value=entry_collateral_A,
                     loan_value=entry_loan_A,
                     lending_token_price=position['entry_price_1a'],
@@ -1707,7 +1767,7 @@ def render_positions_table_tab(timestamp_seconds: int):
                     borrow_weight=borrow_weight_2A
                 )
 
-                entry_liq_2A = calc.calculate_liquidation_price(
+                entry_liq_2A = calculate_liquidation_price_safe(
                     collateral_value=entry_collateral_A,
                     loan_value=entry_loan_A,
                     lending_token_price=position['entry_price_1a'],
@@ -1721,7 +1781,7 @@ def render_positions_table_tab(timestamp_seconds: int):
                 entry_collateral_B = entry_token_amount_2B * position['entry_price_2b']
                 entry_loan_B = entry_token_amount_3B * position['entry_price_3b']
 
-                entry_liq_2B = calc.calculate_liquidation_price(
+                entry_liq_2B = calculate_liquidation_price_safe(
                     collateral_value=entry_collateral_B,
                     loan_value=entry_loan_B,
                     lending_token_price=position['entry_price_2b'],
@@ -1731,7 +1791,7 @@ def render_positions_table_tab(timestamp_seconds: int):
                     borrow_weight=borrow_weight_3B
                 )
 
-                entry_liq_3B = calc.calculate_liquidation_price(
+                entry_liq_3B = calculate_liquidation_price_safe(
                     collateral_value=entry_collateral_B,
                     loan_value=entry_loan_B,
                     lending_token_price=position['entry_price_2b'],
@@ -1800,7 +1860,7 @@ def render_positions_table_tab(timestamp_seconds: int):
 
                 # Calculate rebalanced liquidation distances for all 4 legs
                 # Leg 1: Protocol A - Lend token1 (lending side)
-                rebalanced_liq_1A = calc.calculate_liquidation_price(
+                rebalanced_liq_1A = calculate_liquidation_price_safe(
                     collateral_value=rebalanced_collateral_A,
                     loan_value=rebalanced_loan_A,
                     lending_token_price=live_price_1A,
@@ -1811,7 +1871,7 @@ def render_positions_table_tab(timestamp_seconds: int):
                 )
 
                 # Leg 2: Protocol A - Borrow token2 (borrowing side)
-                rebalanced_liq_2A = calc.calculate_liquidation_price(
+                rebalanced_liq_2A = calculate_liquidation_price_safe(
                     collateral_value=rebalanced_collateral_A,
                     loan_value=rebalanced_loan_A,
                     lending_token_price=live_price_1A,
@@ -1822,7 +1882,7 @@ def render_positions_table_tab(timestamp_seconds: int):
                 )
 
                 # Leg 3: Protocol B - Lend token2 (lending side)
-                rebalanced_liq_2B = calc.calculate_liquidation_price(
+                rebalanced_liq_2B = calculate_liquidation_price_safe(
                     collateral_value=rebalanced_collateral_B,
                     loan_value=rebalanced_loan_B,
                     lending_token_price=live_price_2B,
@@ -1833,7 +1893,7 @@ def render_positions_table_tab(timestamp_seconds: int):
                 )
 
                 # Leg 4: Protocol B - Borrow token3 (borrowing side)
-                rebalanced_liq_3B = calc.calculate_liquidation_price(
+                rebalanced_liq_3B = calculate_liquidation_price_safe(
                     collateral_value=rebalanced_collateral_B,
                     loan_value=rebalanced_loan_B,
                     lending_token_price=live_price_2B,
@@ -2089,25 +2149,30 @@ def render_positions_table_tab(timestamp_seconds: int):
                     return ''
 
                 def color_liq_price(val):
-                    """Color liquidation prices - red for LIQUIDATED"""
+                    """Color liquidation prices - red for LIQUIDATED, gray for N/A"""
                     if isinstance(val, str):
                         if val == "LIQUIDATED":
                             return 'color: red; font-weight: bold'
+                        elif val == "N/A":
+                            return 'color: gray; font-style: italic'
                     return ''
 
                 def color_liq_distance(val):
                     """Color liquidation distance based on risk level"""
-                    if isinstance(val, str) and '%' in val and val != "":
-                        try:
-                            numeric_val = abs(float(val.replace('%', '')))  # Use absolute value
-                            if numeric_val < 10:
-                                return 'color: red; font-weight: bold'
-                            elif numeric_val < 30:
-                                return 'color: orange'
-                            else:
-                                return 'color: green'
-                        except (ValueError, TypeError):
-                            pass
+                    if isinstance(val, str):
+                        if val == "N/A":
+                            return 'color: gray; font-style: italic'
+                        elif '%' in val and val != "":
+                            try:
+                                numeric_val = abs(float(val.replace('%', '')))  # Use absolute value
+                                if numeric_val < 10:
+                                    return 'color: red; font-weight: bold'
+                                elif numeric_val < 30:
+                                    return 'color: orange'
+                                else:
+                                    return 'color: green'
+                            except (ValueError, TypeError):
+                                pass
                     return ''
 
                 def color_rebalance(val):
