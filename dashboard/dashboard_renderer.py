@@ -3816,7 +3816,7 @@ def render_portfolio_preview(portfolio_df: pd.DataFrame, portfolio_size: float, 
 
     from analysis.portfolio_allocator import PortfolioAllocator
     allocator = PortfolioAllocator(portfolio_df)
-    token_exposures, protocol_exposures = allocator.calculate_portfolio_exposures(portfolio_df)
+    token_exposures, protocol_exposures = allocator.calculate_portfolio_exposures(portfolio_df, portfolio_size)
 
     col_exp1, col_exp2 = st.columns(2)
 
