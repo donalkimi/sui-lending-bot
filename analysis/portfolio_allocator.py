@@ -148,6 +148,10 @@ class PortfolioAllocator:
         """
         max_amount = remaining_capital
 
+        # Check strategy max size constraint (liquidity limit)
+        if 'max_size_usd' in strategy_row and pd.notna(strategy_row['max_size_usd']):
+            max_amount = min(max_amount, strategy_row['max_size_usd'])
+
         # Check token exposure constraints (all 3 tokens)
         # Use token-specific override if available, otherwise use default limit
         default_token_limit = portfolio_size * constraints['token_exposure_limit']
@@ -156,8 +160,8 @@ class PortfolioAllocator:
         # Get borrow weights (token1 always 1.0, token2/3 from strategy)
         weights = {
             1: 1.0,  # Token1 always has weight 1.0
-            2: strategy_row.get('borrow_weight_2a', 1.0),
-            3: strategy_row.get('borrow_weight_3b', 1.0)
+            2: strategy_row.get('borrow_weight_2A', 1.0),
+            3: strategy_row.get('borrow_weight_3B', 1.0)
         }
 
         for token_num in [1, 2, 3]:
@@ -211,8 +215,8 @@ class PortfolioAllocator:
         # Get borrow weights (token1 always 1.0, token2/3 from strategy)
         weights = {
             1: 1.0,  # Token1 always has weight 1.0
-            2: strategy_row.get('borrow_weight_2a', 1.0),
-            3: strategy_row.get('borrow_weight_3b', 1.0)
+            2: strategy_row.get('borrow_weight_2A', 1.0),
+            3: strategy_row.get('borrow_weight_3B', 1.0)
         }
 
         # Update token exposures (multiply by weight)
@@ -371,41 +375,52 @@ class PortfolioAllocator:
         for _, row in portfolio_df.iterrows():
             allocation = row['allocation_usd']
 
-            # Aggregate token exposures - ONLY COUNT LENDING, NOT BORROWING
-            # In a recursive strategy:
-            # - Token1: Lent on protocol A (count this)
-            # - Token2: Borrowed on A, Lent on B (only count lend amount)
-            # - Token3: Borrowed on B (don't count, no lending exposure)
+            # Get lending weights from strategy
+            l_a = row.get('l_a', 1.0)  # Lending weight for Protocol A
+            l_b = row.get('l_b', 1.0)  # Lending weight for Protocol B
 
-            # Token1 - always lent
+            # Aggregate token exposures - ONLY COUNT LENDING, NOT BORROWING
+            # Token1 - lent on protocol A
             token1_contract = row['token1_contract']
             token1_symbol = row['token1']
+            token1_lend_amount = allocation * l_a
             if token1_contract not in token_exposures:
                 token_exposures[token1_contract] = {
                     'symbol': token1_symbol,
                     'usd': 0.0,
                     'pct': 0.0
                 }
-            token_exposures[token1_contract]['usd'] += allocation
+            token_exposures[token1_contract]['usd'] += token1_lend_amount
 
             # Token2 - lent on protocol B
             token2_contract = row['token2_contract']
             token2_symbol = row['token2']
+            token2_lend_amount = allocation * l_b
             if token2_contract not in token_exposures:
                 token_exposures[token2_contract] = {
                     'symbol': token2_symbol,
                     'usd': 0.0,
                     'pct': 0.0
                 }
-            token_exposures[token2_contract]['usd'] += allocation
+            token_exposures[token2_contract]['usd'] += token2_lend_amount
 
             # Token3 - only borrowed, not lent (no exposure counted)
 
-            # Aggregate protocol exposures
-            for protocol in [row['protocol_a'], row['protocol_b']]:
-                if protocol not in protocol_exposures:
-                    protocol_exposures[protocol] = {'usd': 0.0, 'pct': 0.0}
-                protocol_exposures[protocol]['usd'] += allocation
+            # Aggregate protocol exposures - ONLY COUNT LENDING
+            # Protocol A: allocation * l_a (token1 lent to A)
+            # Protocol B: allocation * l_b (token2 lent to B)
+            protocol_a = row['protocol_a']
+            protocol_b = row['protocol_b']
+
+            # Protocol A gets token1 lending
+            if protocol_a not in protocol_exposures:
+                protocol_exposures[protocol_a] = {'usd': 0.0, 'pct': 0.0}
+            protocol_exposures[protocol_a]['usd'] += allocation * l_a
+
+            # Protocol B gets token2 lending
+            if protocol_b not in protocol_exposures:
+                protocol_exposures[protocol_b] = {'usd': 0.0, 'pct': 0.0}
+            protocol_exposures[protocol_b]['usd'] += allocation * l_b
 
         # Calculate percentages against total portfolio size (not just allocated amount)
         for contract in token_exposures:

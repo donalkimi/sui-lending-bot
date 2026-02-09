@@ -3552,6 +3552,94 @@ def render_allocation_tab(all_strategies_df: pd.DataFrame):
 
     st.markdown("---")
 
+    # Display all strategies ranked by adjusted APR
+    st.markdown("### 📋 All Strategies (Ranked by Adjusted APR)")
+    st.caption(
+        "Strategies are filtered by confidence threshold and ranked by adjusted APR "
+        "(blended APR × stablecoin multiplier). This is the ranking order used for portfolio allocation."
+    )
+
+    if not all_strategies_df.empty:
+        try:
+            from analysis.portfolio_allocator import PortfolioAllocator
+
+            # Initialize allocator
+            allocator = PortfolioAllocator(all_strategies_df)
+
+            # Apply same filtering and ranking as select_portfolio
+            strategies = all_strategies_df.copy()
+
+            # Filter by confidence
+            if 'confidence' in strategies.columns:
+                min_confidence = constraints.get('min_apy_confidence', 0.0)
+                strategies = strategies[strategies['confidence'] >= min_confidence].copy()
+
+            if strategies.empty:
+                st.warning("⚠️ No strategies meet the confidence threshold. Lower the threshold or adjust filters.")
+            else:
+                # Calculate blended APR
+                apr_weights = constraints['apr_weights']
+                strategies['blended_apr'] = strategies.apply(
+                    lambda row: allocator.calculate_blended_apr(row, apr_weights),
+                    axis=1
+                )
+
+                # Calculate adjusted APR with stablecoin preferences
+                stablecoin_prefs = constraints['stablecoin_preferences']
+                adjusted_results = strategies.apply(
+                    lambda row: allocator.calculate_adjusted_apr(
+                        row,
+                        row['blended_apr'],
+                        stablecoin_prefs
+                    ),
+                    axis=1
+                )
+
+                # Unpack results
+                strategies['stablecoin_multiplier'] = adjusted_results.apply(lambda x: x['stablecoin_multiplier'])
+                strategies['adjusted_apr'] = adjusted_results.apply(lambda x: x['adjusted_apr'])
+                strategies['stablecoins_in_strategy'] = adjusted_results.apply(lambda x: x['stablecoins_in_strategy'])
+
+                # Sort by adjusted APR (descending)
+                strategies = strategies.sort_values('adjusted_apr', ascending=False)
+
+                # Display table
+                display_df = strategies[[
+                    'token1', 'token2', 'token3',
+                    'protocol_a', 'protocol_b',
+                    'net_apr', 'apr5', 'apr30', 'blended_apr', 'stablecoin_multiplier', 'adjusted_apr'
+                ]].copy()
+
+                # Format for display
+                display_df['net_apr'] = display_df['net_apr'].apply(lambda x: f"{x*100:.2f}%")
+                display_df['apr5'] = display_df['apr5'].apply(lambda x: f"{x*100:.2f}%" if pd.notna(x) else "N/A")
+                display_df['apr30'] = display_df['apr30'].apply(lambda x: f"{x*100:.2f}%" if pd.notna(x) else "N/A")
+                display_df['blended_apr'] = display_df['blended_apr'].apply(lambda x: f"{x*100:.2f}%")
+                display_df['stablecoin_multiplier'] = display_df['stablecoin_multiplier'].apply(lambda x: f"{x:.2f}x")
+                display_df['adjusted_apr'] = display_df['adjusted_apr'].apply(lambda x: f"{x*100:.2f}%")
+
+                # Rename columns
+                display_df.columns = [
+                    'Token1', 'Token2', 'Token3',
+                    'Protocol A', 'Protocol B',
+                    'Net APR', 'APR5', 'APR30', 'Blended APR', 'Stable Mult', 'Adjusted APR'
+                ]
+
+                # Show count
+                st.info(f"📊 Showing **{len(display_df)}** strategies meeting confidence threshold")
+
+                # Display table with fixed height
+                st.dataframe(display_df, height=400, width='stretch')
+
+        except Exception as e:
+            st.error(f"❌ Error calculating strategy rankings: {str(e)}")
+            import traceback
+            st.code(traceback.format_exc())
+    else:
+        st.warning("⚠️ No strategies available. Adjust filters in sidebar.")
+
+    st.markdown("---")
+
     # Portfolio Name Input
     st.markdown("##### 📝 Portfolio Name")
     portfolio_name = st.text_input(
