@@ -3348,6 +3348,569 @@ def render_sidebar_filters(display_results: pd.DataFrame):
     return (liquidation_distance, deployment_usd, force_usdc_start, force_token3_equals_token1,
             stablecoin_only, min_apr, token_filter, protocol_filter)
 
+def render_allocation_tab(all_strategies_df: pd.DataFrame):
+    """
+    Render portfolio allocation tab with constraint-based selection.
+
+    Allows users to:
+    - Set portfolio size
+    - Configure allocation constraints
+    - Set stablecoin preferences
+    - Generate optimal portfolio
+    - View portfolio preview with adjusted APR
+
+    Args:
+        all_strategies_df: DataFrame with all available strategies
+    """
+    st.markdown("### 🎯 Portfolio Allocation")
+    st.markdown(
+        "Build a diversified portfolio using constraint-based selection. "
+        "The allocator ranks strategies by adjusted APR (blended APR with stablecoin penalties) "
+        "and greedily allocates capital while respecting exposure limits."
+    )
+
+    # Initialize constraints in session state
+    if 'allocation_constraints' not in st.session_state:
+        from config.settings import DEFAULT_ALLOCATION_CONSTRAINTS
+        st.session_state.allocation_constraints = DEFAULT_ALLOCATION_CONSTRAINTS.copy()
+
+    constraints = st.session_state.allocation_constraints
+
+    st.markdown("---")
+
+    # Portfolio Size Input
+    col_size1, col_size2 = st.columns([1, 2])
+    with col_size1:
+        portfolio_size = st.number_input(
+            "Portfolio Size (USD)",
+            min_value=100.0,
+            max_value=1000000.0,
+            value=st.session_state.get('portfolio_size', 10000.0),
+            step=500.0,
+            format="%.2f",
+            key="portfolio_size_input"
+        )
+        st.session_state.portfolio_size = portfolio_size
+    with col_size2:
+        st.info(f"💰 Allocating **${portfolio_size:,.0f}** across selected strategies")
+
+    st.markdown("---")
+    st.subheader("⚙️ Allocation Constraints")
+
+    # Constraint inputs in two columns
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.markdown("##### Exposure Limits")
+        constraints['token_exposure_limit'] = st.number_input(
+            "Max Token Exposure (%) - Default",
+            min_value=0,
+            max_value=100,
+            value=int(constraints.get('token_exposure_limit', 0.30) * 100),
+            step=5,
+            help="Default maximum allocation for tokens without specific overrides",
+            key="token_exposure_input"
+        ) / 100.0
+
+        # Token-specific exposure overrides
+        with st.expander("🎚️ Per-Token Exposure Overrides"):
+            st.caption(
+                "Set custom exposure limits for specific tokens. "
+                f"Tokens not listed use the default {constraints['token_exposure_limit']*100:.0f}% limit."
+            )
+
+            # Get current overrides
+            token_overrides = constraints.get('token_exposure_overrides', {})
+
+            # Get unique tokens from strategies
+            if not all_strategies_df.empty:
+                all_tokens = set()
+                for col in ['token1', 'token2', 'token3']:
+                    if col in all_strategies_df.columns:
+                        all_tokens.update(all_strategies_df[col].unique())
+                all_tokens = sorted(list(all_tokens))
+            else:
+                all_tokens = ['USDC', 'USDT', 'SUI', 'DEEP', 'CETUS', 'AUSD']
+
+            # Add override controls
+            col_token, col_limit, col_action = st.columns([2, 1, 1])
+
+            with col_token:
+                selected_token = st.selectbox(
+                    "Select Token",
+                    options=all_tokens,
+                    key="token_override_select"
+                )
+
+            with col_limit:
+                override_limit = st.number_input(
+                    "Max Exposure (%)",
+                    min_value=0,
+                    max_value=100,
+                    value=int(token_overrides.get(selected_token, 30)),
+                    step=5,
+                    key="token_override_limit"
+                )
+
+            with col_action:
+                st.write("")  # Spacer
+                st.write("")  # Spacer
+                if st.button("Add/Update", key="add_token_override"):
+                    token_overrides[selected_token] = override_limit / 100.0
+                    constraints['token_exposure_overrides'] = token_overrides
+                    st.success(f"✓ {selected_token}: {override_limit}%")
+                    st.rerun()
+
+            # Show current overrides
+            if token_overrides:
+                st.markdown("**Current Overrides:**")
+                override_rows = []
+                for token, limit in sorted(token_overrides.items()):
+                    col_name, col_val, col_remove = st.columns([2, 1, 1])
+                    with col_name:
+                        st.text(token)
+                    with col_val:
+                        st.text(f"{limit*100:.0f}%")
+                    with col_remove:
+                        if st.button("❌", key=f"remove_override_{token}"):
+                            del token_overrides[token]
+                            constraints['token_exposure_overrides'] = token_overrides
+                            st.rerun()
+            else:
+                st.info("No token overrides set. All tokens use default limit.")
+
+        constraints['protocol_exposure_limit'] = st.number_input(
+            "Max Protocol Exposure (%)",
+            min_value=0,
+            max_value=100,
+            value=int(constraints.get('protocol_exposure_limit', 0.40) * 100),
+            step=5,
+            help="Maximum portfolio allocation to any single protocol",
+            key="protocol_exposure_input"
+        ) / 100.0
+
+        constraints['max_strategies'] = st.number_input(
+            "Max Number of Strategies",
+            min_value=1,
+            max_value=20,
+            value=constraints.get('max_strategies', 5),
+            step=1,
+            help="Maximum strategies in portfolio",
+            key="max_strategies_input"
+        )
+
+    with col2:
+        st.markdown("##### APR Weighting")
+        st.caption("Enter any values - they'll be auto-normalized to 100%. Example: 1,2,2,5 → 10%,20%,20%,50%")
+
+        apr_weights = constraints.get('apr_weights', {})
+
+        # Get current weights as raw values (multiply by 100 for display)
+        w_net = st.number_input("Net APR Weight", min_value=0.0, value=float(apr_weights.get('net_apr', 0.30)*100), step=1.0, key="w_net")
+        w_5d = st.number_input("5-Day APR Weight", min_value=0.0, value=float(apr_weights.get('apr5', 0.30)*100), step=1.0, key="w_5d")
+        w_30d = st.number_input("30-Day APR Weight", min_value=0.0, value=float(apr_weights.get('apr30', 0.30)*100), step=1.0, key="w_30d")
+        w_90d = st.number_input("90-Day APR Weight", min_value=0.0, value=float(apr_weights.get('apr90', 0.10)*100), step=1.0, key="w_90d")
+
+        # Calculate sum and normalize
+        weight_sum = w_net + w_5d + w_30d + w_90d
+
+        if weight_sum > 0:
+            # Normalize to percentages
+            normalized_net = (w_net / weight_sum) * 100
+            normalized_5d = (w_5d / weight_sum) * 100
+            normalized_30d = (w_30d / weight_sum) * 100
+            normalized_90d = (w_90d / weight_sum) * 100
+
+            # Show normalized percentages
+            st.success(
+                f"✓ Normalized: Net={normalized_net:.1f}%, 5d={normalized_5d:.1f}%, "
+                f"30d={normalized_30d:.1f}%, 90d={normalized_90d:.1f}%"
+            )
+
+            # Store as decimals (0-1 range)
+            apr_weights['net_apr'] = normalized_net / 100.0
+            apr_weights['apr5'] = normalized_5d / 100.0
+            apr_weights['apr30'] = normalized_30d / 100.0
+            apr_weights['apr90'] = normalized_90d / 100.0
+        else:
+            st.warning("⚠️ All weights are 0. Using equal weights (25% each).")
+            # Default to equal weights
+            apr_weights['net_apr'] = 0.25
+            apr_weights['apr5'] = 0.25
+            apr_weights['apr30'] = 0.25
+            apr_weights['apr90'] = 0.25
+
+        constraints['apr_weights'] = apr_weights
+
+    st.markdown("---")
+
+    # Stablecoin Preferences
+    constraints = render_stablecoin_preferences(constraints)
+
+    # Save constraints to session state
+    st.session_state.allocation_constraints = constraints
+
+    st.markdown("---")
+
+    # Generate Portfolio Button
+    col_btn1, col_btn2, col_btn3 = st.columns([1, 1, 2])
+    with col_btn1:
+        generate_clicked = st.button("🎲 Generate Portfolio", type="primary", use_container_width=True)
+    with col_btn2:
+        if st.button("🔄 Reset Constraints", use_container_width=True):
+            from config.settings import DEFAULT_ALLOCATION_CONSTRAINTS
+            st.session_state.allocation_constraints = DEFAULT_ALLOCATION_CONSTRAINTS.copy()
+            st.rerun()
+
+    # Generate and display portfolio
+    if generate_clicked:
+        if all_strategies_df.empty:
+            st.warning("⚠️ No strategies available. Adjust filters in sidebar.")
+            return
+
+        st.markdown("---")
+        with st.spinner("🔄 Generating optimal portfolio..."):
+            try:
+                from analysis.portfolio_allocator import PortfolioAllocator
+
+                # Initialize allocator
+                allocator = PortfolioAllocator(all_strategies_df)
+
+                # Select portfolio
+                portfolio_df = allocator.select_portfolio(
+                    portfolio_size=portfolio_size,
+                    constraints=constraints
+                )
+
+                # Save to session state
+                st.session_state.generated_portfolio = portfolio_df
+                st.session_state.portfolio_generated = True
+
+            except Exception as e:
+                st.error(f"❌ Error generating portfolio: {str(e)}")
+                import traceback
+                st.code(traceback.format_exc())
+                return
+
+    # Display portfolio if generated
+    if st.session_state.get('portfolio_generated', False) and 'generated_portfolio' in st.session_state:
+        portfolio_df = st.session_state.generated_portfolio
+        render_portfolio_preview(portfolio_df, portfolio_size, constraints)
+
+
+def render_stablecoin_preferences(constraints: Dict) -> Dict:
+    """
+    Render stablecoin preference multiplier inputs for portfolio allocation.
+
+    Allows users to set preference multipliers for different stablecoins.
+    Strategies containing lower-multiplier stablecoins will rank lower in allocation.
+
+    Args:
+        constraints: Constraint dictionary containing 'stablecoin_preferences'
+
+    Returns:
+        Updated constraints dict with modified stablecoin preferences
+    """
+    st.markdown("##### 🪙 Stablecoin Preferences")
+    st.markdown(
+        "Set preference multipliers for stablecoins. "
+        "Strategies containing lower-multiplier stablecoins will rank lower. "
+        "**Example:** 0.9 multiplier = 10% APR penalty (10% becomes 9%)."
+    )
+
+    # Get current preferences from constraints or use defaults
+    from config.settings import DEFAULT_STABLECOIN_PREFERENCES
+    stablecoin_prefs = constraints.get(
+        'stablecoin_preferences',
+        DEFAULT_STABLECOIN_PREFERENCES.copy()
+    )
+
+    # Create editable inputs for each stablecoin in 3 columns
+    stablecoin_list = sorted(stablecoin_prefs.keys())
+    num_cols = 3
+    cols = st.columns(num_cols)
+
+    updated_prefs = {}
+    for i, stablecoin in enumerate(stablecoin_list):
+        col = cols[i % num_cols]
+        with col:
+            updated_prefs[stablecoin] = st.number_input(
+                f"{stablecoin}",
+                min_value=0.0,
+                max_value=1.0,
+                value=float(stablecoin_prefs[stablecoin]),
+                step=0.05,
+                format="%.2f",
+                help=f"Multiplier for strategies containing {stablecoin}. "
+                     f"Current: {stablecoin_prefs[stablecoin]:.2f}x",
+                key=f"stablecoin_pref_{stablecoin}"
+            )
+
+    # Add custom stablecoin expander
+    with st.expander("➕ Add Custom Stablecoin"):
+        custom_col1, custom_col2, custom_col3 = st.columns([2, 1, 1])
+        with custom_col1:
+            custom_token = st.text_input(
+                "Token Symbol",
+                key="custom_stablecoin_token",
+                help="Enter stablecoin symbol (e.g., SUSD, USDY)"
+            )
+        with custom_col2:
+            custom_multiplier = st.number_input(
+                "Multiplier",
+                min_value=0.0,
+                max_value=1.0,
+                value=0.90,
+                step=0.05,
+                format="%.2f",
+                key="custom_stablecoin_multiplier"
+            )
+        with custom_col3:
+            if st.button("Add", key="add_custom_stablecoin"):
+                if custom_token:
+                    updated_prefs[custom_token.upper()] = custom_multiplier
+                    st.success(f"Added {custom_token.upper()} with {custom_multiplier:.2f}x multiplier")
+                    st.rerun()
+
+    # Update constraints
+    constraints['stablecoin_preferences'] = updated_prefs
+
+    # Show summary
+    avg_multiplier = sum(updated_prefs.values()) / len(updated_prefs) if updated_prefs else 1.0
+    st.caption(
+        f"📊 {len(updated_prefs)} stablecoins configured | "
+        f"Average multiplier: {avg_multiplier:.2f}x"
+    )
+
+    return constraints
+
+
+def render_portfolio_preview(portfolio_df: pd.DataFrame, portfolio_size: float, constraints: Dict):
+    """
+    Display generated portfolio with strategy details and adjusted APR comparison.
+
+    Shows:
+    - Portfolio summary (total allocated, weighted APR, utilization)
+    - Strategy table with blended vs adjusted APR
+    - Exposure breakdowns
+    - Stablecoin penalty impact
+
+    Args:
+        portfolio_df: DataFrame with selected strategies and allocations
+        portfolio_size: Total portfolio size in USD
+        constraints: Constraint settings used for allocation
+    """
+    if portfolio_df.empty:
+        st.warning("⚠️ No strategies selected. Try adjusting constraints or confidence thresholds.")
+        return
+
+    # Calculate portfolio metrics
+    total_allocated = portfolio_df['allocation_usd'].sum()
+    utilization_pct = (total_allocated / portfolio_size) * 100 if portfolio_size > 0 else 0
+    weighted_blended_apr = (
+        (portfolio_df['blended_apr'] * portfolio_df['allocation_usd']).sum() / total_allocated
+        if total_allocated > 0 else 0
+    )
+    weighted_adjusted_apr = (
+        (portfolio_df['adjusted_apr'] * portfolio_df['allocation_usd']).sum() / total_allocated
+        if total_allocated > 0 else 0
+    )
+    num_strategies = len(portfolio_df)
+
+    # Portfolio Summary
+    st.success(f"✅ Portfolio Generated: {num_strategies} strategies selected")
+
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Total Allocated", f"${total_allocated:,.0f}")
+    with col2:
+        st.metric("Capital Utilization", f"{utilization_pct:.1f}%")
+    with col3:
+        st.metric("Weighted Blended APR", f"{weighted_blended_apr*100:.2f}%")
+    with col4:
+        penalty_impact = (weighted_adjusted_apr - weighted_blended_apr) * 100
+        st.metric(
+            "Weighted Adjusted APR",
+            f"{weighted_adjusted_apr*100:.2f}%",
+            delta=f"{penalty_impact:.2f}%" if penalty_impact != 0 else None
+        )
+
+    st.markdown("---")
+
+    # Strategy Details Table
+    st.markdown("### 📋 Selected Strategies")
+    st.caption(
+        "**Adjusted APR** = Blended APR × Stablecoin Penalty. "
+        "Strategies are ranked by Adjusted APR (highest to lowest)."
+    )
+
+    # Prepare display DataFrame
+    display_df = portfolio_df[[
+        'token1', 'token2', 'token3',
+        'protocol_a', 'protocol_b',
+        'net_apr', 'blended_apr', 'adjusted_apr',
+        'stablecoin_multiplier', 'stablecoins_in_strategy',
+        'allocation_usd'
+    ]].copy()
+
+    # Format columns
+    display_df['net_apr'] = display_df['net_apr'].apply(lambda x: f"{x*100:.2f}%")
+    display_df['blended_apr'] = display_df['blended_apr'].apply(lambda x: f"{x*100:.2f}%")
+    display_df['adjusted_apr'] = display_df['adjusted_apr'].apply(lambda x: f"{x*100:.2f}%")
+    display_df['stablecoin_multiplier'] = display_df['stablecoin_multiplier'].apply(
+        lambda x: f"{x:.2f}x" if x < 1.0 else "✓" if x == 1.0 else f"{x:.2f}x"
+    )
+    display_df['stablecoins_in_strategy'] = display_df['stablecoins_in_strategy'].apply(
+        lambda x: ', '.join(x) if isinstance(x, list) and x else '-'
+    )
+    display_df['allocation_usd'] = display_df['allocation_usd'].apply(lambda x: f"${x:,.0f}")
+
+    # Rename columns for display
+    display_df = display_df.rename(columns={
+        'token1': 'Token 1',
+        'token2': 'Token 2',
+        'token3': 'Token 3',
+        'protocol_a': 'Protocol A',
+        'protocol_b': 'Protocol B',
+        'net_apr': 'Current APR',
+        'blended_apr': 'Blended APR',
+        'adjusted_apr': 'Adjusted APR ⭐',
+        'stablecoin_multiplier': 'Penalty',
+        'stablecoins_in_strategy': 'Stablecoins',
+        'allocation_usd': 'Allocation'
+    })
+
+    # Display table with highlighting
+    st.dataframe(
+        display_df,
+        use_container_width=True,
+        hide_index=True
+    )
+
+    # Exposure Breakdown
+    st.markdown("---")
+    st.markdown("### 📊 Portfolio Exposure Analysis")
+
+    from analysis.portfolio_allocator import PortfolioAllocator
+    allocator = PortfolioAllocator(portfolio_df)
+    token_exposures, protocol_exposures = allocator.calculate_portfolio_exposures(portfolio_df)
+
+    col_exp1, col_exp2 = st.columns(2)
+
+    with col_exp1:
+        st.markdown("#### Token Exposure")
+        if token_exposures:
+            token_exp_data = []
+            for _, data in sorted(
+                token_exposures.items(),
+                key=lambda x: x[1]['usd'],
+                reverse=True
+            ):
+                token_exp_data.append({
+                    'Token': data['symbol'],
+                    'Exposure': f"${data['usd']:,.0f}",
+                    'Percentage': f"{data['pct']*100:.1f}%"
+                })
+            token_exp_df = pd.DataFrame(token_exp_data)
+            st.dataframe(token_exp_df, use_container_width=True, hide_index=True)
+
+            # Check if any exposure exceeds limit (showing per-token limits)
+            default_limit_pct = constraints.get('token_exposure_limit', 0.3) * 100
+            token_overrides = constraints.get('token_exposure_overrides', {})
+
+            violations = []
+            for contract, data in token_exposures.items():
+                symbol = data['symbol']
+                exposure_pct = data['pct'] * 100
+
+                # Get limit for this token (override or default)
+                if symbol in token_overrides:
+                    limit_pct = token_overrides[symbol] * 100
+                    limit_str = f"{limit_pct:.0f}% (custom)"
+                else:
+                    limit_pct = default_limit_pct
+                    limit_str = f"{limit_pct:.0f}% (default)"
+
+                if exposure_pct > limit_pct + 0.1:  # Small tolerance for rounding
+                    violations.append(f"{symbol}: {exposure_pct:.1f}% > {limit_str}")
+
+            if violations:
+                st.warning("⚠️ Token exposure violations:\n" + "\n".join([f"• {v}" for v in violations]))
+        else:
+            st.info("No token exposures")
+
+    with col_exp2:
+        st.markdown("#### Protocol Exposure")
+        if protocol_exposures:
+            protocol_exp_data = []
+            for protocol, data in sorted(
+                protocol_exposures.items(),
+                key=lambda x: x[1]['usd'],
+                reverse=True
+            ):
+                protocol_exp_data.append({
+                    'Protocol': protocol,
+                    'Exposure': f"${data['usd']:,.0f}",
+                    'Percentage': f"{data['pct']*100:.1f}%"
+                })
+            protocol_exp_df = pd.DataFrame(protocol_exp_data)
+            st.dataframe(protocol_exp_df, use_container_width=True, hide_index=True)
+
+            # Check if any exposure exceeds limit
+            protocol_limit_pct = constraints.get('protocol_exposure_limit', 0.4) * 100
+            max_protocol_exp = max([data['pct']*100 for data in protocol_exposures.values()])
+            if max_protocol_exp > protocol_limit_pct:
+                st.warning(f"⚠️ Max protocol exposure: {max_protocol_exp:.1f}% (limit: {protocol_limit_pct:.1f}%)")
+        else:
+            st.info("No protocol exposures")
+
+    # Stablecoin Impact Summary
+    st.markdown("---")
+    st.markdown("### 🪙 Stablecoin Penalty Impact")
+
+    penalized_strategies = portfolio_df[portfolio_df['stablecoin_multiplier'] < 1.0]
+    if not penalized_strategies.empty:
+        num_penalized = len(penalized_strategies)
+        avg_penalty = 1.0 - penalized_strategies['stablecoin_multiplier'].mean()
+        total_penalty_impact = (weighted_adjusted_apr - weighted_blended_apr) * 100
+
+        st.info(
+            f"📉 {num_penalized} of {num_strategies} strategies have stablecoin penalties. "
+            f"Average penalty: {avg_penalty*100:.1f}%. "
+            f"Portfolio APR impact: {total_penalty_impact:.2f}%."
+        )
+
+        # Show which stablecoins caused penalties
+        all_stablecoins = set()
+        for stablecoins_list in penalized_strategies['stablecoins_in_strategy']:
+            if isinstance(stablecoins_list, list):
+                all_stablecoins.update(stablecoins_list)
+
+        if all_stablecoins:
+            stablecoin_prefs = constraints.get('stablecoin_preferences', {})
+            penalty_details = []
+            for stable in sorted(all_stablecoins):
+                if stable in stablecoin_prefs and stablecoin_prefs[stable] < 1.0:
+                    penalty_pct = (1.0 - stablecoin_prefs[stable]) * 100
+                    penalty_details.append(f"{stable} ({penalty_pct:.0f}% penalty)")
+
+            if penalty_details:
+                st.caption(f"Stablecoins with penalties: {', '.join(penalty_details)}")
+    else:
+        st.success("✓ No stablecoin penalties applied. All strategies use preferred stablecoins.")
+
+    # Export options
+    st.markdown("---")
+    col_export1, _ = st.columns([1, 3])
+    with col_export1:
+        csv = portfolio_df.to_csv(index=False)
+        st.download_button(
+            label="📥 Download CSV",
+            data=csv,
+            file_name=f"portfolio_allocation_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+            mime="text/csv"
+        )
+
 
 # ============================================================================
 # MAIN DASHBOARD RENDERER
@@ -3604,8 +4167,9 @@ def render_dashboard(data_loader: DataLoader, mode: str):
     tabs_start = time.time()
     print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] Rendering tabs...")
 
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
         "📊 All Strategies",
+        "🎯 Allocation",
         "📈 Rate Tables",
         "⚠️ 0 Liquidity",
         "💼 Positions",
@@ -3638,38 +4202,44 @@ def render_dashboard(data_loader: DataLoader, mode: str):
 
     with tab2:
         tab2_start = time.time()
+        render_allocation_tab(all_results)
+        tab2_time = (time.time() - tab2_start) * 1000
+        print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] Tab2 (Allocation) rendered in {tab2_time:.1f}ms")
+
+    with tab3:
+        tab3_start = time.time()
         render_rate_tables_tab(
             lend_rates, borrow_rates, collateral_ratios, prices,
             available_borrow, borrow_fees, borrow_weights, liquidation_thresholds
         )
-        tab2_time = (time.time() - tab2_start) * 1000
-        print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] Tab2 (Rate Tables) rendered in {tab2_time:.1f}ms")
-
-    with tab3:
-        tab3_start = time.time()
-        render_zero_liquidity_tab(
-            zero_liquidity_results, deployment_usd, mode, timestamp_seconds
-        )
         tab3_time = (time.time() - tab3_start) * 1000
-        print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] Tab3 (Zero Liquidity) rendered in {tab3_time:.1f}ms")
+        print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] Tab3 (Rate Tables) rendered in {tab3_time:.1f}ms")
 
     with tab4:
         tab4_start = time.time()
-        render_positions_table_tab(timestamp_seconds)
+        render_zero_liquidity_tab(
+            zero_liquidity_results, deployment_usd, mode, timestamp_seconds
+        )
         tab4_time = (time.time() - tab4_start) * 1000
-        print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] Tab4 (Positions) rendered in {tab4_time:.1f}ms")
+        print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] Tab4 (Zero Liquidity) rendered in {tab4_time:.1f}ms")
 
     with tab5:
         tab5_start = time.time()
-        render_oracle_prices_tab(timestamp_seconds)
+        render_positions_table_tab(timestamp_seconds)
         tab5_time = (time.time() - tab5_start) * 1000
-        print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] Tab5 (Oracle Prices) rendered in {tab5_time:.1f}ms")
+        print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] Tab5 (Positions) rendered in {tab5_time:.1f}ms")
 
     with tab6:
         tab6_start = time.time()
-        render_pending_deployments_tab()
+        render_oracle_prices_tab(timestamp_seconds)
         tab6_time = (time.time() - tab6_start) * 1000
-        print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] Tab6 (Pending Deployments) rendered in {tab6_time:.1f}ms")
+        print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] Tab6 (Oracle Prices) rendered in {tab6_time:.1f}ms")
+
+    with tab7:
+        tab7_start = time.time()
+        render_pending_deployments_tab()
+        tab7_time = (time.time() - tab7_start) * 1000
+        print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] Tab7 (Pending Deployments) rendered in {tab7_time:.1f}ms")
 
     total_dashboard_time = (time.time() - dashboard_start) * 1000
     print(f"[{total_dashboard_time:7.1f}ms] [DASHBOARD] ✅ Dashboard render complete (total: {total_dashboard_time:.1f}ms)\n")

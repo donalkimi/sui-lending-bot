@@ -58,8 +58,40 @@ RATE_SPREAD_THRESHOLD = float(os.getenv('RATE_SPREAD_THRESHOLD', '0.00'))
 ALERT_RATE_SPREAD_THRESHOLD = float(os.getenv('ALERT_RATE_SPREAD_THRESHOLD', '2.0'))
 ALERT_NET_APR_THRESHOLD = float(os.getenv('ALERT_NET_APR_THRESHOLD', '5.0'))
 CHECK_INTERVAL_MINUTES = int(os.getenv('CHECK_INTERVAL_MINUTES', '60'))
-REBALANCE_THRESHOLD = float(os.getenv('REBALANCE_THRESHOLD', '0.02'))
+REBALANCE_THRESHOLD = float(os.getenv('REBALANCE_THRESHOLD', '0.05'))
 SAVE_SNAPSHOTS = get_bool_env('SAVE_SNAPSHOTS', default=True)
+
+# ==============================================================================
+# PORTFOLIO ALLOCATION SETTINGS
+# ==============================================================================
+
+# Stablecoin preference multipliers (1.0 = preferred, lower = penalty)
+# Applied to strategy APR when ranking for portfolio allocation
+DEFAULT_STABLECOIN_PREFERENCES = {
+    'USDC': 1.00,    # Preferred stablecoin (no penalty)
+    'USDT': 0.90,    # 10% APR penalty
+    'DAI': 0.90,     # 10% APR penalty
+    'AUSD': 0.90,    # 10% APR penalty
+    'FDUSD': 0.90,   # 10% APR penalty
+}
+
+# Default allocation constraints for portfolio construction
+DEFAULT_ALLOCATION_CONSTRAINTS = {
+    'token_exposure_limit': 0.30,       # Default: Max 30% exposure to any single token
+    'token_exposure_overrides': {},     # Per-token overrides {token_symbol: limit}
+                                         # Example: {'USDC': 1.00, 'USDT': 0.60}
+    'protocol_exposure_limit': 0.40,    # Max 40% exposure to any single protocol
+    'max_strategies': 5,                 # Max number of strategies in portfolio
+    'min_apy_confidence': 0.70,         # Min 70% confidence threshold
+    'apr_weights': {                     # Weights for blended APR calculation
+        'net_apr': 0.30,                 # Current net APR weight
+        'apr5': 0.30,                    # 5-day average APR weight
+        'apr30': 0.30,                   # 30-day average APR weight
+        'apr90': 0.10,                   # 90-day average APR weight
+    },
+    'stablecoin_preferences': DEFAULT_STABLECOIN_PREFERENCES  # Stablecoin multipliers
+}
+
 # ==============================================================================
 # LOCAL DEVELOPMENT ONLY
 # ==============================================================================

@@ -8,6 +8,15 @@ This document provides a complete architectural map of the Sui Lending Bot proje
 3. **Database Schema**: All tables, columns, relationships, and purposes
 4. **API/SDK Response Structures**: (Future - Point 4 to be added later)
 
+## Production Deployment
+
+**Status**: Deployed on Railway with Supabase PostgreSQL database
+- **Database**: Supabase PostgreSQL (cloud-hosted)
+- **Platform**: Railway
+- **Accessibility**: Remotely accessible via Railway deployment
+- **Refresh Schedule**: Every hour, at the top of the hour
+- **Historical Note**: Originally developed with local SQLite database for development
+
 ---
 
 ## Caching Architecture Overview
@@ -50,9 +59,9 @@ graph LR
 
 | Aspect | Value |
 |--------|-------|
-| **Performance** | Dashboard loads instantly from local database queries |
+| **Performance** | Dashboard loads instantly from database queries |
 | **Historical Analysis** | Full time-series enables backtesting and trend analysis |
-| **Offline Support** | Dashboard works fully offline with cached data |
+| **Offline Support** | Dashboard accessible 24/7 via Railway (cloud-hosted) |
 | **Time Travel** | Select any historical timestamp to see past market state |
 | **Reliability** | Dashboard unaffected by protocol API outages |
 | **Cost** | Minimize API calls to external protocols |
@@ -60,10 +69,8 @@ graph LR
 ### Data Flow Separation
 
 **Write Path (Protocols → Cache)**:
-- Triggered by: Scheduled cron jobs or manual refresh
-- Frequency: Time-based schedule
-  - Weekdays 8am-6pm: Every hour (on the hour)
-  - Outside business hours: Every 2-4 hours
+- Triggered by: Scheduled jobs on Railway deployment
+- Frequency: Every hour, at the top of the hour
 - Tools: [refresh_pipeline.py](../data/refresh_pipeline.py), [RateTracker](../data/rate_tracker.py)
 
 **Read Path (Cache → Dashboard)**:
@@ -194,11 +201,13 @@ main()
 
 ```python
 tracker = RateTracker(
-    use_cloud=settings.USE_CLOUD_DB,       # SQLite vs PostgreSQL
-    db_path="data/lending_rates.db",        # SQLite file
-    connection_url=settings.SUPABASE_URL    # PostgreSQL URL
+    use_cloud=settings.USE_CLOUD_DB,       # Always True in production (Supabase)
+    db_path="data/lending_rates.db",        # Legacy: SQLite file (local dev only)
+    connection_url=settings.SUPABASE_URL    # Production: Supabase PostgreSQL URL
 )
 ```
+
+**Production Note**: The system is deployed on Railway with `USE_CLOUD_DB=True`, using Supabase PostgreSQL exclusively. SQLite was only used during initial local development.
 
 **Step 3B: Save Rate Snapshot**
 
@@ -1130,8 +1139,8 @@ def save_snapshot(self, lend_rates, borrow_rates, collateral_ratios,
 ```
 
 **Database Operations**:
-- SQLite: `INSERT OR REPLACE INTO rates_snapshot`
-- PostgreSQL: `INSERT ... ON CONFLICT (timestamp, protocol, token_contract) DO UPDATE`
+- Production (Supabase PostgreSQL): `INSERT ... ON CONFLICT (timestamp, protocol, token_contract) DO UPDATE`
+- Legacy (SQLite - local dev only): `INSERT OR REPLACE INTO rates_snapshot`
 
 #### RateTracker.upsert_token_registry()
 
@@ -1240,11 +1249,11 @@ result = loader.load_data()
 4. Storage cost negligible compared to benefits
 
 **Growth Rate**:
-- Snapshot frequency: Time-based schedule (hourly during business hours, 2-4 hours off-peak)
-- Snapshots per day: ~15-20 (varies by day/schedule)
+- Snapshot frequency: Hourly on Railway (every hour, at the top of the hour)
+- Snapshots per day: 24 (consistent schedule)
 - Rows per snapshot: ~47
-- Daily growth: ~700-940 rows
-- Storage: <200 KB/day for rates_snapshot
+- Daily growth: ~1,128 rows
+- Storage: <250 KB/day for rates_snapshot
 
 **Retention Policy**: Currently unlimited (TBD: archive after 90 days)
 
@@ -1305,10 +1314,10 @@ All cache tables have strategic indexes for fast lookups:
 |--------|------------------------|----------------------------------|
 | **Data Source** | Direct API calls from dashboard | Database cache |
 | **Dashboard Load Time** | 10-20 seconds (API latency) | <1 second (DB query) |
-| **Refresh Trigger** | Every page load | Scheduled cron (time-based) |
-| **API Call Frequency** | Every user interaction | 15-20 calls/day total (all users) |
+| **Refresh Trigger** | Every page load | Scheduled on Railway (hourly) |
+| **API Call Frequency** | Every user interaction | 24 calls/day (hourly refresh) |
 | **Historical Data** | Not available | Full time-series since deployment |
-| **Offline Support** | None (requires API access) | Full dashboard works offline |
+| **Deployment** | None (local only) | Railway with Supabase PostgreSQL |
 | **Time Travel** | Not possible | Select any historical timestamp |
 | **Reliability** | Dashboard fails if APIs down | Dashboard unaffected by API outages |
 | **Cost** | High (API rate limits, RPC costs) | Low (one-time fetch, many reads) |

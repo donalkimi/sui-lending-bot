@@ -407,3 +407,82 @@ def analyze_strategy(
 - ⚠️ Rebalance details: Still calculating some metrics (to be moved to database)
 
 **Exception:** Formatting calculations like `(value / deployment * 100)` for percentage display are acceptable since they're view-layer transformations, not business logic.
+
+### 12. PnL Calculation: Token Amounts × Price, Not Deployment × Weight
+
+**Core Principle:** All PnL and earnings calculations MUST use actual token amounts multiplied by current prices. NEVER use `deployment_usd × weight` as this ignores price drift between rebalances.
+
+**Why:**
+- **Accuracy:** Token quantities are constant between rebalances, but prices change continuously
+- **Price drift:** Using weights assumes constant prices, which is incorrect for volatile assets
+- **Real value:** `token_amount × current_price` reflects actual position value
+
+**The Problem (Old Approach):**
+```python
+# ❌ WRONG: Using deployment × weight (ignores price changes)
+leg_value = deployment_usd * weight  # e.g., $10,000 × 0.35 = $3,500
+earnings = leg_value * rate * time
+```
+
+If the token price increases 10% between rebalances, this calculation is off by 10% because it uses the original deployment value, not the current token value.
+
+**The Solution (Current Approach):**
+```python
+# ✅ CORRECT: Using token amount × current price
+token_amount = position['entry_token_amount_2b']  # e.g., 1000 tokens
+current_price = get_price_usd_at_timestamp(token, protocol, timestamp)  # e.g., $3.65
+leg_value = token_amount * current_price  # 1000 × $3.65 = $3,650
+earnings = leg_value * rate * time
+```
+
+**Implementation locations:**
+- **position_service.py:** `calculate_leg_earnings_split()` - Line 1002-1133
+  - Fetches `price_usd` from rates_snapshot for each timestamp
+  - Calculates `usd_value = token_amount * price_usd` (Line 1121)
+  - Uses `_get_token_amount_for_leg()` helper to extract token amounts (Line 993-1000)
+
+- **position_statistics_calculator.py:** Lines 79-103, 164-177
+  - For live segments: Uses `exit_token_amount_*` from last rebalance or position's `entry_token_amount_*`
+  - For rebalanced segments: Uses `entry_token_amount_*` from rebalance records
+  - Passes correct token amounts to `calculate_leg_earnings_split()`
+
+**Token amount sources:**
+- **Position entry:** `entry_token_amount_1a/2a/2b/3b` in positions table
+- **After rebalance:** `exit_token_amount_1a/2a/2b/3b` in position_rebalances table
+- **Rebalanced segment:** `entry_token_amount_1a/2a/2b/3b` in position_rebalances table
+
+**Critical implementation date:** February 9, 2026
+
+**Architecture:**
+```
+┌──────────────────────┐
+│  Position Entry      │ Stores: token amounts at entry
+│  (positions table)   │ - entry_token_amount_1a/2a/2b/3b
+└──────────┬───────────┘
+           │
+           ▼
+┌──────────────────────┐
+│  Live Segment        │ Uses: token amounts from entry or last rebalance exit
+│  Calculation         │ Fetches: price_usd at each timestamp
+│                      │ Calculates: token_amount × price_usd × rate × time
+└──────────┬───────────┘
+           │
+           ▼
+┌──────────────────────┐
+│  Rebalance           │ Stores: entry + exit token amounts for segment
+│  (rebalances table)  │ - entry_token_amount_* (start of segment)
+│                      │ - exit_token_amount_* (end of segment)
+└──────────┬───────────┘
+           │
+           ▼
+┌──────────────────────┐
+│  Next Segment        │ Uses: exit_token_amount_* from previous rebalance
+│  Calculation         │ Continues with updated token quantities
+└──────────────────────┘
+```
+
+**Verification status (as of 2026-02-09):**
+- ✅ position_service.py: Uses token_amount × price_usd
+- ✅ position_statistics_calculator.py: Passes correct token amounts for all segments
+- ✅ Database schema: Stores token amounts in positions and position_rebalances tables
+- ✅ Tested: PnL calculations now match manual verification

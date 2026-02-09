@@ -4,6 +4,8 @@
 
 The oracle price system aggregates token prices from multiple external sources (CoinGecko, Pyth Network, DeFi Llama) to provide reliable, up-to-date pricing data for the lending bot's strategy calculations. The system maintains a single "latest price" for each token by selecting the most recent data across all oracle sources.
 
+**Production Deployment**: System deployed on Railway with Supabase PostgreSQL database. Oracle prices are fetched and stored hourly alongside the main refresh pipeline.
+
 ## Architecture
 
 ### Database Schema
@@ -744,12 +746,15 @@ ON CONFLICT (token_contract) DO UPDATE SET ...
 
 ### Regular Tasks
 
-1. **Daily:** Run `fetch_oracle_prices.py --all` (automated job recommended)
-   - Ensures oracle prices are fresh for fallback system
-   - Prevents stale price warnings in dashboard
+**Production (Railway Deployment):**
+1. **Hourly:** Oracle prices fetched automatically during refresh pipeline
+   - Integrated with main data collection cycle
+   - Runs at the top of each hour on Railway
 2. **Weekly:** Verify coverage with `populate_*_ids.py --verify`
 3. **Monthly:** Re-run ID population to catch new listings
 4. **On-Demand:** Dashboard automatically refreshes oracle prices if > 5 minutes old
+
+**Note**: In production, oracle price fetching is automated. Manual runs of `fetch_oracle_prices.py` are only needed for local development or troubleshooting.
 
 ### Fallback System Health Check
 

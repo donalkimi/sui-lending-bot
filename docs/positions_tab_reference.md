@@ -1,8 +1,13 @@
 # Positions Tab - Complete Reference & Handover Document
 
-**Document Version:** February 2026
+**Document Version:** February 9, 2026
 **Purpose:** Complete technical reference for the Positions Tab functionality in the Sui Lending Bot dashboard
 **Audience:** Engineers, handover recipients, README authors
+**Deployment:** Railway (cloud platform) + Supabase PostgreSQL (database)
+
+**Recent Updates:**
+- February 9, 2026: Updated PnL calculation formulas to use token_amount × price (not deployment × weight)
+- Production deployment on Railway with hourly refresh schedule
 
 ---
 
@@ -1325,20 +1330,33 @@ rate = rates_df[rates_df['token'] == 'USDT']['lend_total_apr']  # Which USDT?!
 
 **Location:** Used throughout `position_service.py` and `dashboard_renderer.py`
 
-### 8.6 Weight-Based Calculations
+### 8.6 Weight-Based Position Sizing
 
-**Rule:** All calculations use weights (l_a, b_a, l_b, b_b), not absolute amounts
+**Rule:** Weights (l_a, b_a, l_b, b_b) are used for **position sizing and display**, NOT for PnL calculations.
 
-**Formula:**
+**Position Sizing (at entry or rebalance):**
 ```python
+# Convert weight → token amount at current price
 token_amount = (weight * deployment_usd) / token_price_usd
-usd_amount = token_amount * token_price_usd
+
+# Store the token_amount in database
+position['entry_token_amount_1a'] = token_amount
 ```
 
-**Why:**
-- Weights are constant (don't change with prices)
-- Makes calculations scale-independent
-- Simplifies rebalancing logic
+**PnL Calculation (after entry):**
+```python
+# Use stored token amount × current price (NOT weight × deployment)
+usd_value = token_amount * current_price_usd
+earnings = usd_value * rate * time
+```
+
+**Why this separation:**
+- **Weights** define the strategy structure (constant ratios)
+- **Token amounts** are fixed between rebalances (constant quantities)
+- **Prices** change continuously
+- **PnL** must use actual token quantities to account for price drift
+
+**Updated:** February 9, 2026 - See Design Notes #12
 
 **Example:**
 ```python
@@ -1481,23 +1499,32 @@ liq_distance = (liq_price - current_price) / current_price * 100
 
 ### 10.1 PnL Calculation
 
-**Base Earnings:**
-```
-Base Lend Earnings = Σ (L_A × deployment × lend_base_apr_1A × time_fraction)
-                   + Σ (L_B × deployment × lend_base_apr_2B × time_fraction)
+**CRITICAL:** All PnL calculations use **actual token amounts × current prices**, NOT `deployment × weight`. This accounts for price drift between rebalances. See Design Notes #12 for full rationale.
 
-Base Borrow Costs = Σ (B_A × deployment × borrow_base_apr_2A × time_fraction)
-                  + Σ (B_B × deployment × borrow_base_apr_3B × time_fraction)
+**Base Earnings (Corrected Formula - February 9, 2026):**
+```
+For each leg at each timestamp:
+  token_amount = position['entry_token_amount_{leg}']  # Constant between rebalances
+  price_usd = rates_snapshot.price_usd[timestamp]      # Changes continuously
+  usd_value = token_amount × price_usd                 # Actual current value
+
+Base Lend Earnings = Σ (token_amount_1A × price_1A × lend_base_apr_1A × time_fraction)
+                   + Σ (token_amount_2B × price_2B × lend_base_apr_2B × time_fraction)
+
+Base Borrow Costs = Σ (token_amount_2A × price_2A × borrow_base_apr_2A × time_fraction)
+                  + Σ (token_amount_3B × price_3B × borrow_base_apr_3B × time_fraction)
 
 Net Base Earnings = Base Lend Earnings - Base Borrow Costs
 ```
 
+**Why this matters:** If token price increases 10% between rebalances, the old formula (`weight × deployment`) would be off by 10%. Using `token_amount × current_price` captures real position value.
+
 **Reward Earnings:**
 ```
-Reward Earnings = Σ (L_A × deployment × lend_reward_apr_1A × time_fraction)
-                + Σ (B_A × deployment × borrow_reward_apr_2A × time_fraction)
-                + Σ (L_B × deployment × lend_reward_apr_2B × time_fraction)
-                + Σ (B_B × deployment × borrow_reward_apr_3B × time_fraction)
+Reward Earnings = Σ (token_amount_1A × price_1A × lend_reward_apr_1A × time_fraction)
+                + Σ (token_amount_2A × price_2A × borrow_reward_apr_2A × time_fraction)
+                + Σ (token_amount_2B × price_2B × lend_reward_apr_2B × time_fraction)
+                + Σ (token_amount_3B × price_3B × borrow_reward_apr_3B × time_fraction)
 
 Note: Borrow rewards REDUCE costs (negative value)
 ```

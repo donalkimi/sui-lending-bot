@@ -4,26 +4,39 @@
 
 The Sui Lending Bot is a dashboard application for analyzing and executing recursive lending strategies across multiple Sui DeFi protocols (AlphaFi, Navi, Suilend, Pebble). The system tracks rates, calculates optimal position sizes, manages paper trading positions, and provides historical time-travel functionality.
 
-**Document Version**: February 3, 2026
-**System Status**: Production-ready with Supabase PostgreSQL integration
+**Document Version**: February 9, 2026
+**System Status**: Production deployment on Railway with Supabase PostgreSQL
+**Deployment**: Railway (cloud platform) + Supabase PostgreSQL (database)
+**Refresh Schedule**: Hourly, at the top of each hour
 
 ---
 
 ## Recent Major Changes (February 2026)
 
-### 1. Database Migration: SQLite → Supabase (PostgreSQL)
-- **Status**: Complete, production-ready
-- **Configuration**: Toggle via `USE_CLOUD_DB` in config/settings.py
-- **Supports**: Both local SQLite (development) and cloud PostgreSQL (production)
-- **Connection**: Managed via SQLAlchemy engine factory
+### 1. PnL Calculation Fix: Token Amounts × Price (February 9, 2026)
+- **Status**: Complete
+- **Issue**: System was calculating PnL using `deployment × weight`, ignoring price drift between rebalances
+- **Fix**: Now uses `token_amount × current_price` for accurate position valuation
+- **Impact**: Corrects PnL calculations for positions with price volatility between rebalances
+- **Files Modified**:
+  - `analysis/position_service.py`: Updated `calculate_leg_earnings_split()` to use token amounts
+  - `analysis/position_statistics_calculator.py`: Pass correct token amounts for live and rebalanced segments
+- **Design Principle**: See Design Notes #12 - Always use actual token quantities, not target weights
 
-### 2. SQLAlchemy Integration
+### 2. Database Migration: SQLite → Supabase (PostgreSQL)
+- **Status**: Complete, deployed on Railway
+- **Production Database**: Supabase PostgreSQL (cloud-hosted)
+- **Configuration**: `USE_CLOUD_DB=True` in production
+- **Legacy**: SQLite was used for initial local development only
+- **Connection**: Managed via SQLAlchemy engine factory with connection pooling
+
+### 3. SQLAlchemy Integration
 - **Status**: Complete
 - **Impact**: Resolved pandas UserWarnings, added connection pooling
 - **Pattern**: Dual-mode - SQLAlchemy engines for pandas queries, raw connections for cursor operations
 - **Performance**: 20-50% faster with connection pooling on Supabase
 
-### 3. Performance Optimizations
+### 4. Performance Optimizations
 - **Batch Loading**: Eliminated N+1 query problem (6,000+ → 60 queries)
 - **Lookup Dictionaries**: Replaced O(n) DataFrame filtering with O(1) dictionary lookups
 - **Expected Speedup**: 20-60x faster dashboard rendering
@@ -41,8 +54,8 @@ The Sui Lending Bot is a dashboard application for analyzing and executing recur
                          │
                          ▼
              ┌───────────────────────┐
-             │  refresh_pipeline()   │  Every 15 minutes
-             │  (Orchestration)      │
+             │  refresh_pipeline()   │  Hourly on Railway
+             │  (Orchestration)      │  (top of each hour)
              └──────────┬────────────┘
                         │
         ┌───────────────┼───────────────┐
@@ -58,9 +71,10 @@ The Sui Lending Bot is a dashboard application for analyzing and executing recur
 ┌────────────────────────────────────────────────────────────┐
 │                 DATABASE LAYER                             │
 │  ┌──────────────────────────────────────────────────┐     │
-│  │  Supabase PostgreSQL / SQLite (config toggle)   │     │
+│  │  Supabase PostgreSQL (production on Railway)    │     │
 │  │  - SQLAlchemy Engine Factory (connection pool)   │     │
 │  │  - Raw connections for cursor operations         │     │
+│  │  Legacy: SQLite (local development only)         │     │
 │  └──────────────────────────────────────────────────┘     │
 │                                                            │
 │  Tables:                                                   │
@@ -203,9 +217,9 @@ display_rate = f"{entry_lend_rate_1A * 100:.2f}%"  # "3.16%"
 **File**: `config/settings.py`
 
 ```python
-USE_CLOUD_DB = True                          # Toggle: True=Supabase, False=SQLite
-SQLITE_PATH = "data/lending_rates.db"        # Local development
-SUPABASE_URL = os.getenv('SUPABASE_URL')     # PostgreSQL from .env
+USE_CLOUD_DB = True                          # Production: Always True (Supabase)
+SQLITE_PATH = "data/lending_rates.db"        # Legacy: Local development only
+SUPABASE_URL = os.getenv('SUPABASE_URL')     # Production: Supabase PostgreSQL from .env
 
 # Auto-rebalancing
 REBALANCE_THRESHOLD = 0.02  # 2% - triggers auto-rebalance warnings
@@ -328,7 +342,7 @@ def refresh_pipeline(
 - Rebalance checks and metrics
 - Token registry updates
 
-**Scheduling**: Runs every 15 minutes via cron/scheduler
+**Scheduling**: Runs hourly via Railway scheduler (top of each hour)
 
 ### Rate Tracking (Data Persistence)
 
@@ -449,7 +463,7 @@ service = PositionService(conn, engine=None)
 ### Auto-Rebalancing System
 
 **Trigger Mechanism**:
-- Runs automatically in `refresh_pipeline()` every 15 minutes
+- Runs automatically in `refresh_pipeline()` every hour on Railway
 - Compares entry liquidation distance vs. current liquidation distance
 - Threshold: `REBALANCE_THRESHOLD = 0.02` (2%)
 
@@ -742,7 +756,7 @@ Automatically detects and rebalances positions when liquidation risk changes sig
 
 **Trigger**: When liquidation distance changes by more than configured threshold (default 2%)
 
-**Location**: Integrated into `data/refresh_pipeline.py` - runs every 15 minutes
+**Location**: Integrated into `data/refresh_pipeline.py` - runs hourly on Railway
 
 **Algorithm**:
 1. After fetching fresh market data, check all active positions
@@ -1266,7 +1280,7 @@ class UnifiedDataLoader:
 ## Scripts & Maintenance
 
 ### Data Collection
-- `data/refresh_pipeline.py` - Fetch fresh rates/prices from protocols (every 15 min)
+- `data/refresh_pipeline.py` - Fetch fresh rates/prices from protocols (hourly on Railway)
 - `data/protocol_merger.py` - Merge data from multiple protocols
 
 ### Position Management
@@ -1328,11 +1342,11 @@ class UnifiedDataLoader:
 
 ### 1. Configuration
 
-**Must Set**:
+**Production Settings** (Railway):
 ```python
 # config/settings.py
-USE_CLOUD_DB = True
-SUPABASE_URL = "postgresql://user:pass@host:port/db"  # In .env
+USE_CLOUD_DB = True  # Always True in production
+SUPABASE_URL = "postgresql://user:pass@host:port/db"  # From Railway environment variables
 ```
 
 **Environment Variables** (`.env` file):
@@ -1351,18 +1365,19 @@ SLACK_WEBHOOK_URL=...
 ### 3. First Snapshot
 
 - Manual: Run `refresh_pipeline()` to create first snapshot
-- Or: Let scheduler run (every 15 min)
+- Or: Let scheduler run (hourly on Railway)
 
 ### 4. Testing
 
 **Test Scenarios**:
-1. Load dashboard with local SQLite (`USE_CLOUD_DB = False`)
-2. Switch to Supabase (`USE_CLOUD_DB = True`)
+1. Verify Railway deployment is accessible
+2. Confirm Supabase connection is active (`USE_CLOUD_DB = True`)
 3. Verify all tabs load
 4. Test position creation
 5. Test rebalancing
 6. Test time-travel
 7. Verify performance improvements (< 2 seconds initial render)
+8. Check hourly refresh is running on schedule
 
 ### 5. Monitoring
 

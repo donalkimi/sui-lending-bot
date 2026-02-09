@@ -4,6 +4,8 @@
 
 The Pending Deployments tab is a workflow tool that bridges paper trading (Phase 1) and real capital deployment (Phase 2). It provides step-by-step execution instructions for positions that have been created in the system but not yet executed on-chain.
 
+**System Deployment**: Production system deployed on Railway with Supabase PostgreSQL database. Dashboard accessible 24/7 for position management.
+
 ## Purpose
 
 When a user identifies a profitable lending strategy and clicks "Deploy" in the dashboard, the system:
