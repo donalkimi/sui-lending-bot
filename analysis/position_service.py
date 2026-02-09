@@ -989,6 +989,15 @@ class PositionService:
             '3b': 'b_b'
         }
         return position[leg_weight_map[leg]]
+    
+    def _get_token_amount_for_leg(self, position: pd.Series, leg: str) -> float:
+        leg_token_amount_map = {
+            '1a': 'entry_token_amount_1a',
+            '2a': 'entry_token_amount_2a',
+            '2b': 'entry_token_amount_2b',
+            '3b': 'entry_token_amount_3b'
+        }
+        return float(position[leg_token_amount_map[leg]])
 
     def calculate_leg_earnings_split(
         self,
@@ -1025,10 +1034,11 @@ class PositionService:
         # Extract leg parameters
         #print(f"position element in position_service.py / calculate_leg_earnings_split:")
         #print(position)
-        deployment = position['deployment_usd']
+        #deployment = position['deployment_usd']
         token_contract = self._get_token_contract_for_leg(position, leg)
         protocol = self._get_protocol_for_leg(position, leg)
-        weight = self._get_weight_for_leg(position, leg)
+        #weight = self._get_weight_for_leg(position, leg)
+        token_amount = self._get_token_amount_for_leg(position, leg)
 
         # Handle zero-duration period
         if end_timestamp == start_timestamp:
@@ -1045,7 +1055,7 @@ class PositionService:
         # DESIGN PRINCIPLE: Use token_contract for lookups, not token symbol
         if action == 'Lend':
             bulk_query = f"""
-            SELECT timestamp, lend_base_apr, lend_reward_apr
+            SELECT timestamp, lend_base_apr, lend_reward_apr, price_usd
             FROM rates_snapshot
             WHERE timestamp >= {ph} AND timestamp <= {ph}
               AND protocol = {ph} AND token_contract = {ph}
@@ -1053,7 +1063,7 @@ class PositionService:
             """
         else:  # Borrow
             bulk_query = f"""
-            SELECT timestamp, borrow_base_apr, borrow_reward_apr
+            SELECT timestamp, borrow_base_apr, borrow_reward_apr, price_usd
             FROM rates_snapshot
             WHERE timestamp >= {ph} AND timestamp <= {ph}
               AND protocol = {ph} AND token_contract = {ph}
@@ -1072,6 +1082,7 @@ class PositionService:
         rates_lookup = {}
         for _, row in all_rates.iterrows():
             ts = to_seconds(row['timestamp'])
+            price_usd = row['price_usd']
             if action == 'Lend':
                 base_apr = row['lend_base_apr']
                 reward_apr = row['lend_reward_apr']
@@ -1082,7 +1093,8 @@ class PositionService:
             # Handle None/NULL values defensively
             rates_lookup[ts] = {
                 'base_apr': float(base_apr) if base_apr is not None and pd.notna(base_apr) else 0.0,
-                'reward_apr': float(reward_apr) if reward_apr is not None and pd.notna(reward_apr) else 0.0
+                'reward_apr': float(reward_apr) if reward_apr is not None and pd.notna(reward_apr) else 0.0,
+                'price_usd': float(price_usd) if price_usd is not None and pd.notna(price_usd) else 0.0
             }
 
         # Get all timestamps for period calculation
@@ -1105,17 +1117,18 @@ class PositionService:
             rate_data = rates_lookup.get(ts_current, {'base_apr': 0.0, 'reward_apr': 0.0})
             base_apr = rate_data['base_apr']
             reward_apr = rate_data['reward_apr']
-
+            price_usd = rate_data['price_usd']
+            usd_value = token_amount * price_usd
             # Accumulate earnings
             if action == 'Lend':
                 # Lend earnings are positive
-                base_total += deployment * weight * base_apr * period_years
-                reward_total += deployment * weight * reward_apr * period_years
+                base_total += usd_value* base_apr * period_years
+                reward_total += usd_value * reward_apr * period_years
             else:  # Borrow
                 # Borrow costs are accumulated as positive
-                base_total += deployment * weight * base_apr * period_years
+                base_total += usd_value * base_apr * period_years
                 # Borrow rewards are earnings, accumulated as positive
-                reward_total += deployment * weight * reward_apr * period_years
+                reward_total += usd_value * reward_apr * period_years
 
         return base_total, reward_total
 

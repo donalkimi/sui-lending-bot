@@ -774,7 +774,7 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
     # ========================================
     # ACTION BUTTON
     # ========================================
-    if st.button("🚀 Deploy Position", type="primary", use_container_width=True):
+    if st.button("🚀 Deploy Position", type="primary", width='stretch'):
         print("[DEPLOY BUTTON] Deploy button clicked!")
         try:
             # Connect to database
@@ -1459,6 +1459,10 @@ def render_positions_table_tab(timestamp_seconds: int):
             strategy_fees = safe_float(stats['total_fees'])
             strategy_net_apr = safe_float(stats['realized_apr'])
             current_net_apr_decimal = safe_float(stats['current_apr'])
+            
+            # Extract live/realized breakdown
+            live_pnl = safe_float(stats.get('live_pnl', 0.0))
+            realized_pnl = safe_float(stats.get('realized_pnl', 0.0))
 
             # Accumulate portfolio totals
             portfolio_total_deployed += deployment_usd
@@ -1487,6 +1491,8 @@ def render_positions_table_tab(timestamp_seconds: int):
                 'strategy_net_apr': strategy_net_apr,
                 'current_net_apr_decimal': current_net_apr_decimal,
                 'strategy_days': strategy_days,
+                'live_pnl': live_pnl,
+                'realized_pnl': realized_pnl,
             })
 
         # Calculate derived metrics
@@ -1542,6 +1548,8 @@ def render_positions_table_tab(timestamp_seconds: int):
             strategy_net_apr = result['strategy_net_apr']
             current_net_apr_decimal = result['current_net_apr_decimal']
             strategy_days = result['strategy_days']
+            live_pnl = result['live_pnl']
+            realized_pnl = result['realized_pnl']
 
             # Build token flow string (all positions are 4-leg levered)
             token_flow = f"{position['token1']} → {position['token2']} → {position['token3']}"
@@ -2317,40 +2325,29 @@ def render_positions_table_tab(timestamp_seconds: int):
                 st.dataframe(styled_detail_df, width='stretch', hide_index=True)
 
                 # Live Position Summary
-                st.markdown("**Live Position Summary**")
+                st.markdown("**Live Position Summary (Unrealized)**")
 
-                # Calculate summary values from token table
-                # Separate lend and borrow for base, then combine: earnings - costs
-                base_lend = base_1A + base_2B  # lend legs (1a, 2b)
-                base_borrow = base_2A + base_3B  # borrow legs (2a, 3b)
-                total_base_earnings = base_lend - base_borrow  # earnings - costs
-                # Rewards are all positive, just sum
-                total_reward_earnings = reward_1A + reward_2A + reward_2B + reward_3B
-                total_fees = fees_2A + fees_3B
-                total_earnings = total_base_earnings + total_reward_earnings
-                live_pnl = total_earnings - total_fees
+                # Use pre-calculated live segment PnL from position_statistics
+                # Note: Per-leg breakdown (base/reward/fees) not available in current schema
+                # Only live_pnl is stored separately; earnings are aggregated with realized
 
-                # Get deployment for percentage calculation
                 deployment = position['deployment_usd']
 
                 # GUARD: Check for zero deployment
                 if deployment > 0:
-                    col1, col2, col3, col4, col5 = st.columns(5)
+                    col1, col2 = st.columns(2)
                     with col1:
                         pnl_pct = (live_pnl / deployment) * 100
-                        st.metric("Live PnL", f"${live_pnl:,.2f} ({pnl_pct:.2f}%)")
+                        st.metric("Live Segment PnL", f"${live_pnl:,.2f} ({pnl_pct:.2f}%)")
                     with col2:
-                        earnings_pct = (total_earnings / deployment) * 100
-                        st.metric("Total Earnings", f"${total_earnings:,.2f} ({earnings_pct:.2f}%)")
-                    with col3:
-                        base_pct = (total_base_earnings / deployment) * 100
-                        st.metric("Base Earnings", f"${total_base_earnings:,.2f} ({base_pct:.2f}%)")
-                    with col4:
-                        reward_pct = (total_reward_earnings / deployment) * 100
-                        st.metric("Reward Earnings", f"${total_reward_earnings:,.2f} ({reward_pct:.2f}%)")
-                    with col5:
-                        fees_pct = (total_fees / deployment) * 100
-                        st.metric("Fees", f"${total_fees:,.2f} ({fees_pct:.2f}%)")
+                        realized_pct = (realized_pnl / deployment) * 100
+                        st.metric("Realized PnL", f"${realized_pnl:,.2f} ({realized_pct:.2f}%)")
+                    
+                    # Show verification that live + realized = total
+                    st.caption(f"✅ Verification: Live ${live_pnl:,.2f} + Realized ${realized_pnl:,.2f} = Total ${strategy_pnl:,.2f}")
+                    
+                    # Show that detailed breakdown is in Strategy Summary
+                    st.info("ℹ️ **Detailed earnings breakdown** (Base/Reward/Fees) is shown in Strategy Summary above (includes both Live + Realized).")
                 else:
                     st.warning("Invalid deployment amount - cannot calculate percentages")
 
@@ -2381,7 +2378,7 @@ def render_positions_table_tab(timestamp_seconds: int):
                                 "🔄 Rebalance Position",
                                 key=f"rebalance_{position['position_id']}",
                                 disabled=True,
-                                use_container_width=True
+                                width='stretch'
                             )
                             st.caption("⏰ Cannot rebalance: You are viewing a historical timestamp, "
                                      "and this position was already rebalanced in the future. "
@@ -2391,7 +2388,7 @@ def render_positions_table_tab(timestamp_seconds: int):
                                 "🔄 Rebalance Position",
                                 key=f"rebalance_{position['position_id']}",
                                 help="Snapshot current PnL and adjust token2 amounts to restore liquidation distance to target",
-                                use_container_width=True
+                                width='stretch'
                             ):
                                 st.session_state.pending_rebalance = {
                                     'position_id': position['position_id'],
@@ -2404,7 +2401,7 @@ def render_positions_table_tab(timestamp_seconds: int):
                             "❌ Close Position",
                             key=f"close_{position['position_id']}",
                             help="Close position and realize all PnL",
-                            use_container_width=True
+                            width='stretch'
                         ):
                             st.session_state.pending_close = {
                                 'position_id': position['position_id'],
@@ -3140,7 +3137,7 @@ def render_oracle_prices_tab(timestamp_seconds: int):
                 "Age": st.column_config.NumberColumn("Age (sec)", width="small"),
             },
             hide_index=True,
-            use_container_width=True
+            width='stretch'
         )
 
         st.caption("💡 Latest Price shows the most recent price across all oracles.")

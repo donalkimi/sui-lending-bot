@@ -80,23 +80,41 @@ def calculate_position_statistics(
     if has_rebalances:
         segment_start_ts = to_seconds(rebalances.iloc[-1]['closing_timestamp'])
         last_rebalance = rebalances.iloc[-1]
+
+        # Use exit token amounts from last rebalance as starting point for live segment
+        live_position = pd.Series({
+            'deployment_usd': position['deployment_usd'],
+            'l_a': position['l_a'], 'b_a': position['b_a'],
+            'l_b': position['l_b'], 'b_b': position['b_b'],
+            'token1': position['token1'], 'token2': position['token2'], 'token3': position['token3'],
+            'token1_contract': position['token1_contract'],
+            'token2_contract': position['token2_contract'],
+            'token3_contract': position['token3_contract'],
+            'protocol_a': position['protocol_a'], 'protocol_b': position['protocol_b'],
+            'entry_token_amount_1a': last_rebalance['exit_token_amount_1a'],
+            'entry_token_amount_2a': last_rebalance['exit_token_amount_2a'],
+            'entry_token_amount_2b': last_rebalance['exit_token_amount_2b'],
+            'entry_token_amount_3b': last_rebalance['exit_token_amount_3b']
+        })
     else:
         segment_start_ts = entry_ts
         last_rebalance = None
+        # Use position's entry token amounts
+        live_position = position
 
     # Calculate base and reward earnings for all 4 legs (live segment)
     try:
         base_1A, reward_1A = service.calculate_leg_earnings_split(
-            position, '1a', 'Lend', segment_start_ts, timestamp
+            live_position, '1a', 'Lend', segment_start_ts, timestamp
         )
         base_2A, reward_2A = service.calculate_leg_earnings_split(
-            position, '2a', 'Borrow', segment_start_ts, timestamp
+            live_position, '2a', 'Borrow', segment_start_ts, timestamp
         )
         base_2B, reward_2B = service.calculate_leg_earnings_split(
-            position, '2b', 'Lend', segment_start_ts, timestamp
+            live_position, '2b', 'Lend', segment_start_ts, timestamp
         )
         base_3B, reward_3B = service.calculate_leg_earnings_split(
-            position, '3b', 'Borrow', segment_start_ts, timestamp
+            live_position, '3b', 'Borrow', segment_start_ts, timestamp
         )
     except Exception as e:
         # Fallback to zeros if calculation fails
@@ -142,6 +160,7 @@ def calculate_position_statistics(
             # rebalanced_pnl += rebal.get('realised_pnl', 0.0) or 0.0  # ← REMOVED
 
             # Create position-like object for this rebalance segment
+            # Use entry token amounts from the rebalance record (amounts at start of this segment)
             rebal_as_pos = pd.Series({
                 'deployment_usd': rebal['deployment_usd'],
                 'l_a': rebal['l_a'], 'b_a': rebal['b_a'],
@@ -150,7 +169,11 @@ def calculate_position_statistics(
                 'token1_contract': position['token1_contract'],
                 'token2_contract': position['token2_contract'],
                 'token3_contract': position['token3_contract'],
-                'protocol_a': position['protocol_a'], 'protocol_b': position['protocol_b']
+                'protocol_a': position['protocol_a'], 'protocol_b': position['protocol_b'],
+                'entry_token_amount_1a': rebal['entry_token_amount_1a'],
+                'entry_token_amount_2a': rebal['entry_token_amount_2a'],
+                'entry_token_amount_2b': rebal['entry_token_amount_2b'],
+                'entry_token_amount_3b': rebal['entry_token_amount_3b']
             })
 
             # Calculate base/reward earnings for all 4 legs (REQUIRED for dashboard display)
