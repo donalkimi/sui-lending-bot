@@ -427,3 +427,72 @@ ON position_statistics
 FOR SELECT
 TO authenticated
 USING (true);
+
+-- =============================================================================
+-- Table 8: analysis_cache
+-- Cache for strategy calculation results (for faster dashboard loading)
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS analysis_cache (
+    timestamp_seconds INTEGER NOT NULL,
+    liquidation_distance DECIMAL(5, 4) NOT NULL,
+    results_json TEXT NOT NULL,
+    strategy_count INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (timestamp_seconds, liquidation_distance)
+);
+
+CREATE INDEX IF NOT EXISTS idx_analysis_cache_timestamp
+ON analysis_cache(timestamp_seconds, liquidation_distance);
+
+CREATE INDEX IF NOT EXISTS idx_analysis_cache_created
+ON analysis_cache(created_at);
+
+-- RLS for analysis_cache
+ALTER TABLE analysis_cache ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Service role has full access to analysis_cache"
+ON analysis_cache
+FOR ALL
+TO service_role
+USING (true)
+WITH CHECK (true);
+
+CREATE POLICY "Authenticated users can read analysis_cache"
+ON analysis_cache
+FOR SELECT
+TO authenticated
+USING (true);
+
+-- =============================================================================
+-- Table 9: chart_cache
+-- Cache for rendered chart visualizations (for faster dashboard loading)
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS chart_cache (
+    strategy_hash TEXT NOT NULL,
+    timestamp_seconds INTEGER NOT NULL,
+    chart_html TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (strategy_hash, timestamp_seconds)
+);
+
+CREATE INDEX IF NOT EXISTS idx_chart_cache_lookup
+ON chart_cache(strategy_hash, timestamp_seconds);
+
+CREATE INDEX IF NOT EXISTS idx_chart_cache_created
+ON chart_cache(created_at);
+
+-- RLS for chart_cache
+ALTER TABLE chart_cache ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Service role has full access to chart_cache"
+ON chart_cache
+FOR ALL
+TO service_role
+USING (true)
+WITH CHECK (true);
+
+CREATE POLICY "Authenticated users can read chart_cache"
+ON chart_cache
+FOR SELECT
+TO authenticated
+USING (true);

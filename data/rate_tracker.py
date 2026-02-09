@@ -19,7 +19,7 @@ except ImportError:
 class RateTracker:
     """Track lending rates and prices over time"""
     
-    def __init__(self, use_cloud=False, db_path='data/lending_rates.db', connection_url=None):
+    def __init__(self, use_cloud=True, db_path='data/lending_rates.db', connection_url=None):
         """
         Initialize rate tracker
         
@@ -802,22 +802,42 @@ class RateTracker:
         strategy_count = len(all_results)
         created_at = int(time.time())
 
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute("""
-                INSERT OR REPLACE INTO analysis_cache
-                (timestamp_seconds, liquidation_distance, results_json, strategy_count, created_at)
-                VALUES (?, ?, ?, ?, ?)
-            """, (
-                timestamp_seconds,
-                liquidation_distance,
-                results_json,
-                strategy_count,
-                created_at
-            ))
-            print(f"[CACHE SAVE] Database: {strategy_count} strategies saved")
+        try:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
 
-            # Clean up old cache entries (keep only last 48 hours)
-            self._cleanup_old_cache(conn, created_at)
+                # Adjust placeholder based on database type
+                ph = '%s' if self.db_type == 'postgresql' else '?'
+
+                # Use PostgreSQL-compatible UPSERT syntax
+                cursor.execute(f"""
+                    INSERT INTO analysis_cache
+                    (timestamp_seconds, liquidation_distance, results_json, strategy_count, created_at)
+                    VALUES ({ph}, {ph}, {ph}, {ph}, {ph})
+                    ON CONFLICT (timestamp_seconds, liquidation_distance)
+                    DO UPDATE SET
+                        results_json = EXCLUDED.results_json,
+                        strategy_count = EXCLUDED.strategy_count,
+                        created_at = EXCLUDED.created_at
+                """, (
+                    timestamp_seconds,
+                    liquidation_distance,
+                    results_json,
+                    strategy_count,
+                    created_at
+                ))
+
+                conn.commit()
+                print(f"[CACHE SAVE] Database ({self.db_type}): {strategy_count} strategies saved")
+
+                # Clean up old cache entries (keep only last 48 hours)
+                self._cleanup_old_cache(conn, created_at)
+            finally:
+                conn.close()
+        except Exception as e:
+            print(f"[CACHE SAVE] Warning: Failed to save cache: {e}")
+            # Don't crash - caching is optional optimization
 
     def _cleanup_old_cache(self, conn, current_time: int, retention_hours: int = 48) -> None:
         """
@@ -830,19 +850,26 @@ class RateTracker:
         """
         cutoff_time = current_time - (retention_hours * 3600)
 
+        # Adjust placeholder based on database type
+        ph = '%s' if self.db_type == 'postgresql' else '?'
+
+        cursor = conn.cursor()
+
         # Delete old analysis_cache entries
-        cursor = conn.execute(
-            "DELETE FROM analysis_cache WHERE created_at < ?",
+        cursor.execute(
+            f"DELETE FROM analysis_cache WHERE created_at < {ph}",
             (cutoff_time,)
         )
         deleted_analysis = cursor.rowcount
 
         # Delete old chart_cache entries
-        cursor = conn.execute(
-            "DELETE FROM chart_cache WHERE created_at < ?",
+        cursor.execute(
+            f"DELETE FROM chart_cache WHERE created_at < {ph}",
             (cutoff_time,)
         )
         deleted_charts = cursor.rowcount
+
+        conn.commit()
 
         if deleted_analysis > 0 or deleted_charts > 0:
             print(f"[CACHE CLEANUP] Removed {deleted_analysis} analysis entries and {deleted_charts} chart entries older than {retention_hours}h")
@@ -864,33 +891,46 @@ class RateTracker:
 
         fetch_start = time.time()
 
-        with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.execute("""
-                SELECT results_json, strategy_count FROM analysis_cache
-                WHERE timestamp_seconds = ? AND liquidation_distance = ?
-            """, (timestamp_seconds, liquidation_distance))
+        try:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
 
-            row = cursor.fetchone()
-            if not row:
+                # Adjust placeholder based on database type
+                ph = '%s' if self.db_type == 'postgresql' else '?'
+
+                cursor.execute(f"""
+                    SELECT results_json, strategy_count FROM analysis_cache
+                    WHERE timestamp_seconds = {ph} AND liquidation_distance = {ph}
+                """, (timestamp_seconds, liquidation_distance))
+
+                row = cursor.fetchone()
+                if not row:
+                    if start_time:
+                        elapsed = (time.time() - start_time) * 1000
+                        print(f"[{elapsed:7.1f}ms] [CACHE MISS] No cached analysis for timestamp={timestamp_seconds}, liq_dist={liquidation_distance*100:.0f}%")
+                    return None
+
+                results_json, strategy_count = row
+                all_results = json.loads(results_json)
+
+                # Convert list of dicts to DataFrame (matches RateAnalyzer.find_best_protocol_pair return)
+                df = pd.DataFrame(all_results)
+
+                fetch_time = (time.time() - fetch_start) * 1000
                 if start_time:
                     elapsed = (time.time() - start_time) * 1000
-                    print(f"[{elapsed:7.1f}ms] [CACHE MISS] No cached analysis for timestamp={timestamp_seconds}, liq_dist={liquidation_distance*100:.0f}%")
-                return None
+                    print(f"[{elapsed:7.1f}ms] [CACHE HIT] Loaded {strategy_count} strategies from DB cache ({self.db_type}) in {fetch_time:.1f}ms")
+                else:
+                    print(f"[CACHE HIT] Loaded {strategy_count} strategies from cache ({self.db_type}) ({fetch_time:.1f}ms)")
 
-            results_json, strategy_count = row
-            all_results = json.loads(results_json)
-
-            # Convert list of dicts to DataFrame (matches RateAnalyzer.find_best_protocol_pair return)
-            df = pd.DataFrame(all_results)
-
-            fetch_time = (time.time() - fetch_start) * 1000
-            if start_time:
-                elapsed = (time.time() - start_time) * 1000
-                print(f"[{elapsed:7.1f}ms] [CACHE HIT] Loaded {strategy_count} strategies from DB cache in {fetch_time:.1f}ms")
-            else:
-                print(f"[CACHE HIT] Loaded {strategy_count} strategies from cache ({fetch_time:.1f}ms)")
-
-            return df
+                return df
+            finally:
+                conn.close()
+        except Exception as e:
+            print(f"[CACHE LOAD] Warning: Failed to load cache: {e}")
+            # Return None to fall back to calculation
+            return None
 
     def save_chart_cache(
         self,
@@ -903,15 +943,34 @@ class RateTracker:
 
         created_at = int(time.time())
 
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute("""
-                INSERT OR REPLACE INTO chart_cache
-                (strategy_hash, timestamp_seconds, chart_html, created_at)
-                VALUES (?, ?, ?, ?)
-            """, (strategy_hash, timestamp_seconds, chart_html, created_at))
+        try:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
 
-            # Clean up old cache entries (keep only last 48 hours)
-            self._cleanup_old_cache(conn, created_at)
+                # Adjust placeholder based on database type
+                ph = '%s' if self.db_type == 'postgresql' else '?'
+
+                # Use PostgreSQL-compatible UPSERT syntax
+                cursor.execute(f"""
+                    INSERT INTO chart_cache
+                    (strategy_hash, timestamp_seconds, chart_html, created_at)
+                    VALUES ({ph}, {ph}, {ph}, {ph})
+                    ON CONFLICT (strategy_hash, timestamp_seconds)
+                    DO UPDATE SET
+                        chart_html = EXCLUDED.chart_html,
+                        created_at = EXCLUDED.created_at
+                """, (strategy_hash, timestamp_seconds, chart_html, created_at))
+
+                conn.commit()
+
+                # Clean up old cache entries (keep only last 48 hours)
+                self._cleanup_old_cache(conn, created_at)
+            finally:
+                conn.close()
+        except Exception as e:
+            print(f"[CACHE SAVE] Warning: Failed to save chart cache: {e}")
+            # Don't crash - caching is optional optimization
 
     def load_chart_cache(
         self,
@@ -919,14 +978,27 @@ class RateTracker:
         timestamp_seconds: int
     ) -> Optional[str]:
         """Load rendered chart from cache. Returns HTML string or None."""
-        with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.execute("""
-                SELECT chart_html FROM chart_cache
-                WHERE strategy_hash = ? AND timestamp_seconds = ?
-            """, (strategy_hash, timestamp_seconds))
+        try:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
 
-            row = cursor.fetchone()
-            return row[0] if row else None
+                # Adjust placeholder based on database type
+                ph = '%s' if self.db_type == 'postgresql' else '?'
+
+                cursor.execute(f"""
+                    SELECT chart_html FROM chart_cache
+                    WHERE strategy_hash = {ph} AND timestamp_seconds = {ph}
+                """, (strategy_hash, timestamp_seconds))
+
+                row = cursor.fetchone()
+                return row[0] if row else None
+            finally:
+                conn.close()
+        except Exception as e:
+            print(f"[CACHE LOAD] Warning: Failed to load chart cache: {e}")
+            # Return None to fall back to recalculation
+            return None
 
     @staticmethod
     def compute_strategy_hash(strategy: dict) -> str:
