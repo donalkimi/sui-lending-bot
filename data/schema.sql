@@ -252,6 +252,9 @@ CREATE TABLE IF NOT EXISTS positions (
     -- User Notes
     notes TEXT,
 
+    -- Portfolio Linking (NULL = standalone position, UUID = part of portfolio)
+    portfolio_id TEXT DEFAULT NULL,
+
     -- Phase 2 Placeholders (for real capital deployment)
     wallet_address TEXT,
     transaction_hash_open TEXT,
@@ -270,6 +273,7 @@ CREATE INDEX IF NOT EXISTS idx_positions_user ON positions(user_id);
 CREATE INDEX IF NOT EXISTS idx_positions_protocols ON positions(protocol_A, protocol_B);
 CREATE INDEX IF NOT EXISTS idx_positions_tokens ON positions(token1, token2, token3);
 CREATE INDEX IF NOT EXISTS idx_positions_is_paper ON positions(is_paper_trade);
+CREATE INDEX IF NOT EXISTS idx_positions_portfolio ON positions(portfolio_id);
 
 
 -- Table 6: position_rebalances
@@ -496,3 +500,78 @@ ON chart_cache
 FOR SELECT
 TO authenticated
 USING (true);
+
+-- =============================================================================
+-- Table 10: portfolios
+-- Tracks portfolio-level metadata (collections of positions)
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS portfolios (
+    -- Portfolio Identification
+    portfolio_id TEXT PRIMARY KEY,
+    portfolio_name TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('active', 'closed', 'archived')),
+
+    -- Ownership (Phase 1: single user, Phase 2: multi-user)
+    is_paper_trade BOOLEAN NOT NULL DEFAULT TRUE,
+    user_id TEXT,
+
+    -- Creation & Entry
+    created_timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    entry_timestamp TIMESTAMP NOT NULL,
+
+    -- Portfolio Size
+    target_portfolio_size DECIMAL(20, 10) NOT NULL,
+    actual_allocated_usd DECIMAL(20, 10) NOT NULL,
+    utilization_pct DECIMAL(5, 2) NOT NULL,
+
+    -- PRIMARY METRIC: Entry Net APR
+    -- USD-weighted average of strategy net_apr values at entry
+    -- Formula: sum(position.entry_net_apr × position.deployment_usd) / total_allocated
+    entry_weighted_net_apr DECIMAL(10, 6) NOT NULL,
+
+    -- Constraints Used (JSON for flexibility)
+    constraints_json TEXT NOT NULL,
+
+    -- Performance Tracking
+    accumulated_realised_pnl DECIMAL(20, 10) DEFAULT 0.0,
+    rebalance_count INTEGER DEFAULT 0,
+    last_rebalance_timestamp TIMESTAMP,
+
+    -- Closure Tracking
+    close_timestamp TIMESTAMP,
+    close_reason TEXT,
+    close_notes TEXT,
+
+    -- User Notes
+    notes TEXT,
+
+    -- Timestamps
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Indexes for portfolios
+CREATE INDEX IF NOT EXISTS idx_portfolios_status ON portfolios(status);
+CREATE INDEX IF NOT EXISTS idx_portfolios_entry_time ON portfolios(entry_timestamp);
+CREATE INDEX IF NOT EXISTS idx_portfolios_name ON portfolios(portfolio_name);
+CREATE INDEX IF NOT EXISTS idx_portfolios_user ON portfolios(user_id);
+
+-- RLS for portfolios
+ALTER TABLE portfolios ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Service role has full access to portfolios"
+ON portfolios
+FOR ALL
+TO service_role
+USING (true)
+WITH CHECK (true);
+
+CREATE POLICY "Authenticated users can read portfolios"
+ON portfolios
+FOR SELECT
+TO authenticated
+USING (true);
+
+-- Foreign key constraint for positions -> portfolios
+ALTER TABLE positions
+ADD CONSTRAINT IF NOT EXISTS fk_positions_portfolio
+FOREIGN KEY (portfolio_id) REFERENCES portfolios(portfolio_id) ON DELETE SET NULL;

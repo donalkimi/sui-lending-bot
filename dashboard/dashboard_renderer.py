@@ -3291,7 +3291,7 @@ def render_sidebar_filters(display_results: pd.DataFrame):
     with col2:
         deployment_text = st.text_input(
             label="Deployment USD",
-            value="10000",
+            value=str(int(settings.DEFAULT_DEPLOYMENT_USD)),
             label_visibility="collapsed",
             key="deployment_input"
         )
@@ -3385,7 +3385,7 @@ def render_allocation_tab(all_strategies_df: pd.DataFrame):
             "Portfolio Size (USD)",
             min_value=100.0,
             max_value=1000000.0,
-            value=st.session_state.get('portfolio_size', 10000.0),
+            value=st.session_state.get('portfolio_size', settings.DEFAULT_DEPLOYMENT_USD),
             step=500.0,
             format="%.2f",
             key="portfolio_size_input"
@@ -3552,12 +3552,21 @@ def render_allocation_tab(all_strategies_df: pd.DataFrame):
 
     st.markdown("---")
 
+    # Portfolio Name Input
+    st.markdown("##### 📝 Portfolio Name")
+    portfolio_name = st.text_input(
+        "Enter portfolio name (leave empty for auto-generated name)",
+        value="",
+        key="portfolio_name_input",
+        placeholder="e.g., Conservative USDC Portfolio"
+    )
+
     # Generate Portfolio Button
     col_btn1, col_btn2, col_btn3 = st.columns([1, 1, 2])
     with col_btn1:
-        generate_clicked = st.button("🎲 Generate Portfolio", type="primary", use_container_width=True)
+        generate_clicked = st.button("🎲 Generate Portfolio", type="primary", width='stretch')
     with col_btn2:
-        if st.button("🔄 Reset Constraints", use_container_width=True):
+        if st.button("🔄 Reset Constraints", width='stretch'):
             from config.settings import DEFAULT_ALLOCATION_CONSTRAINTS
             st.session_state.allocation_constraints = DEFAULT_ALLOCATION_CONSTRAINTS.copy()
             st.rerun()
@@ -3566,6 +3575,20 @@ def render_allocation_tab(all_strategies_df: pd.DataFrame):
     if generate_clicked:
         if all_strategies_df.empty:
             st.warning("⚠️ No strategies available. Adjust filters in sidebar.")
+            return
+
+        # Generate unique portfolio name if empty
+        from datetime import datetime
+        if not portfolio_name or portfolio_name.strip() == "":
+            timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+            final_portfolio_name = f"Portfolio_{timestamp_str}"
+        else:
+            final_portfolio_name = portfolio_name.strip()
+
+        # Check for duplicate names (simple check in session state)
+        existing_names = st.session_state.get('portfolio_names', set())
+        if final_portfolio_name in existing_names:
+            st.error(f"❌ Portfolio name '{final_portfolio_name}' already exists. Please choose a different name.")
             return
 
         st.markdown("---")
@@ -3584,7 +3607,13 @@ def render_allocation_tab(all_strategies_df: pd.DataFrame):
 
                 # Save to session state
                 st.session_state.generated_portfolio = portfolio_df
+                st.session_state.portfolio_name = final_portfolio_name
                 st.session_state.portfolio_generated = True
+
+                # Track portfolio names
+                if 'portfolio_names' not in st.session_state:
+                    st.session_state.portfolio_names = set()
+                st.session_state.portfolio_names.add(final_portfolio_name)
 
             except Exception as e:
                 st.error(f"❌ Error generating portfolio: {str(e)}")
@@ -3718,30 +3747,24 @@ def render_portfolio_preview(portfolio_df: pd.DataFrame, portfolio_size: float, 
     num_strategies = len(portfolio_df)
 
     # Portfolio Summary
-    st.success(f"✅ Portfolio Generated: {num_strategies} strategies selected")
+    portfolio_name = st.session_state.get('portfolio_name', 'Portfolio')
+    st.success(f"✅ Portfolio Generated: **{portfolio_name}** ({num_strategies} strategies)")
 
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3 = st.columns(3)
     with col1:
         st.metric("Total Allocated", f"${total_allocated:,.0f}")
     with col2:
         st.metric("Capital Utilization", f"{utilization_pct:.1f}%")
     with col3:
-        st.metric("Weighted Blended APR", f"{weighted_blended_apr*100:.2f}%")
-    with col4:
-        penalty_impact = (weighted_adjusted_apr - weighted_blended_apr) * 100
-        st.metric(
-            "Weighted Adjusted APR",
-            f"{weighted_adjusted_apr*100:.2f}%",
-            delta=f"{penalty_impact:.2f}%" if penalty_impact != 0 else None
-        )
+        st.metric("Weighted APR (Adjusted)", f"{weighted_adjusted_apr*100:.2f}%")
 
     st.markdown("---")
 
     # Strategy Details Table
     st.markdown("### 📋 Selected Strategies")
     st.caption(
-        "**Adjusted APR** = Blended APR × Stablecoin Penalty. "
-        "Strategies are ranked by Adjusted APR (highest to lowest)."
+        "Strategies ranked by **Adjusted APR** (Blended APR × Stablecoin Penalty). "
+        "Blended APR is a weighted average of historical APRs, used for ranking only."
     )
 
     # Prepare display DataFrame
@@ -3783,7 +3806,7 @@ def render_portfolio_preview(portfolio_df: pd.DataFrame, portfolio_size: float, 
     # Display table with highlighting
     st.dataframe(
         display_df,
-        use_container_width=True,
+        width='stretch',
         hide_index=True
     )
 
@@ -3812,7 +3835,7 @@ def render_portfolio_preview(portfolio_df: pd.DataFrame, portfolio_size: float, 
                     'Percentage': f"{data['pct']*100:.1f}%"
                 })
             token_exp_df = pd.DataFrame(token_exp_data)
-            st.dataframe(token_exp_df, use_container_width=True, hide_index=True)
+            st.dataframe(token_exp_df, width='stretch', hide_index=True)
 
             # Check if any exposure exceeds limit (showing per-token limits)
             default_limit_pct = constraints.get('token_exposure_limit', 0.3) * 100
@@ -3854,7 +3877,7 @@ def render_portfolio_preview(portfolio_df: pd.DataFrame, portfolio_size: float, 
                     'Percentage': f"{data['pct']*100:.1f}%"
                 })
             protocol_exp_df = pd.DataFrame(protocol_exp_data)
-            st.dataframe(protocol_exp_df, use_container_width=True, hide_index=True)
+            st.dataframe(protocol_exp_df, width='stretch', hide_index=True)
 
             # Check if any exposure exceeds limit
             protocol_limit_pct = constraints.get('protocol_exposure_limit', 0.4) * 100
@@ -3899,9 +3922,9 @@ def render_portfolio_preview(portfolio_df: pd.DataFrame, portfolio_size: float, 
     else:
         st.success("✓ No stablecoin penalties applied. All strategies use preferred stablecoins.")
 
-    # Export options
+    # Export and Save options
     st.markdown("---")
-    col_export1, _ = st.columns([1, 3])
+    col_export1, col_export2, _ = st.columns([1, 1, 2])
     with col_export1:
         csv = portfolio_df.to_csv(index=False)
         st.download_button(
@@ -3910,6 +3933,193 @@ def render_portfolio_preview(portfolio_df: pd.DataFrame, portfolio_size: float, 
             file_name=f"portfolio_allocation_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
             mime="text/csv"
         )
+    with col_export2:
+        if st.button("💾 Save Portfolio", type="primary", width='stretch'):
+            # Save portfolio to database
+            from analysis.portfolio_service import PortfolioService
+
+            try:
+                conn = get_db_connection()
+                service = PortfolioService(conn)
+
+                # Get portfolio name and timestamp from session state
+                portfolio_name = st.session_state.get('portfolio_name', 'Unnamed Portfolio')
+                timestamp_seconds = st.session_state.get('selected_timestamp', int(datetime.now().timestamp()))
+
+                # Save portfolio
+                portfolio_id = service.save_portfolio(
+                    portfolio_name=portfolio_name,
+                    portfolio_df=portfolio_df,
+                    portfolio_size=portfolio_size,
+                    constraints=constraints,
+                    entry_timestamp=timestamp_seconds,
+                    is_paper_trade=True,
+                    notes=None
+                )
+
+                st.success(f"✅ Portfolio '{portfolio_name}' saved successfully!")
+                st.info("📁 View saved portfolios in the **Portfolios** tab")
+
+                # Mark as saved in session state
+                st.session_state.portfolio_saved = True
+                st.session_state.saved_portfolio_id = portfolio_id
+
+            except Exception as e:
+                st.error(f"❌ Error saving portfolio: {str(e)}")
+                import traceback
+                st.code(traceback.format_exc())
+
+
+# ============================================================================
+# PORTFOLIOS TAB
+# ============================================================================
+
+def render_portfolios_tab(timestamp_seconds: int):
+    """
+    Render portfolios tab showing all saved portfolios.
+
+    Args:
+        timestamp_seconds: Dashboard-selected timestamp (Unix seconds)
+    """
+    st.header("📁 Portfolios")
+
+    try:
+        # Connect to database
+        from analysis.portfolio_service import PortfolioService
+
+        conn = get_db_connection()
+        service = PortfolioService(conn)
+
+        # Get all active portfolios
+        portfolios = service.get_active_portfolios()
+
+        if portfolios.empty:
+            st.info("📭 No portfolios saved yet. Generate and save a portfolio from the Allocation tab!")
+            conn.close()
+            return
+
+        # Display summary metrics
+        st.markdown("### 📊 Portfolio Summary")
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Total Portfolios", len(portfolios))
+        with col2:
+            total_allocated = portfolios['actual_allocated_usd'].sum()
+            st.metric("Total Allocated", f"${total_allocated:,.0f}")
+        with col3:
+            avg_apr = portfolios['entry_weighted_net_apr'].mean() * 100
+            st.metric("Avg Entry APR", f"{avg_apr:.2f}%")
+        with col4:
+            avg_util = portfolios['utilization_pct'].mean()
+            st.metric("Avg Utilization", f"{avg_util:.1f}%")
+
+        st.markdown("---")
+
+        # Display portfolios list
+        st.markdown("### 📋 Saved Portfolios")
+
+        for _, portfolio in portfolios.iterrows():
+            # Create expander for each portfolio
+            with st.expander(
+                f"**{portfolio['portfolio_name']}** | "
+                f"{portfolio['entry_weighted_net_apr']*100:.2f}% APR | "
+                f"${portfolio['actual_allocated_usd']:,.0f} allocated"
+            ):
+                render_portfolio_detail(portfolio, timestamp_seconds, service)
+
+        conn.close()
+
+    except Exception as e:
+        st.error(f"❌ Error loading portfolios: {str(e)}")
+        import traceback
+        st.code(traceback.format_exc())
+
+
+def render_portfolio_detail(portfolio: pd.Series, timestamp_seconds: int, service):
+    """
+    Render detailed view of a single portfolio.
+
+    Args:
+        portfolio: Portfolio series with metadata
+        timestamp_seconds: Current timestamp
+        service: PortfolioService instance
+    """
+    # Portfolio metadata
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Status", portfolio['status'].title())
+    with col2:
+        entry_date = portfolio['entry_timestamp'].strftime('%Y-%m-%d %H:%M')
+        st.metric("Entry Date", entry_date)
+    with col3:
+        st.metric("Utilization", f"{portfolio['utilization_pct']:.1f}%")
+
+    # Get positions in this portfolio
+    positions_df = service.get_portfolio_positions(portfolio['portfolio_id'])
+
+    if positions_df.empty:
+        st.info("📭 No positions in this portfolio yet.")
+        return
+
+    # Display positions table
+    st.markdown("#### Strategies in Portfolio")
+
+    display_df = positions_df[[
+        'token1', 'token2', 'token3',
+        'protocol_A', 'protocol_B',
+        'deployment_usd', 'entry_net_apr',
+        'status'
+    ]].copy()
+
+    # Format columns
+    display_df['deployment_usd'] = display_df['deployment_usd'].apply(lambda x: f"${x:,.0f}")
+    display_df['entry_net_apr'] = display_df['entry_net_apr'].apply(lambda x: f"{x*100:.2f}%")
+
+    # Rename for display
+    display_df = display_df.rename(columns={
+        'token1': 'Token 1',
+        'token2': 'Token 2',
+        'token3': 'Token 3',
+        'protocol_A': 'Protocol A',
+        'protocol_B': 'Protocol B',
+        'deployment_usd': 'Deployment',
+        'entry_net_apr': 'Entry APR',
+        'status': 'Status'
+    })
+
+    st.dataframe(display_df, width='stretch', hide_index=True)
+
+    # Action buttons
+    st.markdown("---")
+    col_btn1, col_btn2, _ = st.columns([1, 1, 2])
+    with col_btn1:
+        if st.button("🗑️ Delete", key=f"delete_{portfolio['portfolio_id']}", width='stretch'):
+            try:
+                service.delete_portfolio(portfolio['portfolio_id'])
+                st.success(f"✅ Portfolio '{portfolio['portfolio_name']}' deleted")
+                st.rerun()
+            except Exception as e:
+                st.error(f"❌ Error: {str(e)}")
+
+    with col_btn2:
+        if st.button("🔒 Close", key=f"close_{portfolio['portfolio_id']}", width='stretch'):
+            try:
+                service.close_portfolio(
+                    portfolio['portfolio_id'],
+                    timestamp_seconds,
+                    close_reason="Manual close",
+                    close_notes=None
+                )
+                st.success(f"✅ Portfolio '{portfolio['portfolio_name']}' closed")
+                st.rerun()
+            except Exception as e:
+                st.error(f"❌ Error: {str(e)}")
+
+    # Show constraints used
+    with st.expander("⚙️ Allocation Constraints"):
+        import json
+        constraints = json.loads(portfolio['constraints_json'])
+        st.json(constraints)
 
 
 # ============================================================================
@@ -4167,12 +4377,13 @@ def render_dashboard(data_loader: DataLoader, mode: str):
     tabs_start = time.time()
     print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] Rendering tabs...")
 
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
         "📊 All Strategies",
         "🎯 Allocation",
         "📈 Rate Tables",
         "⚠️ 0 Liquidity",
         "💼 Positions",
+        "📁 Portfolios",
         "💎 Oracle Prices",
         "🚀 Pending Deployments"
     ])
@@ -4202,7 +4413,7 @@ def render_dashboard(data_loader: DataLoader, mode: str):
 
     with tab2:
         tab2_start = time.time()
-        render_allocation_tab(all_results)
+        render_allocation_tab(display_results)  # Use filtered results, not all_results
         tab2_time = (time.time() - tab2_start) * 1000
         print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] Tab2 (Allocation) rendered in {tab2_time:.1f}ms")
 
@@ -4231,15 +4442,21 @@ def render_dashboard(data_loader: DataLoader, mode: str):
 
     with tab6:
         tab6_start = time.time()
-        render_oracle_prices_tab(timestamp_seconds)
+        render_portfolios_tab(timestamp_seconds)
         tab6_time = (time.time() - tab6_start) * 1000
-        print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] Tab6 (Oracle Prices) rendered in {tab6_time:.1f}ms")
+        print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] Tab6 (Portfolios) rendered in {tab6_time:.1f}ms")
 
     with tab7:
         tab7_start = time.time()
-        render_pending_deployments_tab()
+        render_oracle_prices_tab(timestamp_seconds)
         tab7_time = (time.time() - tab7_start) * 1000
-        print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] Tab7 (Pending Deployments) rendered in {tab7_time:.1f}ms")
+        print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] Tab7 (Oracle Prices) rendered in {tab7_time:.1f}ms")
+
+    with tab8:
+        tab8_start = time.time()
+        render_pending_deployments_tab()
+        tab8_time = (time.time() - tab8_start) * 1000
+        print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] Tab8 (Pending Deployments) rendered in {tab8_time:.1f}ms")
 
     total_dashboard_time = (time.time() - dashboard_start) * 1000
     print(f"[{total_dashboard_time:7.1f}ms] [DASHBOARD] ✅ Dashboard render complete (total: {total_dashboard_time:.1f}ms)\n")

@@ -3,6 +3,7 @@ Configuration settings for the Sui Lending Bot
 """
 import os
 from dotenv import load_dotenv
+from config.stablecoins import STABLECOIN_SYMBOLS
 
 # Load environment variables from .env file (local development only)
 load_dotenv()
@@ -67,12 +68,13 @@ SAVE_SNAPSHOTS = get_bool_env('SAVE_SNAPSHOTS', default=True)
 
 # Stablecoin preference multipliers (1.0 = preferred, lower = penalty)
 # Applied to strategy APR when ranking for portfolio allocation
+# Uses canonical stablecoin list from config/stablecoins.py
 DEFAULT_STABLECOIN_PREFERENCES = {
-    'USDC': 1.00,    # Preferred stablecoin (no penalty)
-    'USDT': 0.90,    # 10% APR penalty
-    'DAI': 0.90,     # 10% APR penalty
-    'AUSD': 0.90,    # 10% APR penalty
-    'FDUSD': 0.90,   # 10% APR penalty
+    'USDC': 1.00,      # Preferred stablecoin (no penalty)
+    'USDY': 0.95,      # 5% APR penalty
+    'AUSD': 0.90,      # 10% APR penalty
+    'FDUSD': 0.90,     # 10% APR penalty
+    'suiUSDT': 0.90,   # 10% APR penalty
 }
 
 # Default allocation constraints for portfolio construction
@@ -99,3 +101,4 @@ DEFAULT_ALLOCATION_CONSTRAINTS = {
 SQLITE_PATH = "data/lending_rates.db"
 DASHBOARD_PORT = 8501
 DASHBOARD_TITLE = "Sui Lending Bot - Cross-Protocol Yield Optimizer"
+DEFAULT_DEPLOYMENT_USD = float(os.getenv('DEFAULT_DEPLOYMENT_USD', '100'))

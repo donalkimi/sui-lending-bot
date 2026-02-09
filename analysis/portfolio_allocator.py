@@ -153,9 +153,17 @@ class PortfolioAllocator:
         default_token_limit = portfolio_size * constraints['token_exposure_limit']
         token_overrides = constraints.get('token_exposure_overrides', {})
 
+        # Get borrow weights (token1 always 1.0, token2/3 from strategy)
+        weights = {
+            1: 1.0,  # Token1 always has weight 1.0
+            2: strategy_row.get('borrow_weight_2a', 1.0),
+            3: strategy_row.get('borrow_weight_3b', 1.0)
+        }
+
         for token_num in [1, 2, 3]:
             token_contract = strategy_row[f'token{token_num}_contract']
             token_symbol = strategy_row[f'token{token_num}']
+            weight = weights[token_num]
 
             # Check if token has specific override
             if token_symbol in token_overrides:
@@ -165,7 +173,11 @@ class PortfolioAllocator:
 
             current_exposure = token_exposures.get(token_contract, 0.0)
             remaining_room = token_limit - current_exposure
-            max_amount = min(max_amount, remaining_room)
+
+            # Divide by weight to get max allocation amount
+            # e.g., if weight=1.3 and room=$13k, max allocation=$10k
+            max_allocation_for_this_token = remaining_room / weight if weight > 0 else remaining_room
+            max_amount = min(max_amount, max_allocation_for_this_token)
 
         # Check protocol exposure constraints (both protocols)
         protocol_limit = portfolio_size * constraints['protocol_exposure_limit']
@@ -187,17 +199,29 @@ class PortfolioAllocator:
         """
         Update exposure tracking after allocating to a strategy.
 
+        Token exposure = allocation_amount * borrow_weight for that token.
+        For example, $10k allocation with token2 weight 1.3 = $13k token2 exposure.
+
         Args:
             strategy_row: Strategy data
             allocation_amount: USD amount allocated
             token_exposures: Token exposure dict to update
             protocol_exposures: Protocol exposure dict to update
         """
-        # Update token exposures
+        # Get borrow weights (token1 always 1.0, token2/3 from strategy)
+        weights = {
+            1: 1.0,  # Token1 always has weight 1.0
+            2: strategy_row.get('borrow_weight_2a', 1.0),
+            3: strategy_row.get('borrow_weight_3b', 1.0)
+        }
+
+        # Update token exposures (multiply by weight)
         for token_num in [1, 2, 3]:
             token_contract = strategy_row[f'token{token_num}_contract']
+            weight = weights[token_num]
+            exposure = allocation_amount * weight
             token_exposures[token_contract] = (
-                token_exposures.get(token_contract, 0.0) + allocation_amount
+                token_exposures.get(token_contract, 0.0) + exposure
             )
 
         # Update protocol exposures
@@ -323,13 +347,15 @@ class PortfolioAllocator:
 
     def calculate_portfolio_exposures(
         self,
-        portfolio_df: pd.DataFrame
+        portfolio_df: pd.DataFrame,
+        portfolio_size: float
     ) -> Tuple[Dict, Dict]:
         """
         Calculate token and protocol exposures from portfolio.
 
         Args:
             portfolio_df: Portfolio with allocation_usd column
+            portfolio_size: Total portfolio size in USD (not just allocated amount)
 
         Returns:
             Tuple of (token_exposures, protocol_exposures)
@@ -339,26 +365,41 @@ class PortfolioAllocator:
         if portfolio_df.empty:
             return {}, {}
 
-        total_allocated = portfolio_df['allocation_usd'].sum()
-
         token_exposures = {}
         protocol_exposures = {}
 
         for _, row in portfolio_df.iterrows():
             allocation = row['allocation_usd']
 
-            # Aggregate token exposures
-            for token_num in [1, 2, 3]:
-                contract = row[f'token{token_num}_contract']
-                symbol = row[f'token{token_num}']
+            # Aggregate token exposures - ONLY COUNT LENDING, NOT BORROWING
+            # In a recursive strategy:
+            # - Token1: Lent on protocol A (count this)
+            # - Token2: Borrowed on A, Lent on B (only count lend amount)
+            # - Token3: Borrowed on B (don't count, no lending exposure)
 
-                if contract not in token_exposures:
-                    token_exposures[contract] = {
-                        'symbol': symbol,
-                        'usd': 0.0,
-                        'pct': 0.0
-                    }
-                token_exposures[contract]['usd'] += allocation
+            # Token1 - always lent
+            token1_contract = row['token1_contract']
+            token1_symbol = row['token1']
+            if token1_contract not in token_exposures:
+                token_exposures[token1_contract] = {
+                    'symbol': token1_symbol,
+                    'usd': 0.0,
+                    'pct': 0.0
+                }
+            token_exposures[token1_contract]['usd'] += allocation
+
+            # Token2 - lent on protocol B
+            token2_contract = row['token2_contract']
+            token2_symbol = row['token2']
+            if token2_contract not in token_exposures:
+                token_exposures[token2_contract] = {
+                    'symbol': token2_symbol,
+                    'usd': 0.0,
+                    'pct': 0.0
+                }
+            token_exposures[token2_contract]['usd'] += allocation
+
+            # Token3 - only borrowed, not lent (no exposure counted)
 
             # Aggregate protocol exposures
             for protocol in [row['protocol_a'], row['protocol_b']]:
@@ -366,15 +407,15 @@ class PortfolioAllocator:
                     protocol_exposures[protocol] = {'usd': 0.0, 'pct': 0.0}
                 protocol_exposures[protocol]['usd'] += allocation
 
-        # Calculate percentages
+        # Calculate percentages against total portfolio size (not just allocated amount)
         for contract in token_exposures:
             token_exposures[contract]['pct'] = (
-                token_exposures[contract]['usd'] / total_allocated
+                token_exposures[contract]['usd'] / portfolio_size if portfolio_size > 0 else 0.0
             )
 
         for protocol in protocol_exposures:
             protocol_exposures[protocol]['pct'] = (
-                protocol_exposures[protocol]['usd'] / total_allocated
+                protocol_exposures[protocol]['usd'] / portfolio_size if portfolio_size > 0 else 0.0
             )
 
         return token_exposures, protocol_exposures
