@@ -486,3 +486,97 @@ earnings = leg_value * rate * time
 - ✅ position_statistics_calculator.py: Passes correct token amounts for all segments
 - ✅ Database schema: Stores token amounts in positions and position_rebalances tables
 - ✅ Tested: PnL calculations now match manual verification
+
+### 13. Explicit Error Handling: Fail Loudly, Then Continue
+
+**Core Principle:** Never use lazy column checking that silently skips missing columns. Explicitly try to access columns, catch errors, show debugging info, then continue without the column.
+
+**Why:**
+- **Visibility:** Errors are immediately visible in logs, not hidden by defensive code
+- **Debuggability:** Shows exactly what columns are available when a mismatch occurs
+- **Robustness:** System continues operating despite column naming issues
+- **Fast debugging:** Developer sees the problem and available options immediately
+
+**The Problem (Lazy Pattern):**
+```python
+# ❌ WRONG: Silently skips if column doesn't exist
+if 'max_size' in df.columns:
+    display_df['max_size'] = df['max_size']
+# If column name is wrong, you'll never know!
+```
+
+**The Solution (Explicit Pattern):**
+```python
+# ✅ CORRECT: Fail loudly with debugging info, then continue
+try:
+    display_df['max_size'] = df['max_size']
+except KeyError as e:
+    # Log the error with available columns for debugging
+    print(f"⚠️  KeyError accessing 'max_size': {e}")
+    print(f"    Available columns: {list(df.columns)}")
+    # Continue without this column - don't crash the entire render
+```
+
+**Pattern requirements:**
+1. **Explicit access:** Try to access the column directly (no `if col in df` checks)
+2. **Catch KeyError:** Use try/except to catch column access errors
+3. **Debug output:** Print/log the error AND list available columns
+4. **Continue execution:** Don't raise/re-raise - let the render complete without that column
+
+**Where to apply:**
+- ✅ DataFrame column access for optional display columns
+- ✅ Dictionary key access for optional fields
+- ✅ Series/row indexing for optional values
+- ❌ NOT for required fields (those should raise and stop)
+
+**Example - Dashboard column display:**
+```python
+# Building column list for display
+base_columns = ['token1', 'token2', 'protocol_a', 'net_apr']
+
+# Try to add optional max_size column
+try:
+    if 'max_size' in strategies.columns:
+        base_columns.append('max_size')
+except Exception as e:
+    print(f"⚠️  Error checking for 'max_size' column: {e}")
+    print(f"    Available columns: {list(strategies.columns)}")
+
+# Try to format the column
+display_df = strategies[base_columns].copy()
+try:
+    display_df['max_size'] = display_df['max_size'].apply(
+        lambda x: f"${x:,.0f}" if pd.notna(x) else "N/A"
+    )
+except KeyError as e:
+    print(f"⚠️  KeyError formatting 'max_size': {e}")
+    print(f"    Available columns in display_df: {list(display_df.columns)}")
+    # Continue - table will render without this column
+```
+
+**Example - Portfolio allocator:**
+```python
+# Check strategy max size constraint
+try:
+    strategy_max = strategy_row['max_size']
+    if pd.notna(strategy_max) and strategy_max < max_amount:
+        max_amount = strategy_max
+        constraint_info['limiting_constraint'] = 'strategy_max_size'
+except KeyError as e:
+    print(f"⚠️  KeyError accessing 'max_size' in strategy_row: {e}")
+    print(f"    Available columns: {list(strategy_row.index)}")
+    # Continue without max_size constraint
+```
+
+**Effect:**
+- Developer sees the error immediately in console/logs
+- Available columns are shown for quick diagnosis
+- System continues operating (graceful degradation)
+- No silent failures or hidden bugs
+
+**Implementation date:** February 10, 2026
+
+**Verification status:**
+- ✅ dashboard_renderer.py: Strategy table column handling (lines 3754-3786)
+- ✅ dashboard_renderer.py: Portfolio preview column handling (lines 4027-4071)
+- ✅ portfolio_allocator.py: Strategy max_size constraint (lines 159-169)

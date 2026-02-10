@@ -3757,9 +3757,13 @@ def render_allocation_tab(all_strategies_df: pd.DataFrame):
                     'net_apr', 'apr5', 'apr30', 'blended_apr', 'stablecoin_multiplier', 'adjusted_apr'
                 ]
 
-                # Add max_size_usd if it exists
-                if 'max_size_usd' in strategies.columns:
-                    base_columns.append('max_size_usd')
+                # Add max_size if it exists (explicit error handling)
+                try:
+                    if 'max_size' in strategies.columns:
+                        base_columns.append('max_size')
+                except Exception as e:
+                    print(f"⚠️  Error checking for 'max_size' column: {e}")
+                    print(f"    Available columns: {list(strategies.columns)}")
 
                 display_df = strategies[base_columns].copy()
 
@@ -3771,8 +3775,13 @@ def render_allocation_tab(all_strategies_df: pd.DataFrame):
                 display_df['stablecoin_multiplier'] = display_df['stablecoin_multiplier'].apply(lambda x: f"{x:.2f}x")
                 display_df['adjusted_apr'] = display_df['adjusted_apr'].apply(lambda x: f"{x*100:.2f}%")
 
-                if 'max_size_usd' in display_df.columns:
-                    display_df['max_size_usd'] = display_df['max_size_usd'].apply(lambda x: f"${x:,.0f}" if pd.notna(x) else "N/A")
+                # Format max_size column if present
+                try:
+                    if 'max_size' in display_df.columns:
+                        display_df['max_size'] = display_df['max_size'].apply(lambda x: f"${x:,.0f}" if pd.notna(x) else "N/A")
+                except KeyError as e:
+                    print(f"⚠️  KeyError formatting 'max_size': {e}")
+                    print(f"    Available columns in display_df: {list(display_df.columns)}")
 
                 # Rename columns
                 column_names = [
@@ -3781,8 +3790,13 @@ def render_allocation_tab(all_strategies_df: pd.DataFrame):
                     'Net APR', 'APR5', 'APR30', 'Blended APR', 'Stable Mult', 'Adjusted APR'
                 ]
 
-                if 'max_size_usd' in display_df.columns:
-                    column_names.append('Max Size')
+                # Add max_size to rename list if present
+                try:
+                    if 'max_size' in display_df.columns:
+                        column_names.append('Max Size')
+                except Exception as e:
+                    print(f"⚠️  Error checking for 'max_size' in display_df for rename: {e}")
+                    print(f"    Available columns: {list(display_df.columns)}")
 
                 display_df.columns = column_names
 
@@ -3849,13 +3863,14 @@ def render_allocation_tab(all_strategies_df: pd.DataFrame):
                 allocator = PortfolioAllocator(all_strategies_df)
 
                 # Select portfolio
-                portfolio_df = allocator.select_portfolio(
+                portfolio_df, debug_info = allocator.select_portfolio(
                     portfolio_size=portfolio_size,
                     constraints=constraints
                 )
 
                 # Save to session state
                 st.session_state.generated_portfolio = portfolio_df
+                st.session_state.portfolio_debug_info = debug_info
                 st.session_state.portfolio_name = final_portfolio_name
                 st.session_state.portfolio_generated = True
 
@@ -4025,9 +4040,14 @@ def render_portfolio_preview(portfolio_df: pd.DataFrame, portfolio_size: float, 
         'allocation_usd'
     ]
 
-    # Add max_size_usd if it exists
-    if 'max_size_usd' in portfolio_df.columns:
-        base_columns.append('max_size_usd')
+    # Add max_size if it exists (explicit error handling)
+    # Add max_size if it exists (explicit error handling)
+    try:
+        if 'max_size' in portfolio_df.columns:
+            base_columns.append('max_size')
+    except Exception as e:
+        print(f"⚠️  Error checking for 'max_size' column in portfolio_df: {e}")
+        print(f"    Available columns: {list(portfolio_df.columns)}")
 
     display_df = portfolio_df[base_columns].copy()
 
@@ -4043,8 +4063,13 @@ def render_portfolio_preview(portfolio_df: pd.DataFrame, portfolio_size: float, 
     )
     display_df['allocation_usd'] = display_df['allocation_usd'].apply(lambda x: f"${x:,.0f}")
 
-    if 'max_size_usd' in display_df.columns:
-        display_df['max_size_usd'] = display_df['max_size_usd'].apply(lambda x: f"${x:,.0f}" if pd.notna(x) else "N/A")
+    # Format max_size column if present
+    try:
+        if 'max_size' in display_df.columns:
+            display_df['max_size'] = display_df['max_size'].apply(lambda x: f"${x:,.0f}" if pd.notna(x) else "N/A")
+    except KeyError as e:
+        print(f"⚠️  KeyError formatting 'max_size' in portfolio display: {e}")
+        print(f"    Available columns: {list(display_df.columns)}")
 
     # Rename columns for display
     rename_dict = {
@@ -4061,8 +4086,13 @@ def render_portfolio_preview(portfolio_df: pd.DataFrame, portfolio_size: float, 
         'allocation_usd': 'Allocation'
     }
 
-    if 'max_size_usd' in display_df.columns:
-        rename_dict['max_size_usd'] = 'Max Size'
+    # Add max_size to rename dict if present
+    try:
+        if 'max_size' in display_df.columns:
+            rename_dict['max_size'] = 'Max Size'
+    except Exception as e:
+        print(f"⚠️  Error adding 'max_size' to rename dict: {e}")
+        print(f"    Available columns: {list(display_df.columns)}")
 
     display_df = display_df.rename(columns=rename_dict)
 
@@ -4072,6 +4102,102 @@ def render_portfolio_preview(portfolio_df: pd.DataFrame, portfolio_size: float, 
         width='stretch',
         hide_index=True
     )
+
+    # Allocation Debug Info
+    if 'portfolio_debug_info' in st.session_state and st.session_state.portfolio_debug_info:
+        st.markdown("---")
+        st.markdown("### 🔍 Allocation Analysis")
+        st.caption("Shows how each strategy was evaluated and which constraint limited allocation")
+
+        debug_info = st.session_state.portfolio_debug_info
+
+        # Build debug display data
+        debug_display_rows = []
+        for record in debug_info:
+            # Build strategy name
+            strategy_name = f"{record['token1']}/{record['token2']}/{record['token3']}"
+            protocols = f"{record['protocol_a']} ↔ {record['protocol_b']}"
+
+            # Get limiting constraint info
+            constraint_info = record['constraint_info']
+            limiting_constraint = constraint_info['limiting_constraint']
+            limiting_value = constraint_info['limiting_value']
+
+            # Format constraint name
+            if limiting_constraint == 'remaining_capital':
+                constraint_display = "Remaining Capital"
+            elif limiting_constraint.startswith('token_'):
+                parts = limiting_constraint.split('_', 2)
+                if len(parts) >= 3:
+                    constraint_display = f"Token {parts[1]} ({parts[2]}) Limit"
+                else:
+                    constraint_display = f"Token Limit"
+            elif limiting_constraint.startswith('protocol_'):
+                parts = limiting_constraint.split('_', 2)
+                if len(parts) >= 3:
+                    constraint_display = f"Protocol {parts[1]} ({parts[2]})"
+                else:
+                    constraint_display = "Protocol Limit"
+            elif limiting_constraint == 'strategy_max_size':
+                constraint_display = "Strategy Max Size"
+            else:
+                constraint_display = limiting_constraint
+
+            # Status
+            status = "✅ Allocated" if record['allocated'] else "⚠️ Skipped"
+
+            debug_display_rows.append({
+                '#': record['strategy_num'],
+                'Strategy': strategy_name,
+                'Protocols': protocols,
+                'Adj APR': f"{record['adjusted_apr']*100:.2f}%",
+                'Remaining $': f"${record['remaining_capital']:,.0f}",
+                'Max Allowed': f"${record['max_amount']:,.0f}",
+                'Limiting Constraint': constraint_display,
+                'Status': status
+            })
+
+        debug_df = pd.DataFrame(debug_display_rows)
+        st.dataframe(debug_df, width='stretch', hide_index=True)
+
+        # Detailed constraint breakdown (expandable)
+        with st.expander("📊 Detailed Constraint Analysis"):
+            for record in debug_info:
+                strategy_name = f"{record['token1']}/{record['token2']}/{record['token3']}"
+                st.markdown(f"**Strategy #{record['strategy_num']}: {strategy_name}**")
+
+                constraint_info = record['constraint_info']
+
+                # Token constraints
+                st.markdown("**Token Constraints:**")
+                token_constraint_data = []
+                for tc in constraint_info['token_constraints']:
+                    token_constraint_data.append({
+                        'Token': f"{tc['token']} (pos {tc['position']})",
+                        'Type': 'Stablecoin' if tc['is_stablecoin'] else 'Non-stable',
+                        'Weight': f"{tc['weight']:.3f}",
+                        'Current': f"${tc['current_exposure']:,.0f}",
+                        'Limit': f"${tc['limit']:,.0f}",
+                        'Room': f"${tc['remaining_room']:,.0f}",
+                        'Max from Token': f"${tc['max_from_token']:,.0f}" if tc['max_from_token'] != float('inf') else "∞"
+                    })
+                st.dataframe(pd.DataFrame(token_constraint_data), hide_index=True)
+
+                # Protocol constraints
+                st.markdown("**Protocol Constraints:**")
+                protocol_constraint_data = []
+                for pc in constraint_info['protocol_constraints']:
+                    protocol_constraint_data.append({
+                        'Protocol': f"{pc['protocol']} ({pc['position']})",
+                        'Weight': f"{pc['weight']:.3f}",
+                        'Current': f"${pc['current_exposure']:,.0f}",
+                        'Limit': f"${pc['limit']:,.0f}",
+                        'Room': f"${pc['remaining_room']:,.0f}",
+                        'Max from Protocol': f"${pc['max_from_protocol']:,.0f}"
+                    })
+                st.dataframe(pd.DataFrame(protocol_constraint_data), hide_index=True)
+
+                st.markdown("---")
 
     # Exposure Breakdown
     st.markdown("---")
@@ -4101,21 +4227,33 @@ def render_portfolio_preview(portfolio_df: pd.DataFrame, portfolio_size: float, 
             st.dataframe(token_exp_df, width='stretch', hide_index=True)
 
             # Check if any exposure exceeds limit (showing per-token limits)
-            default_limit_pct = constraints.get('token_exposure_limit', 0.3) * 100
+            from config.stablecoins import STABLECOIN_SYMBOLS
+
+            token2_limit_pct = constraints.get('token2_exposure_limit', constraints.get('token_exposure_limit', 0.7)) * 100
+            stablecoin_limit_pct = constraints.get('stablecoin_exposure_limit', -1)
             token_overrides = constraints.get('token_exposure_overrides', {})
 
             violations = []
             for contract, data in token_exposures.items():
                 symbol = data['symbol']
                 exposure_pct = data['pct'] * 100
+                is_stablecoin = symbol in STABLECOIN_SYMBOLS
 
-                # Get limit for this token (override or default)
+                # Get limit for this token
                 if symbol in token_overrides:
                     limit_pct = token_overrides[symbol] * 100
                     limit_str = f"{limit_pct:.0f}% (custom)"
+                elif is_stablecoin:
+                    # Stablecoin: check stablecoin limit
+                    if stablecoin_limit_pct < 0:
+                        # Unlimited - no violation possible
+                        continue
+                    limit_pct = stablecoin_limit_pct * 100
+                    limit_str = f"{limit_pct:.0f}% (stablecoin)"
                 else:
-                    limit_pct = default_limit_pct
-                    limit_str = f"{limit_pct:.0f}% (default)"
+                    # Non-stablecoin: use token2 limit
+                    limit_pct = token2_limit_pct
+                    limit_str = f"{limit_pct:.0f}% (token2)"
 
                 if exposure_pct > limit_pct + 0.1:  # Small tolerance for rounding
                     violations.append(f"{symbol}: {exposure_pct:.1f}% > {limit_str}")

@@ -131,7 +131,7 @@ class PortfolioAllocator:
         protocol_exposures: Dict[str, float],
         constraints: Dict,
         portfolio_size: float
-    ) -> float:
+    ) -> Tuple[float, Dict]:
         """
         Calculate maximum allocation for strategy without violating constraints.
 
@@ -144,17 +144,50 @@ class PortfolioAllocator:
             portfolio_size: Total portfolio size
 
         Returns:
-            Maximum USD amount that can be allocated to this strategy
+            Tuple of (max_amount, constraint_info)
+            - max_amount: Maximum USD amount that can be allocated to this strategy
+            - constraint_info: Dict with details about which constraint limited allocation
         """
         max_amount = remaining_capital
+        constraint_info = {
+            'limiting_constraint': 'remaining_capital',
+            'limiting_value': remaining_capital,
+            'token_constraints': [],
+            'protocol_constraints': []
+        }
 
         # Check strategy max size constraint (liquidity limit)
-        if 'max_size_usd' in strategy_row and pd.notna(strategy_row['max_size_usd']):
-            max_amount = min(max_amount, strategy_row['max_size_usd'])
+        try:
+            strategy_max = strategy_row['max_size']
+            if pd.notna(strategy_max) and strategy_max < max_amount:
+                max_amount = strategy_max
+                constraint_info['limiting_constraint'] = 'strategy_max_size'
+                constraint_info['limiting_value'] = strategy_max
+        except KeyError as e:
+            raise KeyError(
+                f"Column 'max_size' not found in strategy_row. "
+                f"Available columns: {list(strategy_row.index)}"
+            ) from e
 
         # Check token exposure constraints (all 3 tokens)
         # Use token-specific override if available, otherwise use default limit
-        default_token_limit = portfolio_size * constraints['token_exposure_limit']
+
+        # Get constraint keys - fail loudly if missing
+        if 'token2_exposure_limit' not in constraints and 'token_exposure_limit' not in constraints:
+            raise KeyError("Missing required constraint: 'token2_exposure_limit' or 'token_exposure_limit'")
+        if 'stablecoin_exposure_limit' not in constraints:
+            raise KeyError("Missing required constraint: 'stablecoin_exposure_limit'")
+
+        token2_limit_pct = constraints.get('token2_exposure_limit', constraints['token_exposure_limit'])
+        stablecoin_limit_pct = constraints['stablecoin_exposure_limit']
+
+        # Convert -1 (unlimited) to infinity
+        if stablecoin_limit_pct < 0:
+            stablecoin_limit = float('inf')
+        else:
+            stablecoin_limit = portfolio_size * stablecoin_limit_pct
+
+        default_token2_limit = portfolio_size * token2_limit_pct
         token_overrides = constraints.get('token_exposure_overrides', {})
 
         # Get position weights for exposure calculation
@@ -187,11 +220,16 @@ class PortfolioAllocator:
                 # Non-stablecoins: standard borrow weight
                 weight = -b_b if is_stablecoin else b_b
 
-            # Check if token has specific override
+            # Determine token limit based on type and position
             if token_symbol in token_overrides:
+                # Specific override for this token
                 token_limit = portfolio_size * token_overrides[token_symbol]
+            elif is_stablecoin:
+                # Stablecoin: use stablecoin limit (can be infinite)
+                token_limit = stablecoin_limit
             else:
-                token_limit = default_token_limit
+                # Non-stablecoin: use token2 limit
+                token_limit = default_token2_limit
 
             current_exposure = token_exposures.get(token_contract, 0.0)
             remaining_room = token_limit - current_exposure
@@ -210,7 +248,23 @@ class PortfolioAllocator:
                 # Weight is zero: no constraint from this token
                 max_allocation_for_this_token = float('inf')
 
-            max_amount = min(max_amount, max_allocation_for_this_token)
+            # Track token constraint info
+            token_constraint = {
+                'token': token_symbol,
+                'position': token_num,
+                'weight': weight,
+                'current_exposure': current_exposure,
+                'limit': token_limit,
+                'remaining_room': remaining_room,
+                'max_from_token': max_allocation_for_this_token,
+                'is_stablecoin': is_stablecoin
+            }
+            constraint_info['token_constraints'].append(token_constraint)
+
+            if max_allocation_for_this_token < max_amount:
+                max_amount = max_allocation_for_this_token
+                constraint_info['limiting_constraint'] = f'token_{token_num}_{token_symbol}'
+                constraint_info['limiting_value'] = max_allocation_for_this_token
 
         # Check protocol exposure constraints
         # Protocol A: full allocation (weight = 1.0)
@@ -222,7 +276,22 @@ class PortfolioAllocator:
         protocol_a = strategy_row['protocol_a']
         current_exposure_a = protocol_exposures.get(protocol_a, 0.0)
         remaining_room_a = protocol_limit - current_exposure_a
-        max_amount = min(max_amount, remaining_room_a)  # Weight = 1.0 for protocol A
+
+        protocol_a_constraint = {
+            'protocol': protocol_a,
+            'position': 'A',
+            'weight': 1.0,
+            'current_exposure': current_exposure_a,
+            'limit': protocol_limit,
+            'remaining_room': remaining_room_a,
+            'max_from_protocol': remaining_room_a
+        }
+        constraint_info['protocol_constraints'].append(protocol_a_constraint)
+
+        if remaining_room_a < max_amount:
+            max_amount = remaining_room_a
+            constraint_info['limiting_constraint'] = f'protocol_A_{protocol_a}'
+            constraint_info['limiting_value'] = remaining_room_a
 
         # Protocol B constraint (de-leveraged by L_B / L_A)
         protocol_b = strategy_row['protocol_b']
@@ -232,9 +301,24 @@ class PortfolioAllocator:
         current_exposure_b = protocol_exposures.get(protocol_b, 0.0)
         remaining_room_b = protocol_limit - current_exposure_b
         max_allocation_for_protocol_b = remaining_room_b / protocol_b_weight if protocol_b_weight > 0 else remaining_room_b
-        max_amount = min(max_amount, max_allocation_for_protocol_b)
 
-        return max(0.0, max_amount)  # Ensure non-negative
+        protocol_b_constraint = {
+            'protocol': protocol_b,
+            'position': 'B',
+            'weight': protocol_b_weight,
+            'current_exposure': current_exposure_b,
+            'limit': protocol_limit,
+            'remaining_room': remaining_room_b,
+            'max_from_protocol': max_allocation_for_protocol_b
+        }
+        constraint_info['protocol_constraints'].append(protocol_b_constraint)
+
+        if max_allocation_for_protocol_b < max_amount:
+            max_amount = max_allocation_for_protocol_b
+            constraint_info['limiting_constraint'] = f'protocol_B_{protocol_b}'
+            constraint_info['limiting_value'] = max_allocation_for_protocol_b
+
+        return max(0.0, max_amount), constraint_info  # Ensure non-negative
 
     def _update_exposures(
         self,
@@ -311,7 +395,7 @@ class PortfolioAllocator:
         self,
         portfolio_size: float,
         constraints: Dict = None
-    ) -> pd.DataFrame:
+    ) -> Tuple[pd.DataFrame, List[Dict]]:
         """
         Select optimal portfolio using greedy algorithm with constraints.
 
@@ -327,14 +411,16 @@ class PortfolioAllocator:
             constraints: Constraint settings (uses defaults if None)
 
         Returns:
-            DataFrame with selected strategies and allocation amounts.
-            Includes columns:
-            - All original strategy columns
-            - blended_apr: Weighted APR before penalty
-            - stablecoin_multiplier: Applied multiplier
-            - adjusted_apr: Final APR used for ranking
-            - stablecoins_in_strategy: List of stablecoins in strategy
-            - allocation_usd: USD amount allocated to this strategy
+            Tuple of (portfolio_df, debug_info)
+            - portfolio_df: DataFrame with selected strategies and allocation amounts
+              Includes columns:
+              - All original strategy columns
+              - blended_apr: Weighted APR before penalty
+              - stablecoin_multiplier: Applied multiplier
+              - adjusted_apr: Final APR used for ranking
+              - stablecoins_in_strategy: List of stablecoins in strategy
+              - allocation_usd: USD amount allocated to this strategy
+            - debug_info: List of dicts with allocation debugging details
         """
         if constraints is None:
             constraints = DEFAULT_ALLOCATION_CONSTRAINTS.copy()
@@ -350,7 +436,7 @@ class PortfolioAllocator:
             ].copy()
 
         if strategies.empty:
-            return pd.DataFrame()
+            return pd.DataFrame(), []
 
         # Calculate blended APR
         apr_weights = constraints['apr_weights']
@@ -387,6 +473,7 @@ class PortfolioAllocator:
 
         # Greedy allocation
         selected = []
+        debug_info = []
         allocated_capital = 0.0
         token_exposures = {}
         protocol_exposures = {}
@@ -396,15 +483,35 @@ class PortfolioAllocator:
             if len(selected) >= max_strategies:
                 break
 
+            # Capture state before allocation
+            remaining_capital = portfolio_size - allocated_capital
+
             # Calculate max allocation for this strategy
-            max_amount = self._calculate_max_allocation(
+            max_amount, constraint_info = self._calculate_max_allocation(
                 strategy,
-                portfolio_size - allocated_capital,
+                remaining_capital,
                 token_exposures,
                 protocol_exposures,
                 constraints,
                 portfolio_size
             )
+
+            # Build debug record
+            debug_record = {
+                'strategy_num': len(debug_info) + 1,
+                'token1': strategy['token1'],
+                'token2': strategy['token2'],
+                'token3': strategy['token3'],
+                'protocol_a': strategy['protocol_a'],
+                'protocol_b': strategy['protocol_b'],
+                'adjusted_apr': strategy['adjusted_apr'],
+                'remaining_capital': remaining_capital,
+                'max_amount': max_amount,
+                'allocated': max_amount > 0,
+                'constraint_info': constraint_info,
+                'token_exposures_before': token_exposures.copy(),
+                'protocol_exposures_before': protocol_exposures.copy()
+            }
 
             # If we can allocate at least something, add strategy
             if max_amount > 0:
@@ -420,7 +527,17 @@ class PortfolioAllocator:
                     protocol_exposures
                 )
 
-        return pd.DataFrame(selected) if selected else pd.DataFrame()
+                # Capture state after allocation
+                debug_record['token_exposures_after'] = token_exposures.copy()
+                debug_record['protocol_exposures_after'] = protocol_exposures.copy()
+            else:
+                # Not allocated, exposures unchanged
+                debug_record['token_exposures_after'] = token_exposures.copy()
+                debug_record['protocol_exposures_after'] = protocol_exposures.copy()
+
+            debug_info.append(debug_record)
+
+        return (pd.DataFrame(selected) if selected else pd.DataFrame()), debug_info
 
     def calculate_portfolio_exposures(
         self,
