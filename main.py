@@ -1,3 +1,5 @@
+import os
+import sys
 from datetime import datetime
 from data.refresh_pipeline import refresh_pipeline
 from data.rate_tracker import RateTracker
@@ -6,6 +8,14 @@ from config import settings
 
 def main():
     print("\n=== Sui Lending Bot: Refresh Started ===\n")
+
+    # Debug: Print environment info for cron troubleshooting
+    print("=== ENVIRONMENT DEBUG ===")
+    print(f"Working Directory: {os.getcwd()}")
+    print(f"Python: {sys.executable}")
+    print(f"Node.js available: {os.system('which node') == 0}")
+    print(f"NODE_PATH: {os.environ.get('NODE_PATH', 'NOT SET')}")
+    print("=========================\n")
 
     # Get current time
     current_time = datetime.now()

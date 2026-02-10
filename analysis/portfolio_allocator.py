@@ -157,17 +157,35 @@ class PortfolioAllocator:
         default_token_limit = portfolio_size * constraints['token_exposure_limit']
         token_overrides = constraints.get('token_exposure_overrides', {})
 
-        # Get borrow weights (token1 always 1.0, token2/3 from strategy)
-        weights = {
-            1: 1.0,  # Token1 always has weight 1.0
-            2: strategy_row.get('borrow_weight_2A', 1.0),
-            3: strategy_row.get('borrow_weight_3B', 1.0)
-        }
+        # Get position weights for exposure calculation
+        # See allocator_reference.md for formulas
+        from config.stablecoins import STABLECOIN_SYMBOLS
 
+        l_a = strategy_row.get('l_a', 1.0)
+        b_a = strategy_row.get('borrow_weight_2A', 1.0)
+        b_b = strategy_row.get('borrow_weight_3B', 1.0)
+
+        # Calculate exposure weights for each token
+        # Stablecoins use net lending formula: +L_A for token1, -B_B for token3
+        # Non-stablecoins (token2) use de-leveraged formula: B_A / L_A
         for token_num in [1, 2, 3]:
             token_contract = strategy_row[f'token{token_num}_contract']
             token_symbol = strategy_row[f'token{token_num}']
-            weight = weights[token_num]
+
+            # Determine exposure weight based on token position and type
+            is_stablecoin = token_symbol in STABLECOIN_SYMBOLS
+
+            if token_num == 1:
+                # Token1: Lent to Protocol A
+                weight = l_a if is_stablecoin else 1.0
+            elif token_num == 2:
+                # Token2: De-leveraged exposure B_A / L_A (applies to all tokens)
+                weight = b_a / l_a if l_a > 0 else 1.0
+            else:  # token_num == 3
+                # Token3: Borrowed from Protocol B
+                # Stablecoins: negative weight (borrowed position)
+                # Non-stablecoins: standard borrow weight
+                weight = -b_b if is_stablecoin else b_b
 
             # Check if token has specific override
             if token_symbol in token_overrides:
@@ -178,18 +196,43 @@ class PortfolioAllocator:
             current_exposure = token_exposures.get(token_contract, 0.0)
             remaining_room = token_limit - current_exposure
 
-            # Divide by weight to get max allocation amount
-            # e.g., if weight=1.3 and room=$13k, max allocation=$10k
-            max_allocation_for_this_token = remaining_room / weight if weight > 0 else remaining_room
+            # For negative weights (stablecoin borrows), exposure increases as we allocate
+            # For positive weights, standard calculation applies
+            if weight < 0:
+                # Negative weight: borrowed position
+                # We want |current_exposure + allocation × weight| ≤ token_limit
+                # This means: allocation × |weight| ≤ token_limit - |current_exposure|
+                max_allocation_for_this_token = (token_limit - abs(current_exposure)) / abs(weight) if weight != 0 else remaining_room
+            elif weight > 0:
+                # Positive weight: lent position (standard case)
+                max_allocation_for_this_token = remaining_room / weight if weight > 0 else remaining_room
+            else:
+                # Weight is zero: no constraint from this token
+                max_allocation_for_this_token = float('inf')
+
             max_amount = min(max_amount, max_allocation_for_this_token)
 
-        # Check protocol exposure constraints (both protocols)
+        # Check protocol exposure constraints
+        # Protocol A: full allocation (weight = 1.0)
+        # Protocol B: de-leveraged (weight = L_B / L_A)
+        # See allocator_reference.md for formula
         protocol_limit = portfolio_size * constraints['protocol_exposure_limit']
 
-        for protocol in [strategy_row['protocol_a'], strategy_row['protocol_b']]:
-            current_exposure = protocol_exposures.get(protocol, 0.0)
-            remaining_room = protocol_limit - current_exposure
-            max_amount = min(max_amount, remaining_room)
+        # Protocol A constraint
+        protocol_a = strategy_row['protocol_a']
+        current_exposure_a = protocol_exposures.get(protocol_a, 0.0)
+        remaining_room_a = protocol_limit - current_exposure_a
+        max_amount = min(max_amount, remaining_room_a)  # Weight = 1.0 for protocol A
+
+        # Protocol B constraint (de-leveraged by L_B / L_A)
+        protocol_b = strategy_row['protocol_b']
+        l_b = strategy_row.get('l_b', 1.0)
+        protocol_b_weight = l_b / l_a if l_a > 0 else 1.0
+
+        current_exposure_b = protocol_exposures.get(protocol_b, 0.0)
+        remaining_room_b = protocol_limit - current_exposure_b
+        max_allocation_for_protocol_b = remaining_room_b / protocol_b_weight if protocol_b_weight > 0 else remaining_room_b
+        max_amount = min(max_amount, max_allocation_for_protocol_b)
 
         return max(0.0, max_amount)  # Ensure non-negative
 
@@ -203,8 +246,11 @@ class PortfolioAllocator:
         """
         Update exposure tracking after allocating to a strategy.
 
-        Token exposure = allocation_amount * borrow_weight for that token.
-        For example, $10k allocation with token2 weight 1.3 = $13k token2 exposure.
+        Exposure calculation depends on token type and position:
+        - Stablecoins: Net lending formula (+L_A for token1, -B_B for token3)
+        - Non-stablecoins (token2): De-leveraged formula (B_A / L_A)
+
+        See allocator_reference.md for detailed formulas.
 
         Args:
             strategy_row: Strategy data
@@ -212,27 +258,54 @@ class PortfolioAllocator:
             token_exposures: Token exposure dict to update
             protocol_exposures: Protocol exposure dict to update
         """
-        # Get borrow weights (token1 always 1.0, token2/3 from strategy)
-        weights = {
-            1: 1.0,  # Token1 always has weight 1.0
-            2: strategy_row.get('borrow_weight_2A', 1.0),
-            3: strategy_row.get('borrow_weight_3B', 1.0)
-        }
+        # Get position weights
+        from config.stablecoins import STABLECOIN_SYMBOLS
 
-        # Update token exposures (multiply by weight)
+        l_a = strategy_row.get('l_a', 1.0)
+        b_a = strategy_row.get('borrow_weight_2A', 1.0)
+        b_b = strategy_row.get('borrow_weight_3B', 1.0)
+
+        # Update token exposures using appropriate weight for each position
         for token_num in [1, 2, 3]:
             token_contract = strategy_row[f'token{token_num}_contract']
-            weight = weights[token_num]
+            token_symbol = strategy_row[f'token{token_num}']
+
+            # Determine exposure weight based on token position and type
+            is_stablecoin = token_symbol in STABLECOIN_SYMBOLS
+
+            if token_num == 1:
+                # Token1: Lent to Protocol A
+                weight = l_a if is_stablecoin else 1.0
+            elif token_num == 2:
+                # Token2: De-leveraged exposure B_A / L_A
+                weight = b_a / l_a if l_a > 0 else 1.0
+            else:  # token_num == 3
+                # Token3: Borrowed from Protocol B
+                # Stablecoins: negative weight (net borrowing)
+                weight = -b_b if is_stablecoin else b_b
+
             exposure = allocation_amount * weight
             token_exposures[token_contract] = (
                 token_exposures.get(token_contract, 0.0) + exposure
             )
 
         # Update protocol exposures
-        for protocol in [strategy_row['protocol_a'], strategy_row['protocol_b']]:
-            protocol_exposures[protocol] = (
-                protocol_exposures.get(protocol, 0.0) + allocation_amount
-            )
+        # Protocol A: full allocation (weight = 1.0)
+        # Protocol B: de-leveraged (weight = L_B / L_A)
+        protocol_a = strategy_row['protocol_a']
+        protocol_b = strategy_row['protocol_b']
+        l_b = strategy_row.get('l_b', 1.0)
+
+        # Protocol A gets full allocation
+        protocol_exposures[protocol_a] = (
+            protocol_exposures.get(protocol_a, 0.0) + allocation_amount
+        )
+
+        # Protocol B gets de-leveraged allocation
+        protocol_b_weight = l_b / l_a if l_a > 0 else 1.0
+        protocol_exposures[protocol_b] = (
+            protocol_exposures.get(protocol_b, 0.0) + (allocation_amount * protocol_b_weight)
+        )
 
     def select_portfolio(
         self,
@@ -357,17 +430,23 @@ class PortfolioAllocator:
         """
         Calculate token and protocol exposures from portfolio.
 
+        Uses updated exposure formulas (see allocator_reference.md):
+        - Stablecoins: Net lending formula (+L_A for token1, -B_B for token3)
+        - Non-stablecoins (token2): De-leveraged formula (B_A / L_A)
+
         Args:
             portfolio_df: Portfolio with allocation_usd column
             portfolio_size: Total portfolio size in USD (not just allocated amount)
 
         Returns:
             Tuple of (token_exposures, protocol_exposures)
-            - token_exposures: {token_contract: {symbol, usd, pct}}
+            - token_exposures: {token_contract: {symbol, usd, pct, is_stablecoin}}
             - protocol_exposures: {protocol: {usd, pct}}
         """
         if portfolio_df.empty:
             return {}, {}
+
+        from config.stablecoins import STABLECOIN_SYMBOLS
 
         token_exposures = {}
         protocol_exposures = {}
@@ -375,52 +454,60 @@ class PortfolioAllocator:
         for _, row in portfolio_df.iterrows():
             allocation = row['allocation_usd']
 
-            # Get lending weights from strategy
-            l_a = row.get('l_a', 1.0)  # Lending weight for Protocol A
-            l_b = row.get('l_b', 1.0)  # Lending weight for Protocol B
+            # Get position weights
+            l_a = row.get('l_a', 1.0)
+            b_a = row.get('borrow_weight_2A', 1.0)
+            l_b = row.get('l_b', 1.0)
+            b_b = row.get('borrow_weight_3B', 1.0)
 
-            # Aggregate token exposures - ONLY COUNT LENDING, NOT BORROWING
-            # Token1 - lent on protocol A
-            token1_contract = row['token1_contract']
-            token1_symbol = row['token1']
-            token1_lend_amount = allocation * l_a
-            if token1_contract not in token_exposures:
-                token_exposures[token1_contract] = {
-                    'symbol': token1_symbol,
-                    'usd': 0.0,
-                    'pct': 0.0
-                }
-            token_exposures[token1_contract]['usd'] += token1_lend_amount
+            # Process each token using appropriate exposure formula
+            for token_num in [1, 2, 3]:
+                token_contract = row[f'token{token_num}_contract']
+                token_symbol = row[f'token{token_num}']
 
-            # Token2 - lent on protocol B
-            token2_contract = row['token2_contract']
-            token2_symbol = row['token2']
-            token2_lend_amount = allocation * l_b
-            if token2_contract not in token_exposures:
-                token_exposures[token2_contract] = {
-                    'symbol': token2_symbol,
-                    'usd': 0.0,
-                    'pct': 0.0
-                }
-            token_exposures[token2_contract]['usd'] += token2_lend_amount
+                # Initialize token entry if needed
+                if token_contract not in token_exposures:
+                    token_exposures[token_contract] = {
+                        'symbol': token_symbol,
+                        'usd': 0.0,
+                        'pct': 0.0,
+                        'is_stablecoin': token_symbol in STABLECOIN_SYMBOLS
+                    }
 
-            # Token3 - only borrowed, not lent (no exposure counted)
+                # Calculate exposure contribution based on token position and type
+                is_stablecoin = token_symbol in STABLECOIN_SYMBOLS
 
-            # Aggregate protocol exposures - ONLY COUNT LENDING
-            # Protocol A: allocation * l_a (token1 lent to A)
-            # Protocol B: allocation * l_b (token2 lent to B)
+                if token_num == 1:
+                    # Token1: Lent to Protocol A
+                    weight = l_a if is_stablecoin else l_a  # Both use l_a for now
+                elif token_num == 2:
+                    # Token2: De-leveraged exposure B_A / L_A
+                    weight = (b_a / l_a) if l_a > 0 else 1.0
+                else:  # token_num == 3
+                    # Token3: Borrowed from Protocol B
+                    # Stablecoins: negative weight (net borrowing)
+                    weight = -b_b if is_stablecoin else 0.0  # Non-stablecoins don't count token3
+
+                exposure_contribution = allocation * weight
+                token_exposures[token_contract]['usd'] += exposure_contribution
+
+            # Aggregate protocol exposures
+            # Protocol A: full allocation (normalized)
+            # Protocol B: de-leveraged (L_B / L_A)
+            # See allocator_reference.md for formula
             protocol_a = row['protocol_a']
             protocol_b = row['protocol_b']
 
-            # Protocol A gets token1 lending
+            # Protocol A: full allocation (weight = 1.0)
             if protocol_a not in protocol_exposures:
                 protocol_exposures[protocol_a] = {'usd': 0.0, 'pct': 0.0}
-            protocol_exposures[protocol_a]['usd'] += allocation * l_a
+            protocol_exposures[protocol_a]['usd'] += allocation
 
-            # Protocol B gets token2 lending
+            # Protocol B: de-leveraged allocation (weight = L_B / L_A)
+            protocol_b_weight = l_b / l_a if l_a > 0 else 1.0
             if protocol_b not in protocol_exposures:
                 protocol_exposures[protocol_b] = {'usd': 0.0, 'pct': 0.0}
-            protocol_exposures[protocol_b]['usd'] += allocation * l_b
+            protocol_exposures[protocol_b]['usd'] += allocation * protocol_b_weight
 
         # Calculate percentages against total portfolio size (not just allocated amount)
         for contract in token_exposures:

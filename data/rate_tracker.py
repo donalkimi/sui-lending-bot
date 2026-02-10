@@ -856,17 +856,31 @@ class RateTracker:
         cursor = conn.cursor()
 
         # Delete old analysis_cache entries
-        cursor.execute(
-            f"DELETE FROM analysis_cache WHERE created_at < {ph}",
-            (cutoff_time,)
-        )
+        # For PostgreSQL, convert Unix timestamp to timestamp type
+        if self.db_type == 'postgresql':
+            cursor.execute(
+                f"DELETE FROM analysis_cache WHERE created_at < to_timestamp({ph})",
+                (cutoff_time,)
+            )
+        else:
+            cursor.execute(
+                f"DELETE FROM analysis_cache WHERE created_at < {ph}",
+                (cutoff_time,)
+            )
         deleted_analysis = cursor.rowcount
 
         # Delete old chart_cache entries
-        cursor.execute(
-            f"DELETE FROM chart_cache WHERE created_at < {ph}",
-            (cutoff_time,)
-        )
+        # For PostgreSQL, convert Unix timestamp to timestamp type
+        if self.db_type == 'postgresql':
+            cursor.execute(
+                f"DELETE FROM chart_cache WHERE created_at < to_timestamp({ph})",
+                (cutoff_time,)
+            )
+        else:
+            cursor.execute(
+                f"DELETE FROM chart_cache WHERE created_at < {ph}",
+                (cutoff_time,)
+            )
         deleted_charts = cursor.rowcount
 
         conn.commit()

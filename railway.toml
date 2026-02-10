@@ -4,4 +4,5 @@
 
 [[cron]]
 schedule = "0 * * * *"  # Every hour
-command = "python main.py"
+# Ensure we're in the right directory and have Node.js in PATH
+command = "cd /app && export NODE_PATH=/app/data/alphalend/node_modules:/app/data/suilend/node_modules:/app/data/scallop_shared/node_modules:/app/data/navi/node_modules:/app/data/pebble/node_modules:/app/node_modules && python main.py"

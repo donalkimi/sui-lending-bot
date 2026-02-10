@@ -3397,88 +3397,198 @@ def render_allocation_tab(all_strategies_df: pd.DataFrame):
     st.markdown("---")
     st.subheader("⚙️ Allocation Constraints")
 
-    # Constraint inputs in two columns
-    col1, col2 = st.columns(2)
+    # ============================================================
+    # EXPOSURE LIMITS SECTION (2x2 grid)
+    # ============================================================
+    st.markdown("#### Exposure Limits")
 
-    with col1:
-        st.markdown("##### Exposure Limits")
-        constraints['token_exposure_limit'] = st.number_input(
-            "Max Token Exposure (%) - Default",
+    # First row: Default limits for token2 (non-stablecoin) and stablecoin
+    col_token2, col_stablecoin = st.columns(2)
+
+    with col_token2:
+        st.markdown("**Max Token2 Exposure**")
+        st.caption("Applies to non-stablecoin tokens (WAL, DEEP, SUI, etc.)")
+
+        constraints['token2_exposure_limit'] = st.number_input(
+            "Max Token2 Exposure (%)",
             min_value=0,
             max_value=100,
-            value=int(constraints.get('token_exposure_limit', 0.30) * 100),
+            value=int(constraints.get('token2_exposure_limit', constraints.get('token_exposure_limit', 0.30)) * 100),
             step=5,
-            help="Default maximum allocation for tokens without specific overrides",
-            key="token_exposure_input"
+            help="Maximum allocation for non-stablecoin tokens",
+            key="token2_exposure_input"
         ) / 100.0
 
-        # Token-specific exposure overrides
-        with st.expander("🎚️ Per-Token Exposure Overrides"):
-            st.caption(
-                "Set custom exposure limits for specific tokens. "
-                f"Tokens not listed use the default {constraints['token_exposure_limit']*100:.0f}% limit."
-            )
+    with col_stablecoin:
+        st.markdown("**Max Stablecoin Exposure**")
+        st.caption("Applies to stablecoins (USDC, USDT, etc.)")
 
-            # Get current overrides
-            token_overrides = constraints.get('token_exposure_overrides', {})
+        stablecoin_limit_input = st.number_input(
+            "Max Stablecoin Exposure (%) or -1 for ∞",
+            min_value=-1,
+            max_value=200,
+            value=int(constraints.get('stablecoin_exposure_limit', -1)) if constraints.get('stablecoin_exposure_limit', -1) >= 0 else -1,
+            step=5,
+            help="Maximum allocation for stablecoins. -1 = unlimited",
+            key="stablecoin_exposure_input"
+        )
 
-            # Get unique tokens from strategies
+        # Store as -1 for infinite, or as decimal for bounded
+        if stablecoin_limit_input < 0:
+            constraints['stablecoin_exposure_limit'] = -1
+            st.info("∞ Unlimited stablecoin exposure")
+        else:
+            constraints['stablecoin_exposure_limit'] = stablecoin_limit_input / 100.0
+            st.info(f"Max {stablecoin_limit_input}% stablecoin exposure")
+
+    # Second row: Per-token overrides for token2 (non-stablecoin) and stablecoin
+    col_token2_overrides, col_stablecoin_overrides = st.columns(2)
+
+    with col_token2_overrides:
+        # Per-Token2 Exposure Overrides (NON-STABLECOINS ONLY)
+        with st.expander("🎚️ Per-Token2 Exposure Overrides"):
+            st.caption("Set custom limits for specific non-stablecoin tokens")
+
+            token2_overrides = constraints.get('token2_exposure_overrides', constraints.get('token_exposure_overrides', {}))
+
+            # Get unique NON-STABLECOIN tokens from strategies
             if not all_strategies_df.empty:
                 all_tokens = set()
                 for col in ['token1', 'token2', 'token3']:
                     if col in all_strategies_df.columns:
                         all_tokens.update(all_strategies_df[col].unique())
-                all_tokens = sorted(list(all_tokens))
+                # Filter out stablecoins
+                from config.stablecoins import STABLECOIN_SYMBOLS
+                non_stablecoin_tokens = sorted([t for t in all_tokens if t not in STABLECOIN_SYMBOLS])
             else:
-                all_tokens = ['USDC', 'USDT', 'SUI', 'DEEP', 'CETUS', 'AUSD']
+                non_stablecoin_tokens = ['SUI', 'DEEP', 'CETUS', 'WAL']
 
-            # Add override controls
-            col_token, col_limit, col_action = st.columns([2, 1, 1])
+            if non_stablecoin_tokens:
+                # Add override controls
+                col_token, col_limit, col_action = st.columns([2, 1, 1])
+                with col_token:
+                    selected_token = st.selectbox(
+                        "Select Non-Stablecoin Token",
+                        options=non_stablecoin_tokens,
+                        key="token2_override_select"
+                    )
+                with col_limit:
+                    override_limit = st.number_input(
+                        "Max Exposure (%)",
+                        min_value=0,
+                        max_value=100,
+                        value=int(token2_overrides.get(selected_token, 30)),
+                        step=5,
+                        key="token2_override_limit"
+                    )
+                with col_action:
+                    st.write("")  # Spacer
+                    st.write("")  # Spacer
+                    if st.button("Add/Update", key="add_token2_override"):
+                        token2_overrides[selected_token] = override_limit / 100.0
+                        constraints['token2_exposure_overrides'] = token2_overrides
+                        st.success(f"✓ {selected_token}: {override_limit}%")
+                        st.rerun()
 
-            with col_token:
-                selected_token = st.selectbox(
-                    "Select Token",
-                    options=all_tokens,
-                    key="token_override_select"
-                )
-
-            with col_limit:
-                override_limit = st.number_input(
-                    "Max Exposure (%)",
-                    min_value=0,
-                    max_value=100,
-                    value=int(token_overrides.get(selected_token, 30)),
-                    step=5,
-                    key="token_override_limit"
-                )
-
-            with col_action:
-                st.write("")  # Spacer
-                st.write("")  # Spacer
-                if st.button("Add/Update", key="add_token_override"):
-                    token_overrides[selected_token] = override_limit / 100.0
-                    constraints['token_exposure_overrides'] = token_overrides
-                    st.success(f"✓ {selected_token}: {override_limit}%")
-                    st.rerun()
-
-            # Show current overrides
-            if token_overrides:
-                st.markdown("**Current Overrides:**")
-                override_rows = []
-                for token, limit in sorted(token_overrides.items()):
-                    col_name, col_val, col_remove = st.columns([2, 1, 1])
-                    with col_name:
-                        st.text(token)
-                    with col_val:
-                        st.text(f"{limit*100:.0f}%")
-                    with col_remove:
-                        if st.button("❌", key=f"remove_override_{token}"):
-                            del token_overrides[token]
-                            constraints['token_exposure_overrides'] = token_overrides
-                            st.rerun()
+                # Show current overrides
+                if token2_overrides:
+                    st.markdown("**Current Overrides:**")
+                    for token, limit in sorted(token2_overrides.items()):
+                        col_name, col_val, col_remove = st.columns([2, 1, 1])
+                        with col_name:
+                            st.text(token)
+                        with col_val:
+                            st.text(f"{limit*100:.0f}%")
+                        with col_remove:
+                            if st.button("❌", key=f"remove_token2_override_{token}"):
+                                del token2_overrides[token]
+                                constraints['token2_exposure_overrides'] = token2_overrides
+                                st.rerun()
+                else:
+                    st.info("No overrides. All non-stablecoins use default limit.")
             else:
-                st.info("No token overrides set. All tokens use default limit.")
+                st.info("No non-stablecoin tokens available")
 
+    with col_stablecoin_overrides:
+        # Per-Stablecoin Exposure Overrides (STABLECOINS ONLY)
+        with st.expander("🎚️ Per-Stablecoin Exposure Overrides"):
+            st.caption("Set custom limits for specific stablecoins")
+
+            stablecoin_overrides = constraints.get('stablecoin_exposure_overrides', {})
+
+            # Get unique STABLECOIN tokens from strategies
+            if not all_strategies_df.empty:
+                all_tokens = set()
+                for col in ['token1', 'token2', 'token3']:
+                    if col in all_strategies_df.columns:
+                        all_tokens.update(all_strategies_df[col].unique())
+                # Filter to stablecoins only
+                from config.stablecoins import STABLECOIN_SYMBOLS
+                stablecoin_tokens = sorted([t for t in all_tokens if t in STABLECOIN_SYMBOLS])
+            else:
+                stablecoin_tokens = list(STABLECOIN_SYMBOLS)
+
+            if stablecoin_tokens:
+                # Add override controls
+                col_token, col_limit, col_action = st.columns([2, 1, 1])
+                with col_token:
+                    selected_stablecoin = st.selectbox(
+                        "Select Stablecoin",
+                        options=stablecoin_tokens,
+                        key="stablecoin_override_select"
+                    )
+                with col_limit:
+                    override_limit = st.number_input(
+                        "Max Exposure (%) or -1 for ∞",
+                        min_value=-1,
+                        max_value=200,
+                        value=int(stablecoin_overrides.get(selected_stablecoin, -1)) if stablecoin_overrides.get(selected_stablecoin, -1) >= 0 else -1,
+                        step=5,
+                        key="stablecoin_override_limit"
+                    )
+                with col_action:
+                    st.write("")  # Spacer
+                    st.write("")  # Spacer
+                    if st.button("Add/Update", key="add_stablecoin_override"):
+                        if override_limit < 0:
+                            stablecoin_overrides[selected_stablecoin] = -1
+                            st.success(f"✓ {selected_stablecoin}: ∞ (unlimited)")
+                        else:
+                            stablecoin_overrides[selected_stablecoin] = override_limit / 100.0
+                            st.success(f"✓ {selected_stablecoin}: {override_limit}%")
+                        constraints['stablecoin_exposure_overrides'] = stablecoin_overrides
+                        st.rerun()
+
+                # Show current overrides
+                if stablecoin_overrides:
+                    st.markdown("**Current Overrides:**")
+                    for token, limit in sorted(stablecoin_overrides.items()):
+                        col_name, col_val, col_remove = st.columns([2, 1, 1])
+                        with col_name:
+                            st.text(token)
+                        with col_val:
+                            if limit < 0:
+                                st.text("∞")
+                            else:
+                                st.text(f"{limit*100:.0f}%")
+                        with col_remove:
+                            if st.button("❌", key=f"remove_stablecoin_override_{token}"):
+                                del stablecoin_overrides[token]
+                                constraints['stablecoin_exposure_overrides'] = stablecoin_overrides
+                                st.rerun()
+                else:
+                    st.info("No overrides. All stablecoins use default limit.")
+            else:
+                st.info("No stablecoin tokens available")
+
+    st.markdown("---")
+
+    # ============================================================
+    # PROTOCOL & STRATEGY LIMITS (horizontal)
+    # ============================================================
+    col_protocol, col_max_strategies = st.columns(2)
+
+    with col_protocol:
         constraints['protocol_exposure_limit'] = st.number_input(
             "Max Protocol Exposure (%)",
             min_value=0,
@@ -3489,63 +3599,100 @@ def render_allocation_tab(all_strategies_df: pd.DataFrame):
             key="protocol_exposure_input"
         ) / 100.0
 
+    with col_max_strategies:
         constraints['max_strategies'] = st.number_input(
             "Max Number of Strategies",
             min_value=1,
-            max_value=20,
+            max_value=100,
             value=constraints.get('max_strategies', 5),
             step=1,
             help="Maximum strategies in portfolio",
             key="max_strategies_input"
         )
 
-    with col2:
-        st.markdown("##### APR Weighting")
-        st.caption("Enter any values - they'll be auto-normalized to 100%. Example: 1,2,2,5 → 10%,20%,20%,50%")
-
-        apr_weights = constraints.get('apr_weights', {})
-
-        # Get current weights as raw values (multiply by 100 for display)
-        w_net = st.number_input("Net APR Weight", min_value=0.0, value=float(apr_weights.get('net_apr', 0.30)*100), step=1.0, key="w_net")
-        w_5d = st.number_input("5-Day APR Weight", min_value=0.0, value=float(apr_weights.get('apr5', 0.30)*100), step=1.0, key="w_5d")
-        w_30d = st.number_input("30-Day APR Weight", min_value=0.0, value=float(apr_weights.get('apr30', 0.30)*100), step=1.0, key="w_30d")
-        w_90d = st.number_input("90-Day APR Weight", min_value=0.0, value=float(apr_weights.get('apr90', 0.10)*100), step=1.0, key="w_90d")
-
-        # Calculate sum and normalize
-        weight_sum = w_net + w_5d + w_30d + w_90d
-
-        if weight_sum > 0:
-            # Normalize to percentages
-            normalized_net = (w_net / weight_sum) * 100
-            normalized_5d = (w_5d / weight_sum) * 100
-            normalized_30d = (w_30d / weight_sum) * 100
-            normalized_90d = (w_90d / weight_sum) * 100
-
-            # Show normalized percentages
-            st.success(
-                f"✓ Normalized: Net={normalized_net:.1f}%, 5d={normalized_5d:.1f}%, "
-                f"30d={normalized_30d:.1f}%, 90d={normalized_90d:.1f}%"
-            )
-
-            # Store as decimals (0-1 range)
-            apr_weights['net_apr'] = normalized_net / 100.0
-            apr_weights['apr5'] = normalized_5d / 100.0
-            apr_weights['apr30'] = normalized_30d / 100.0
-            apr_weights['apr90'] = normalized_90d / 100.0
-        else:
-            st.warning("⚠️ All weights are 0. Using equal weights (25% each).")
-            # Default to equal weights
-            apr_weights['net_apr'] = 0.25
-            apr_weights['apr5'] = 0.25
-            apr_weights['apr30'] = 0.25
-            apr_weights['apr90'] = 0.25
-
-        constraints['apr_weights'] = apr_weights
-
     st.markdown("---")
 
     # Stablecoin Preferences
     constraints = render_stablecoin_preferences(constraints)
+
+    st.markdown("---")
+
+    # ============================================================
+    # APR WEIGHTINGS (horizontal layout - 4 columns)
+    # ============================================================
+    st.markdown("#### APR Weightings")
+    st.caption("Enter any values - they'll be auto-normalized to 100%. Example: 1,2,2,5 → 10%,20%,20%,50%")
+
+    col_net, col_5d, col_30d, col_90d = st.columns(4)
+
+    apr_weights = constraints.get('apr_weights', {})
+
+    with col_net:
+        w_net = st.number_input(
+            "Net APR Weight",
+            min_value=0.0,
+            value=float(apr_weights.get('net_apr', 0.30)*100),
+            step=1.0,
+            key="w_net"
+        )
+
+    with col_5d:
+        w_5d = st.number_input(
+            "5-Day APR Weight",
+            min_value=0.0,
+            value=float(apr_weights.get('apr5', 0.30)*100),
+            step=1.0,
+            key="w_5d"
+        )
+
+    with col_30d:
+        w_30d = st.number_input(
+            "30-Day APR Weight",
+            min_value=0.0,
+            value=float(apr_weights.get('apr30', 0.30)*100),
+            step=1.0,
+            key="w_30d"
+        )
+
+    with col_90d:
+        w_90d = st.number_input(
+            "90-Day APR Weight",
+            min_value=0.0,
+            value=float(apr_weights.get('apr90', 0.10)*100),
+            step=1.0,
+            key="w_90d"
+        )
+
+    # Calculate sum and normalize
+    weight_sum = w_net + w_5d + w_30d + w_90d
+
+    if weight_sum > 0:
+        # Normalize to percentages
+        normalized_net = (w_net / weight_sum) * 100
+        normalized_5d = (w_5d / weight_sum) * 100
+        normalized_30d = (w_30d / weight_sum) * 100
+        normalized_90d = (w_90d / weight_sum) * 100
+
+        # Show normalized percentages
+        st.success(
+            f"✓ Normalized: Net={normalized_net:.1f}%, 5d={normalized_5d:.1f}%, "
+            f"30d={normalized_30d:.1f}%, 90d={normalized_90d:.1f}%"
+        )
+
+        # Store as decimals (0-1 range) - following Design Note #5
+        apr_weights['net_apr'] = normalized_net / 100.0
+        apr_weights['apr5'] = normalized_5d / 100.0
+        apr_weights['apr30'] = normalized_30d / 100.0
+        apr_weights['apr90'] = normalized_90d / 100.0
+    else:
+        st.warning("⚠️ All weights are 0. Using equal weights (25% each).")
+        # Default to equal weights
+        apr_weights['net_apr'] = 0.25
+        apr_weights['apr5'] = 0.25
+        apr_weights['apr30'] = 0.25
+        apr_weights['apr90'] = 0.25
+
+    constraints['apr_weights'] = apr_weights
 
     # Save constraints to session state
     st.session_state.allocation_constraints = constraints
@@ -3603,12 +3750,18 @@ def render_allocation_tab(all_strategies_df: pd.DataFrame):
                 # Sort by adjusted APR (descending)
                 strategies = strategies.sort_values('adjusted_apr', ascending=False)
 
-                # Display table
-                display_df = strategies[[
+                # Display table - select columns (check if max_size_usd exists)
+                base_columns = [
                     'token1', 'token2', 'token3',
                     'protocol_a', 'protocol_b',
                     'net_apr', 'apr5', 'apr30', 'blended_apr', 'stablecoin_multiplier', 'adjusted_apr'
-                ]].copy()
+                ]
+
+                # Add max_size_usd if it exists
+                if 'max_size_usd' in strategies.columns:
+                    base_columns.append('max_size_usd')
+
+                display_df = strategies[base_columns].copy()
 
                 # Format for display
                 display_df['net_apr'] = display_df['net_apr'].apply(lambda x: f"{x*100:.2f}%")
@@ -3618,12 +3771,20 @@ def render_allocation_tab(all_strategies_df: pd.DataFrame):
                 display_df['stablecoin_multiplier'] = display_df['stablecoin_multiplier'].apply(lambda x: f"{x:.2f}x")
                 display_df['adjusted_apr'] = display_df['adjusted_apr'].apply(lambda x: f"{x*100:.2f}%")
 
+                if 'max_size_usd' in display_df.columns:
+                    display_df['max_size_usd'] = display_df['max_size_usd'].apply(lambda x: f"${x:,.0f}" if pd.notna(x) else "N/A")
+
                 # Rename columns
-                display_df.columns = [
+                column_names = [
                     'Token1', 'Token2', 'Token3',
                     'Protocol A', 'Protocol B',
                     'Net APR', 'APR5', 'APR30', 'Blended APR', 'Stable Mult', 'Adjusted APR'
                 ]
+
+                if 'max_size_usd' in display_df.columns:
+                    column_names.append('Max Size')
+
+                display_df.columns = column_names
 
                 # Show count
                 st.info(f"📊 Showing **{len(display_df)}** strategies meeting confidence threshold")
@@ -3855,14 +4016,20 @@ def render_portfolio_preview(portfolio_df: pd.DataFrame, portfolio_size: float, 
         "Blended APR is a weighted average of historical APRs, used for ranking only."
     )
 
-    # Prepare display DataFrame
-    display_df = portfolio_df[[
+    # Prepare display DataFrame - select columns (check if max_size_usd exists)
+    base_columns = [
         'token1', 'token2', 'token3',
         'protocol_a', 'protocol_b',
         'net_apr', 'blended_apr', 'adjusted_apr',
         'stablecoin_multiplier', 'stablecoins_in_strategy',
         'allocation_usd'
-    ]].copy()
+    ]
+
+    # Add max_size_usd if it exists
+    if 'max_size_usd' in portfolio_df.columns:
+        base_columns.append('max_size_usd')
+
+    display_df = portfolio_df[base_columns].copy()
 
     # Format columns
     display_df['net_apr'] = display_df['net_apr'].apply(lambda x: f"{x*100:.2f}%")
@@ -3876,8 +4043,11 @@ def render_portfolio_preview(portfolio_df: pd.DataFrame, portfolio_size: float, 
     )
     display_df['allocation_usd'] = display_df['allocation_usd'].apply(lambda x: f"${x:,.0f}")
 
+    if 'max_size_usd' in display_df.columns:
+        display_df['max_size_usd'] = display_df['max_size_usd'].apply(lambda x: f"${x:,.0f}" if pd.notna(x) else "N/A")
+
     # Rename columns for display
-    display_df = display_df.rename(columns={
+    rename_dict = {
         'token1': 'Token 1',
         'token2': 'Token 2',
         'token3': 'Token 3',
@@ -3889,7 +4059,12 @@ def render_portfolio_preview(portfolio_df: pd.DataFrame, portfolio_size: float, 
         'stablecoin_multiplier': 'Penalty',
         'stablecoins_in_strategy': 'Stablecoins',
         'allocation_usd': 'Allocation'
-    })
+    }
+
+    if 'max_size_usd' in display_df.columns:
+        rename_dict['max_size_usd'] = 'Max Size'
+
+    display_df = display_df.rename(columns=rename_dict)
 
     # Display table with highlighting
     st.dataframe(
