@@ -1029,6 +1029,227 @@ if any(p <= 1e-9 for p in [price_1A, price_2A, price_2B, price_3B]):
     continue
 ```
 
+### 5. Portfolio Allocator (Capital Allocation)
+
+**File**: `analysis/portfolio_allocator.py`
+
+**Purpose**: Allocates capital across strategies using greedy algorithm with constraints and iterative liquidity updates.
+
+#### Core Algorithm: Greedy Selection with Iterative Updates
+
+**Location**: `select_portfolio()` method, lines 394-580
+
+**Algorithm Flow**:
+```
+1. Filter strategies by confidence threshold
+2. Calculate blended APR (weighted average of net_apr, apr5, apr30, apr90)
+3. Apply stablecoin preference penalties
+4. Sort by adjusted APR (descending)
+5. Initialize available_borrow matrix (NEW - February 2026)
+6. Greedy allocation loop:
+   For each strategy in ranked order:
+     a. Get current max_size (possibly recalculated)
+     b. Calculate max allocation (constraints: capital, exposures, max_size)
+     c. Allocate to strategy
+     d. Update token/protocol exposures
+     e. Update available_borrow matrix (NEW)
+     f. Recalculate max_size for remaining strategies (NEW)
+```
+
+#### Iterative Liquidity Updates (February 2026)
+
+**Feature**: `DEBUG_ENABLE_ITERATIVE_LIQUIDITY_UPDATES` in config/settings.py (default: True)
+
+**NOTE**: This is a DEBUG flag only for testing/comparison. Once validated, this flag will be removed and iterative updates will be always-on (correct behavior).
+
+**Problem Solved**: Previous implementation calculated max_size once per strategy based on initial available_borrow. This allowed portfolios to over-borrow beyond actual protocol liquidity, as later strategies didn't account for borrowing by earlier strategies.
+
+**Solution**: After each allocation, update the available_borrow matrix and recalculate max_size for all remaining strategies.
+
+##### Key Methods:
+
+**1. `_prepare_available_borrow_matrix(strategies: pd.DataFrame) -> pd.DataFrame`**
+
+Creates Token×Protocol matrix from strategy data.
+
+**Structure**:
+```
+         Navi      Suilend   Pebble    AlphaFi
+USDC     500000    800000    1000000   300000
+WAL      150000    200000    100000    50000
+DEEP     75000     100000    50000     25000
+```
+
+**Process**:
+1. Collect all unique tokens and protocols from strategies
+2. Create empty DataFrame (tokens as index, protocols as columns)
+3. Populate with available_borrow values from strategies
+4. Use max() when aggregating (multiple strategies may report different values)
+
+**2. `_update_available_borrow(strategy_row, allocation_amount, available_borrow)`**
+
+Updates the matrix after allocating to a strategy (in-place modification).
+
+**Logic**:
+```python
+# Extract borrow multipliers
+b_a = strategy['borrow_weight_2A']  # Token2 borrow multiplier
+b_b = strategy['borrow_weight_3B']  # Token3 borrow multiplier
+
+# Calculate borrow amounts
+borrow_2A = allocation_amount * b_a  # USD borrowed on protocol_a
+borrow_3B = allocation_amount * b_b  # USD borrowed on protocol_b
+
+# Update matrix
+available_borrow[token2][protocol_a] -= borrow_2A
+available_borrow[token3][protocol_b] -= borrow_3B
+
+# Clamp to prevent negatives
+available_borrow = max(0, available_borrow)
+```
+
+**Edge Cases**:
+- Unlevered strategies (token3 = None): Skip token3 update
+- Missing token/protocol: Log warning, skip update
+- Negative values: Clamp to 0, log warning
+
+**3. `_recalculate_max_sizes(strategies, available_borrow) -> pd.DataFrame`**
+
+Recalculates max_size for strategies using current available_borrow.
+
+**Formula** (same as position_calculator.py):
+```python
+max_size = min(
+    available_borrow[token2][protocol_a] / b_a,
+    available_borrow[token3][protocol_b] / b_b
+)
+```
+
+**Optimization**: Only called for remaining strategies (those with index > current)
+
+##### Example Impact:
+
+**Scenario**: 5 strategies all borrowing WAL from Pebble (initial available: $100k)
+
+**WITHOUT iterative updates**:
+- Strategy 1: Allocates $100k → borrows $100k WAL
+- Strategy 2: Allocates $100k → borrows $100k WAL
+- Strategy 3: Allocates $100k → borrows $100k WAL
+- Total WAL borrowed: $300k ❌ **Over-borrowed by $200k!**
+
+**WITH iterative updates**:
+- Strategy 1: Allocates $100k → borrows $100k WAL → WAL available now $0
+- Strategy 2: max_size recalculated to $0 → cannot allocate
+- Strategy 3: max_size recalculated to $0 → cannot allocate
+- Total WAL borrowed: $100k ✅ **Respects liquidity limit!**
+
+##### Debug Information:
+
+The allocator tracks iterative updates in debug_info:
+```python
+debug_record = {
+    'max_size_before': 100000.0,
+    'max_size_after': 0.0,  # After first allocation
+    'available_borrow_snapshot': {...}  # Matrix state after allocation
+}
+```
+
+#### Extension Architecture: Market Impact Adjustments
+
+**Design Pattern**: Plugin system for future features
+
+**Current**: Liquidity updates only
+
+**Future** (placeholder methods ready):
+- `_update_interest_rate_curves()` - Adjust rates based on utilization changes
+- `_update_collateral_ratios()` - Dynamic collateral requirements
+- Other market impact modeling
+
+**Interface**:
+```python
+def _apply_market_impact_adjustments(
+    strategy_row,
+    allocation_amount,
+    market_state  # Contains: available_borrow, rate_curves, etc.
+):
+    # Phase 1: Update liquidity (implemented)
+    _update_available_borrow(...)
+
+    # Phase 2: Update rates (future)
+    # if 'rate_curves' in market_state:
+    #     _update_interest_rate_curves(...)
+
+    # Phase 3: Other adjustments (future)
+```
+
+**Benefit**: New features can be added without modifying the greedy loop.
+
+##### Interest Rate Model (IRM) Effects - Future Enhancement
+
+**Concept**: As we borrow more from a protocol, utilization increases, which affects interest rates via the protocol's interest rate model.
+
+**Example**:
+- Protocol has $1M available, current utilization 50%, borrow rate 5%
+- We borrow $500k → utilization increases to 75% → borrow rate increases to 12%
+- Strategies borrowing from this protocol now have lower net APR
+- May need to re-sort strategies after rate changes
+
+**Implementation Approach** (future):
+1. Fetch IRM parameters from protocols (slope, kink, optimal utilization)
+2. After each allocation, calculate new utilization
+3. Apply IRM formula to get new rates
+4. Update strategy net_apr for affected strategies
+5. Optionally re-sort strategies by new adjusted_apr
+
+**Note**: This is a placeholder for future development. Current implementation only handles liquidity updates.
+
+#### Constraints System
+
+The allocator respects multiple constraint types:
+
+**1. Capital Constraint**: `remaining_capital` at each step
+
+**2. Token Exposure Limits**:
+- Per-token limits (default 30% per token)
+- Per-token overrides via `token_exposure_overrides`
+- Stablecoin limits (separate from regular tokens)
+
+**3. Protocol Exposure Limits**: Default 40% per protocol
+
+**4. Strategy Count**: `max_strategies` parameter (default 5-10)
+
+**5. Liquidity Constraints**: `max_size` per strategy (updated iteratively)
+
+#### Performance Considerations
+
+**Complexity**:
+- Without iterative updates: O(N) where N = number of strategies
+- With iterative updates: O(N²) worst case (recalculate remaining strategies each time)
+
+**Optimizations**:
+- Only recalculate strategies with index > current (not all strategies)
+- Vectorized max_size calculation using pandas
+- Skip recalculation if no remaining strategies
+
+**Typical Performance**: <1 second for 100 strategies
+
+#### Testing & Verification
+
+**Test Script**: `Scripts/test_iterative_updates.py`
+
+Demonstrates the difference between enabled/disabled iterative updates:
+- Creates sample strategies borrowing same token from same protocol
+- Compares total allocated capital and borrow amounts
+- Verifies liquidity constraints are respected
+
+**Verification**:
+```python
+# Run test
+python Scripts/test_iterative_updates.py
+
+# Expected: With updates allocates less capital, respects liquidity limits
+```
+
 ---
 
 ## Common Workflows

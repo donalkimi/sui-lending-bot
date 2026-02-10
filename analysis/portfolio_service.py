@@ -20,6 +20,7 @@ import json
 from typing import Dict, List, Optional, Tuple, Union
 import pandas as pd
 from datetime import datetime
+from utils.time_helpers import to_seconds
 
 # PostgreSQL support
 try:
@@ -187,7 +188,7 @@ class PortfolioService:
             is_paper_trade,
             user_id,
             datetime.now(),  # created_timestamp
-            datetime.fromtimestamp(entry_timestamp),  # entry_timestamp
+            datetime.fromtimestamp(to_seconds(entry_timestamp)),  # entry_timestamp - handle any timestamp format
             self._to_native_type(portfolio_size),
             self._to_native_type(total_allocated),
             self._to_native_type(utilization_pct),
@@ -197,6 +198,55 @@ class PortfolioService:
         ))
 
         self.conn.commit()
+
+        # Step 2: Create position records for each strategy in the portfolio
+        # Import PositionService to create positions with portfolio_id link
+        from analysis.position_service import PositionService
+        position_service = PositionService(self.conn, self.engine)
+
+        created_positions = []
+        for idx, strategy_row in portfolio_df.iterrows():
+            try:
+                # Ensure strategy_row has timestamp (required by create_position)
+                strategy_row = strategy_row.copy()
+                if 'timestamp' not in strategy_row or strategy_row['timestamp'] is None:
+                    strategy_row['timestamp'] = entry_timestamp
+
+                # Extract position multipliers from strategy
+                positions_dict = {
+                    'l_a': strategy_row.get('l_a', strategy_row.get('L_A', 0)),
+                    'b_a': strategy_row.get('b_a', strategy_row.get('B_A', 0)),
+                    'l_b': strategy_row.get('l_b', strategy_row.get('L_B', 0)),
+                    'b_b': strategy_row.get('b_b', strategy_row.get('B_B'))
+                }
+
+                # Create position with portfolio_id link
+                position_id = position_service.create_position(
+                    strategy_row=strategy_row,
+                    positions=positions_dict,
+                    token1=strategy_row['token1'],
+                    token2=strategy_row['token2'],
+                    token3=strategy_row.get('token3'),
+                    token1_contract=strategy_row['token1_contract'],
+                    token2_contract=strategy_row['token2_contract'],
+                    token3_contract=strategy_row.get('token3_contract'),
+                    protocol_a=strategy_row['protocol_a'],
+                    protocol_b=strategy_row['protocol_b'],
+                    deployment_usd=strategy_row['allocation_usd'],
+                    is_paper_trade=is_paper_trade,
+                    execution_time=entry_timestamp,
+                    user_id=user_id,
+                    notes=f"Portfolio: {portfolio_name}",
+                    portfolio_id=portfolio_id  # Link to portfolio
+                )
+                created_positions.append(position_id)
+
+            except Exception as e:
+                # Log error but continue with other positions
+                print(f"⚠️  Failed to create position for strategy {idx}: {e}")
+                continue
+
+        print(f"✅ Created portfolio '{portfolio_name}' with {len(created_positions)}/{len(portfolio_df)} positions")
 
         return portfolio_id
 
@@ -241,22 +291,40 @@ class PortfolioService:
 
     def get_portfolio_positions(self, portfolio_id: str) -> pd.DataFrame:
         """
-        Get all positions in a portfolio.
+        Get all active positions in a portfolio.
 
         Args:
             portfolio_id: Portfolio UUID
 
         Returns:
-            DataFrame with position records linked to this portfolio
+            DataFrame with active position records linked to this portfolio
         """
         ph = self._get_placeholder()
         query = f"""
         SELECT *
         FROM positions
         WHERE portfolio_id = {ph}
+          AND status = 'active'
         ORDER BY deployment_usd DESC
         """
         positions = pd.read_sql_query(query, self.engine, params=(portfolio_id,))
+        return positions
+
+    def get_standalone_positions(self) -> pd.DataFrame:
+        """
+        Get all standalone positions (not part of any portfolio).
+
+        Returns:
+            DataFrame with active position records where portfolio_id IS NULL
+        """
+        query = """
+        SELECT *
+        FROM positions
+        WHERE portfolio_id IS NULL
+          AND status = 'active'
+        ORDER BY deployment_usd DESC
+        """
+        positions = pd.read_sql_query(query, self.engine)
         return positions
 
     def calculate_portfolio_pnl(
@@ -356,7 +424,7 @@ class PortfolioService:
                 updated_at = CURRENT_TIMESTAMP
             WHERE portfolio_id = {ph}
         """, (
-            datetime.fromtimestamp(close_timestamp),
+            datetime.fromtimestamp(to_seconds(close_timestamp)),
             close_reason,
             close_notes,
             portfolio_id
@@ -384,7 +452,7 @@ class PortfolioService:
         ph = self._get_placeholder()
 
         last_rebalance_dt = (
-            datetime.fromtimestamp(last_rebalance_timestamp)
+            datetime.fromtimestamp(to_seconds(last_rebalance_timestamp))
             if last_rebalance_timestamp
             else None
         )

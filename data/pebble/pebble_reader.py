@@ -359,7 +359,7 @@ class PebbleReader:
 
                 total_pools += 1
 
-        print(f"\tFound {total_pools} active pools across all markets")
+        print(f"\t\tfound {total_pools} active pools across all markets")
 
         lend_rates = pd.DataFrame(lend_rates_data)
         borrow_rates = pd.DataFrame(borrow_rates_data)
@@ -370,7 +370,7 @@ class PebbleReader:
             lend_rates, borrow_rates, collateral_ratios
         )
 
-        print(f"\tAfter dedup: {len(lend_rates)} unique tokens")
+        print(f"\t\tAfter dedup: {len(lend_rates)} unique tokens")
 
         return lend_rates, borrow_rates, collateral_ratios
 

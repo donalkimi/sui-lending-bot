@@ -131,7 +131,8 @@ class PositionService:
         notes: Optional[str] = None,
         wallet_address: Optional[str] = None,
         transaction_hash_open: Optional[str] = None,
-        on_chain_position_id: Optional[str] = None
+        on_chain_position_id: Optional[str] = None,
+        portfolio_id: Optional[str] = None
     ) -> str:
         """
         Create a new position (Phase 1: paper trade, Phase 2: real capital)
@@ -155,6 +156,7 @@ class PositionService:
             wallet_address: Optional wallet address (Phase 2)
             transaction_hash_open: Optional transaction hash for opening (Phase 2)
             on_chain_position_id: Optional on-chain position ID (Phase 2)
+            portfolio_id: Optional portfolio UUID (None = standalone position, UUID = portfolio member)
 
         Returns:
             position_id: UUID of created position
@@ -226,8 +228,8 @@ class PositionService:
         # Insert position
         cursor = self.conn.cursor()
         ph = self._get_placeholder()
-        placeholders = ', '.join([ph] * 47)  # 47 values
-        
+        placeholders = ', '.join([ph] * 48)  # 48 values (added portfolio_id)
+
         try:
             cursor.execute(f"""
                 INSERT INTO positions (
@@ -245,7 +247,8 @@ class PositionService:
                     entry_net_apr, entry_apr5, entry_apr30, entry_apr90, entry_days_to_breakeven, entry_liquidation_distance,
                     entry_max_size_usd, entry_borrow_fee_2a, entry_borrow_fee_3b,
                     entry_borrow_weight_2a, entry_borrow_weight_3b,
-                    notes, wallet_address, transaction_hash_open, on_chain_position_id
+                    notes, wallet_address, transaction_hash_open, on_chain_position_id,
+                    portfolio_id
                 ) VALUES ({placeholders})
             """, (
                 position_id, 'active', 'recursive_lending',
@@ -254,35 +257,36 @@ class PositionService:
                 token1_contract, token2_contract, token3_contract,
                 protocol_a, protocol_b,
                 entry_timestamp_str, execution_time,
-                self._to_native_type(deployment_usd), 
-                self._to_native_type(l_a), 
-                self._to_native_type(b_a), 
-                self._to_native_type(L_B), 
+                self._to_native_type(deployment_usd),
+                self._to_native_type(l_a),
+                self._to_native_type(b_a),
+                self._to_native_type(L_B),
                 self._to_native_type(b_b),
                 self._to_native_type(entry_lend_rate_1a),
                 self._to_native_type(entry_borrow_rate_2a),
-                self._to_native_type(entry_lend_rate_2b), 
+                self._to_native_type(entry_lend_rate_2b),
                 self._to_native_type(entry_borrow_rate_3b),
-                self._to_native_type(entry_price_1a), 
-                self._to_native_type(entry_price_2a), 
-                self._to_native_type(entry_price_2b), 
+                self._to_native_type(entry_price_1a),
+                self._to_native_type(entry_price_2a),
+                self._to_native_type(entry_price_2b),
                 self._to_native_type(entry_price_3b),
-                self._to_native_type(entry_collateral_ratio_1a), 
+                self._to_native_type(entry_collateral_ratio_1a),
                 self._to_native_type(entry_collateral_ratio_2b),
-                self._to_native_type(entry_liquidation_threshold_1a), 
+                self._to_native_type(entry_liquidation_threshold_1a),
                 self._to_native_type(entry_liquidation_threshold_2b),
-                self._to_native_type(entry_net_apr), 
-                self._to_native_type(entry_apr5), 
-                self._to_native_type(entry_apr30), 
-                self._to_native_type(entry_apr90), 
-                self._to_native_type(entry_days_to_breakeven), 
+                self._to_native_type(entry_net_apr),
+                self._to_native_type(entry_apr5),
+                self._to_native_type(entry_apr30),
+                self._to_native_type(entry_apr90),
+                self._to_native_type(entry_days_to_breakeven),
                 self._to_native_type(entry_liquidation_distance),
-                self._to_native_type(entry_max_size_usd), 
-                self._to_native_type(entry_borrow_fee_2a), 
+                self._to_native_type(entry_max_size_usd),
+                self._to_native_type(entry_borrow_fee_2a),
                 self._to_native_type(entry_borrow_fee_3b),
-                self._to_native_type(entry_borrow_weight_2a), 
+                self._to_native_type(entry_borrow_weight_2a),
                 self._to_native_type(entry_borrow_weight_3b),
-                notes, wallet_address, transaction_hash_open, on_chain_position_id
+                notes, wallet_address, transaction_hash_open, on_chain_position_id,
+                portfolio_id
             ))
 
             self.conn.commit()
@@ -698,6 +702,7 @@ class PositionService:
         SELECT DISTINCT timestamp
         FROM rates_snapshot
         WHERE timestamp >= {ph} AND timestamp <= {ph}
+          AND use_for_pnl = TRUE
         ORDER BY timestamp ASC
         """
         timestamps_df = pd.read_sql_query(query_timestamps, self.engine, params=(start_str, end_str))
@@ -715,6 +720,7 @@ class PositionService:
                    borrow_base_apr, borrow_reward_apr
             FROM rates_snapshot
             WHERE timestamp = {ph}
+              AND use_for_pnl = TRUE
               AND ((protocol = {ph} AND token = {ph}) OR
                    (protocol = {ph} AND token = {ph}) OR
                    (protocol = {ph} AND token = {ph}) OR
@@ -1058,6 +1064,7 @@ class PositionService:
             SELECT timestamp, lend_base_apr, lend_reward_apr, price_usd
             FROM rates_snapshot
             WHERE timestamp >= {ph} AND timestamp <= {ph}
+              AND use_for_pnl = TRUE
               AND protocol = {ph} AND token_contract = {ph}
             ORDER BY timestamp ASC
             """
@@ -1066,6 +1073,7 @@ class PositionService:
             SELECT timestamp, borrow_base_apr, borrow_reward_apr, price_usd
             FROM rates_snapshot
             WHERE timestamp >= {ph} AND timestamp <= {ph}
+              AND use_for_pnl = TRUE
               AND protocol = {ph} AND token_contract = {ph}
             ORDER BY timestamp ASC
             """

@@ -92,12 +92,7 @@ class RateAnalyzer:
             raise TypeError(f"timestamp must be int (Unix seconds), got {type(timestamp).__name__}")
         self.timestamp = timestamp
         
-        print(f"\n[ANALYZER] Initialized Rate Analyzer:")
-        print(f"   Protocols: {len(self.protocols)} ({', '.join(self.protocols)})")
-        print(f"   Tokens: {len(self.ALL_TOKENS)} (Stablecoins: {len(self.STABLECOINS)}, High-Yield: {len(self.OTHER_TOKENS)})")
-        print(f"   Stablecoins: {', '.join(sorted(self.STABLECOINS))}")
-        print(f"   High-Yield Tokens: {', '.join(sorted(self.OTHER_TOKENS))}")
-        print(f"   Liquidation Distance: {self.liquidation_distance*100:.0f}%")
+        print(f"[ANALYZER] Initialized: {len(self.protocols)} protocols, {len(self.ALL_TOKENS)} tokens (Stablecoins: {len(self.STABLECOINS)}, High-Yield: {len(self.OTHER_TOKENS)})")
     
     def get_rate(self, df: pd.DataFrame, token: str, protocol: str) -> float:
         """
@@ -302,10 +297,7 @@ class RateAnalyzer:
         if tokens is None:
             tokens = self.ALL_TOKENS
         
-        print(f"\n[ANALYZER] Analyzing all combinations...")
-        print(f"   Tokens to analyze: {len(tokens)}")
-        print(f"   Protocol pairs: {len(self.protocols) * (len(self.protocols) - 1)} (bidirectional)")
-        print(f"   [!] Enforcing: Token1 must be a stablecoin (market neutral requirement)")
+        print(f"[ANALYZER] Analyzing combinations...")
 
         # Pre-filter token2 candidates based on best-case spread
         spread_threshold = settings.RATE_SPREAD_THRESHOLD
@@ -332,12 +324,9 @@ class RateAnalyzer:
             else:
                 excluded_token2s.append((token, best_spread))
 
-        print(f"   [OK] Token2 candidates: {len(valid_token2s)} valid, {len(excluded_token2s)} excluded")
-
         # Pre-filter token1 (stablecoin) candidates based on minimum lending threshold
         # Find minimum borrow rate across all stablecoins and protocols
         all_stablecoin_borrow_rates = []
-        print(self.protocols)
         for stablecoin in self.STABLECOINS:
             for protocol in self.protocols:
                 rate = self.get_rate(self.borrow_rates, stablecoin, protocol)
@@ -372,8 +361,6 @@ class RateAnalyzer:
             else:
                 excluded_token1s.append((stablecoin, max_lend_rate))
 
-        print(f"   [OK] Token1 candidates: {len(valid_token1s)} valid, {len(excluded_token1s)} excluded")
-
         # Pre-filter token3 (stablecoin) candidates based on maximum borrow threshold
         # Find MAXIMUM lend rate across all stablecoins and protocols
         all_stablecoin_lend_rates = []
@@ -384,16 +371,13 @@ class RateAnalyzer:
                     all_stablecoin_lend_rates.append(rate)
 
         if not all_stablecoin_lend_rates:
-            print(f"   [ERROR] No stablecoin lend rates found")
+            print(f"[ERROR] No stablecoin lend rates found")
             return pd.DataFrame()
 
         # Maximum viable borrow rate = max lend rate - threshold
         # Logic: Even with the best token1 lending rate, token3 borrow must be low enough to maintain 1% spread
         max_stablecoin_lend = max(all_stablecoin_lend_rates)
         max_borrow_threshold = max_stablecoin_lend - spread_threshold
-
-        print(f"   [OK] Max stablecoin lend rate: {max_stablecoin_lend*100:.2f}%")
-        print(f"   [OK] Max borrow threshold for token3: {max_borrow_threshold*100:.2f}%")
 
         valid_token3s = []
         excluded_token3s = []
@@ -572,9 +556,7 @@ class RateAnalyzer:
                                 valid += 1
                                 results.append(result)
         
-        print(f"   [OK] Analyzed {analyzed} combinations")
-        print(f"   [OK] {self.excluded_by_rate_spread} excluded by rate spread filter (<{settings.RATE_SPREAD_THRESHOLD*100:.0f}% spread)")
-        print(f"   [OK] {valid} valid strategies found")
+        print(f"[ANALYZER] Found {valid} valid strategies from {analyzed} combinations")
         
         # Convert to DataFrame and sort by net APR
         if results:
@@ -631,18 +613,8 @@ class RateAnalyzer:
         if has_conversion:
             strategy_type += " (with conversion)"
         
-        print(f"\n[BEST STRATEGY] BEST STRATEGY FOUND ({strategy_type}):")
-        print(f"   Protocol A: {best['protocol_a']}")
-        print(f"   Protocol B: {best['protocol_b']}")
-        print(f"   Token 1 (Start): {best['token1']}")
-        print(f"   Token 2 (Middle): {best['token2']}")
-        print(f"   Token 3 (Close): {best['token3']}", end="")
-        if has_conversion:
-            print(f" -> Convert to {best['token1']}")
-        else:
-            print()  # Just newline
-        print(f"   Net APR: {best['net_apr'] * 100:.2f}%")
-        print(f"   Liquidation Distance: {best['liquidation_distance'] * 100:.0f}%")
+        conversion_str = f" -> {best['token1']}" if has_conversion else ""
+        print(f"[BEST STRATEGY] {best['protocol_a']}/{best['protocol_b']}: {best['token1']}/{best['token2']}/{best['token3']}{conversion_str} @ {best['net_apr'] * 100:.2f}% APR")
         
         return best['protocol_a'], best['protocol_b'], all_results
 

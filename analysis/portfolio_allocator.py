@@ -318,6 +318,21 @@ class PortfolioAllocator:
             constraint_info['limiting_constraint'] = f'protocol_B_{protocol_b}'
             constraint_info['limiting_value'] = max_allocation_for_protocol_b
 
+        # Check max single allocation % constraint
+        max_single_pct = constraints.get('max_single_allocation_pct', 1.0)  # Default: unlimited (100%)
+        max_single_amount = portfolio_size * max_single_pct
+
+        constraint_info['max_single_constraint'] = {
+            'limit_pct': max_single_pct,
+            'limit_amount': max_single_amount,
+            'max_from_single': max_single_amount
+        }
+
+        if max_single_amount < max_amount:
+            max_amount = max_single_amount
+            constraint_info['limiting_constraint'] = 'max_single_allocation'
+            constraint_info['limiting_value'] = max_single_amount
+
         return max(0.0, max_amount), constraint_info  # Ensure non-negative
 
     def _update_exposures(
@@ -394,7 +409,8 @@ class PortfolioAllocator:
     def select_portfolio(
         self,
         portfolio_size: float,
-        constraints: Dict = None
+        constraints: Dict = None,
+        enable_iterative_updates: bool = True
     ) -> Tuple[pd.DataFrame, List[Dict]]:
         """
         Select optimal portfolio using greedy algorithm with constraints.
@@ -471,6 +487,12 @@ class PortfolioAllocator:
         # Sort by ADJUSTED APR (not blended APR)
         strategies = strategies.sort_values('adjusted_apr', ascending=False)
 
+        # NEW: Setup iterative liquidity updates
+        if enable_iterative_updates:
+            available_borrow = self._prepare_available_borrow_matrix(strategies)
+        else:
+            available_borrow = None
+
         # Greedy allocation
         selected = []
         debug_info = []
@@ -482,6 +504,17 @@ class PortfolioAllocator:
         for idx, strategy in strategies.iterrows():
             if len(selected) >= max_strategies:
                 break
+
+            # Recalculate max_size for CURRENT strategy using current available_borrow matrix
+            if enable_iterative_updates and available_borrow is not None:
+                strategy = strategy.copy()
+
+                # Recalculate max_size based on current available_borrow
+                updated_max_size = self._calculate_max_size_from_available_borrow(
+                    strategy,
+                    available_borrow
+                )
+                strategy['max_size'] = updated_max_size
 
             # Capture state before allocation
             remaining_capital = portfolio_size - allocated_capital
@@ -510,7 +543,8 @@ class PortfolioAllocator:
                 'allocated': max_amount > 0,
                 'constraint_info': constraint_info,
                 'token_exposures_before': token_exposures.copy(),
-                'protocol_exposures_before': protocol_exposures.copy()
+                'protocol_exposures_before': protocol_exposures.copy(),
+                'max_size_before': strategy.get('max_size', None)
             }
 
             # If we can allocate at least something, add strategy
@@ -527,13 +561,26 @@ class PortfolioAllocator:
                     protocol_exposures
                 )
 
+                # Update available_borrow matrix after allocation
+                if enable_iterative_updates and available_borrow is not None:
+                    # Update liquidity matrix
+                    self._update_available_borrow(
+                        strategy,
+                        max_amount,
+                        available_borrow
+                    )
+
                 # Capture state after allocation
                 debug_record['token_exposures_after'] = token_exposures.copy()
                 debug_record['protocol_exposures_after'] = protocol_exposures.copy()
+                debug_record['max_size_after'] = strategy.get('max_size', None) if enable_iterative_updates else None
+                debug_record['available_borrow_snapshot'] = available_borrow.copy() if enable_iterative_updates and available_borrow is not None else None
             else:
                 # Not allocated, exposures unchanged
                 debug_record['token_exposures_after'] = token_exposures.copy()
                 debug_record['protocol_exposures_after'] = protocol_exposures.copy()
+                debug_record['max_size_after'] = None
+                debug_record['available_borrow_snapshot'] = None
 
             debug_info.append(debug_record)
 
@@ -638,3 +685,278 @@ class PortfolioAllocator:
             )
 
         return token_exposures, protocol_exposures
+
+    @staticmethod
+    def _prepare_available_borrow_matrix(strategies: pd.DataFrame) -> pd.DataFrame:
+        """
+        Create Token×Protocol matrix from strategies DataFrame.
+
+        Extracts available_borrow data from strategies and pivots to matrix format
+        for efficient updates during allocation.
+
+        Args:
+            strategies: Strategy data with available_borrow_2a/3b fields
+
+        Returns:
+            DataFrame with Token symbols as index, Protocol names as columns,
+            available_borrow USD values as data
+        """
+        # Collect all unique tokens and protocols
+        tokens_set = set()
+        protocols_set = set()
+
+        for _, row in strategies.iterrows():
+            # Token2 and its protocol
+            if pd.notna(row.get('token2')) and pd.notna(row.get('protocol_a')):
+                tokens_set.add(row['token2'])
+                protocols_set.add(row['protocol_a'])
+
+            # Token3 and its protocol (skip if None for unlevered strategies)
+            if pd.notna(row.get('token3')) and pd.notna(row.get('protocol_b')):
+                tokens_set.add(row['token3'])
+                protocols_set.add(row['protocol_b'])
+
+        # Create empty DataFrame with Token index and Protocol columns
+        tokens_list = sorted(list(tokens_set))
+        protocols_list = sorted(list(protocols_set))
+        matrix = pd.DataFrame(index=tokens_list, columns=protocols_list, dtype=float)
+        matrix[:] = 0.0  # Initialize with zeros
+
+        # Populate matrix with available_borrow values
+        # Use max() aggregation when multiple strategies report different values
+        # for same token/protocol (take most optimistic)
+        for _, row in strategies.iterrows():
+            # Process token2 on protocol_a
+            token2 = row.get('token2')
+            protocol_a = row.get('protocol_a')
+            available_2a = row.get('available_borrow_2a', 0.0)
+
+            if pd.notna(token2) and pd.notna(protocol_a) and pd.notna(available_2a):
+                current_value = matrix.loc[token2, protocol_a]
+                matrix.loc[token2, protocol_a] = max(current_value, float(available_2a))
+
+            # Process token3 on protocol_b (skip if None)
+            token3 = row.get('token3')
+            protocol_b = row.get('protocol_b')
+            available_3b = row.get('available_borrow_3b', 0.0)
+
+            if pd.notna(token3) and pd.notna(protocol_b) and pd.notna(available_3b):
+                current_value = matrix.loc[token3, protocol_b]
+                matrix.loc[token3, protocol_b] = max(current_value, float(available_3b))
+
+        return matrix
+
+    def _update_available_borrow(
+        self,
+        strategy_row: pd.Series,
+        allocation_amount: float,
+        available_borrow: pd.DataFrame
+    ) -> None:
+        """
+        Update available_borrow matrix after allocating to a strategy (in-place).
+
+        When we allocate capital to a strategy, we borrow tokens from protocols,
+        reducing available liquidity for future allocations.
+
+        Args:
+            strategy_row: Strategy with token2/3, protocol_a/b, borrow_weight_2A/3B
+            allocation_amount: USD amount allocated to this strategy
+            available_borrow: Token×Protocol matrix (modified in-place)
+        """
+        # Extract token2 and protocol_a (leg 2A)
+        token2 = strategy_row.get('token2')
+        protocol_a = strategy_row.get('protocol_a')
+        b_a = strategy_row.get('borrow_weight_2A', strategy_row.get('b_a', 0.0))
+
+        # Calculate borrow amount for token2 on protocol_a
+        borrow_2A = allocation_amount * b_a
+
+        # Update matrix for token2 (if exists)
+        if pd.notna(token2) and pd.notna(protocol_a) and b_a > 0:
+            try:
+                current_value = available_borrow.loc[token2, protocol_a]
+                new_value = current_value - borrow_2A
+
+                # Clamp to 0 to prevent negative liquidity
+                available_borrow.loc[token2, protocol_a] = max(0.0, new_value)
+
+                # Warn if over-borrowed
+                if new_value < 0:
+                    print(f"⚠️  Warning: {token2} on {protocol_a} over-borrowed by ${abs(new_value):.2f}")
+            except KeyError:
+                print(f"⚠️  Warning: {token2} on {protocol_a} not found in available_borrow matrix. Skipping update.")
+
+        # Extract token3 and protocol_b (leg 3B)
+        token3 = strategy_row.get('token3')
+        protocol_b = strategy_row.get('protocol_b')
+        b_b = strategy_row.get('borrow_weight_3B', strategy_row.get('b_b', 0.0))
+
+        # Calculate borrow amount for token3 on protocol_b
+        borrow_3B = allocation_amount * b_b
+
+        # Update matrix for token3 (if exists - skip for unlevered strategies)
+        if pd.notna(token3) and pd.notna(protocol_b) and b_b > 0:
+            try:
+                current_value = available_borrow.loc[token3, protocol_b]
+                new_value = current_value - borrow_3B
+
+                # Clamp to 0 to prevent negative liquidity
+                available_borrow.loc[token3, protocol_b] = max(0.0, new_value)
+
+                # Warn if over-borrowed
+                if new_value < 0:
+                    print(f"⚠️  Warning: {token3} on {protocol_b} over-borrowed by ${abs(new_value):.2f}")
+            except KeyError:
+                print(f"⚠️  Warning: {token3} on {protocol_b} not found in available_borrow matrix. Skipping update.")
+
+    def _calculate_max_size_from_available_borrow(
+        self,
+        strategy: pd.Series,
+        available_borrow: pd.DataFrame
+    ) -> float:
+        """
+        Calculate max_size for a strategy using current available_borrow matrix.
+
+        Called once per strategy at the start of its allocation attempt.
+        Uses the SAME logic as position_calculator.py, but applied to
+        current liquidity state instead of original liquidity.
+
+        Formula:
+            max_size = min(
+                available_borrow[token2][protocol_a] / b_a,
+                available_borrow[token3][protocol_b] / b_b
+            )
+
+        Args:
+            strategy: Strategy row
+            available_borrow: Current liquidity matrix (tokens × protocols)
+
+        Returns:
+            Updated max_size constraint (USD)
+
+        Complexity: O(1) - constant time lookup and calculation
+        """
+        try:
+            # Extract strategy parameters
+            token2 = strategy['token2']
+            token3 = strategy.get('token3', None)
+            protocol_a = strategy['protocol_a']
+            protocol_b = strategy.get('protocol_b', None)
+
+            # Extract borrow weights - MUST exist in strategy DataFrame
+            # Follow explicit error handling pattern (design_notes.md Section 13)
+            try:
+                b_a = strategy['b_a']
+            except KeyError:
+                print(f"⚠️  ERROR: Column 'b_a' not found in strategy")
+                print(f"   Available columns: {list(strategy.index)}")
+                print(f"   Strategy: {strategy.get('token2', 'unknown')}/{strategy.get('protocol_a', 'unknown')}")
+                return 0.0
+
+            try:
+                b_b = strategy['b_b']
+            except KeyError:
+                print(f"⚠️  ERROR: Column 'b_b' not found in strategy")
+                print(f"   Available columns: {list(strategy.index)}")
+                print(f"   Strategy: {strategy.get('token2', 'unknown')}/{strategy.get('protocol_a', 'unknown')}")
+                return 0.0
+
+            # Calculate constraint from token2 on protocol_a
+            if token2 in available_borrow.index and protocol_a in available_borrow.columns:
+                available_2a = available_borrow.loc[token2, protocol_a]
+            else:
+                available_2a = 0.0
+
+            if b_a > 0:
+                constraint_2a = available_2a / b_a
+            else:
+                constraint_2a = float('inf')
+
+            # Calculate constraint from token3 on protocol_b (if levered)
+            if token3 and protocol_b:
+                if token3 in available_borrow.index and protocol_b in available_borrow.columns:
+                    available_3b = available_borrow.loc[token3, protocol_b]
+                else:
+                    available_3b = 0.0
+
+                if b_b > 0:
+                    constraint_3b = available_3b / b_b
+                else:
+                    constraint_3b = float('inf')
+            else:
+                constraint_3b = float('inf')
+
+            # Max size is minimum of constraints
+            max_size = min(constraint_2a, constraint_3b)
+
+            return max(0.0, max_size)
+
+        except Exception as e:
+            print(f"⚠️  Warning: Failed to recalculate max_size for strategy: {e}")
+            # Return 0 to be conservative (don't allocate if can't calculate)
+            return 0.0
+
+    def _recalculate_max_sizes(
+        self,
+        strategies: pd.DataFrame,
+        available_borrow: pd.DataFrame
+    ) -> pd.DataFrame:
+        """
+        Recalculate max_size for all strategies using current available_borrow.
+
+        Uses the same formula as position_calculator.py:
+        max_size = min(available_borrow_2A / b_a, available_borrow_3B / b_b)
+
+        Args:
+            strategies: DataFrame with strategy data (modified in-place)
+            available_borrow: Current Token×Protocol liquidity matrix
+
+        Returns:
+            Updated strategies DataFrame (also modified in-place)
+        """
+        # Calculate new max_sizes for all strategies
+        new_max_sizes = []
+
+        for idx, row in strategies.iterrows():
+            # Extract token2 and protocol_a
+            token2 = row.get('token2')
+            protocol_a = row.get('protocol_a')
+            b_a = row.get('borrow_weight_2A', row.get('b_a', 0.0))
+
+            # Extract token3 and protocol_b
+            token3 = row.get('token3')
+            protocol_b = row.get('protocol_b')
+            b_b = row.get('borrow_weight_3B', row.get('b_b', 0.0))
+
+            # Get current available_borrow for token2 on protocol_a
+            try:
+                available_2A = available_borrow.loc[token2, protocol_a] if pd.notna(token2) and pd.notna(protocol_a) else 0.0
+            except KeyError:
+                available_2A = 0.0
+
+            # Get current available_borrow for token3 on protocol_b
+            try:
+                available_3B = available_borrow.loc[token3, protocol_b] if pd.notna(token3) and pd.notna(protocol_b) else 0.0
+            except KeyError:
+                available_3B = 0.0
+
+            # Calculate max_size constraints
+            # Handle division by zero: if b_a or b_b = 0, constraint is infinite
+            if b_a > 0:
+                constraint_2A = available_2A / b_a
+            else:
+                constraint_2A = float('inf')
+
+            if b_b > 0:
+                constraint_3B = available_3B / b_b
+            else:
+                constraint_3B = float('inf')
+
+            # Take minimum (most restrictive constraint)
+            max_size = min(constraint_2A, constraint_3B)
+            new_max_sizes.append(max_size)
+
+        # Update max_size column
+        strategies['max_size'] = new_max_sizes
+
+        return strategies

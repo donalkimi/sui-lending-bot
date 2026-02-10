@@ -491,6 +491,56 @@ earnings = leg_value * rate * time
 
 **Core Principle:** Never use lazy column checking that silently skips missing columns. Explicitly try to access columns, catch errors, show debugging info, then continue without the column.
 
+### 14. Iterative Liquidity Updates in Portfolio Allocation
+
+**Core Principle:** When allocating capital to strategies in the portfolio allocator, update available borrow liquidity after each allocation and recalculate constraints for remaining strategies. This prevents over-borrowing beyond actual available liquidity.
+
+**Why:**
+- **Realism:** Allocating to one strategy reduces available liquidity for subsequent strategies
+- **Risk management:** Prevents portfolios that exceed protocol liquidity constraints
+- **Correctness:** Ensures max_size accurately reflects remaining available capital
+
+**Implementation (as of February 2026):**
+
+1. **Token×Protocol Matrix:** Available borrow tracked in DataFrame with tokens as rows, protocols as columns
+2. **Iterative Updates:** After each allocation:
+   - Reduce `available_borrow[token2][protocol_a]` by `allocation * b_a`
+   - Reduce `available_borrow[token3][protocol_b]` by `allocation * b_b`
+3. **Recalculate max_size:** For all remaining strategies, update `max_size = min(available_borrow_2A / b_a, available_borrow_3B / b_b)`
+
+**Architecture:**
+```python
+# In select_portfolio():
+
+# 1. Initialize matrix before greedy loop
+available_borrow = _prepare_available_borrow_matrix(strategies)
+
+# 2. After each allocation
+for strategy in strategies:
+    allocate(strategy, amount)
+
+    # Update liquidity
+    _update_available_borrow(strategy, amount, available_borrow)
+
+    # Recalculate max_size for remaining strategies
+    _recalculate_max_sizes(remaining_strategies, available_borrow)
+```
+
+**Feature Flag:**
+- `DEBUG_ENABLE_ITERATIVE_LIQUIDITY_UPDATES` in settings.py (default: True)
+- DEBUG ONLY: This flag exists for testing/comparison purposes only
+- Once validated, this flag will be removed and iterative updates will be always-on
+- Backwards compatible: can be disabled via parameter to select_portfolio()
+
+**Extension Point:** The `_apply_market_impact_adjustments()` pattern allows adding:
+- Interest rate curve updates (utilization → rate changes)
+- Collateral ratio adjustments
+- Other market impact modeling
+
+**Implementation Date:** February 10, 2026
+
+**Note on terminology:** "IRM effects" (effects as noun = impacts/consequences) vs "the IRM affects rates" (affects as verb = influences)
+
 **Why:**
 - **Visibility:** Errors are immediately visible in logs, not hidden by defensive code
 - **Debuggability:** Shows exactly what columns are available when a mismatch occurs

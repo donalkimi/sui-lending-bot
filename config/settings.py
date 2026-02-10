@@ -66,6 +66,11 @@ SAVE_SNAPSHOTS = get_bool_env('SAVE_SNAPSHOTS', default=True)
 # PORTFOLIO ALLOCATION SETTINGS
 # ==============================================================================
 
+# Portfolio allocation feature flags
+# DEBUG: Switch to disable iterative liquidity updates (for testing/comparison only)
+# Once validated, this will be removed and iterative updates will be always-on
+DEBUG_ENABLE_ITERATIVE_LIQUIDITY_UPDATES = get_bool_env('DEBUG_ENABLE_ITERATIVE_LIQUIDITY_UPDATES', default=True)
+
 # Stablecoin preference multipliers (1.0 = preferred, lower = penalty)
 # Applied to strategy APR when ranking for portfolio allocation
 # Uses canonical stablecoin list from config/stablecoins.py
@@ -83,6 +88,7 @@ DEFAULT_ALLOCATION_CONSTRAINTS = {
     'token_exposure_overrides': {},     # Per-token overrides {token_symbol: limit}
                                          # Example: {'USDC': 1.00, 'USDT': 0.60}
     'protocol_exposure_limit': 0.40,    # Max 40% exposure to any single protocol
+    'max_single_allocation_pct': 0.40,  # Max 40% of portfolio to any single strategy
     'max_strategies': 5,                 # Max number of strategies in portfolio
     'min_apy_confidence': 0.70,         # Min 70% confidence threshold
     'apr_weights': {                     # Weights for blended APR calculation

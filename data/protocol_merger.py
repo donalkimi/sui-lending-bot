@@ -98,7 +98,6 @@ def fetch_protocol_data(protocol_name: str) -> Tuple[pd.DataFrame, pd.DataFrame,
         elif protocol_name == "Pebble":
             print("\t\tgetting Pebble rates:")
             reader = PebbleReader()
-            print(reader.get_all_data())   
             return reader.get_all_data()
 
         else:

@@ -3,10 +3,12 @@
 **Document Version:** February 9, 2026
 **Purpose:** Complete technical reference for the Positions Tab functionality in the Sui Lending Bot dashboard
 **Audience:** Engineers, handover recipients, README authors
-**Deployment:** Railway (cloud platform) + Supabase PostgreSQL (database)
+**Deployment:** Railway (cloud platform) + Supabase PostgreSQL (database) - See [ARCHITECTURE.md](ARCHITECTURE.md) for complete deployment and caching architecture
 
 **Recent Updates:**
-- February 9, 2026: Updated PnL calculation formulas to use token_amount × price (not deployment × weight)
+- February 9, 2026: Updated PnL calculation formulas to use token_amount × price (not deployment × weight). See Design Notes #12
+- February 9, 2026: Added iterative liquidity updates to portfolio allocator. See Design Notes #14
+- February 9, 2026: Added new exposure calculation formulas (Token2 de-leveraged, Stablecoin net lending, Protocol normalized). See allocator_reference.md
 - Production deployment on Railway with hourly refresh schedule
 
 ---
@@ -224,8 +226,13 @@ else:
 │  Tab 2: 📈 Rate Tables                                  │
 │  Tab 3: ⚠️  0 Liquidity                                 │
 │  Tab 4: 💼 Positions  ← THIS DOCUMENT                   │
+│  Tab 5: 🔮 Oracle                                       │
+│  Tab 6: 🚀 Deployment                                   │
+│  Tab 7: 📊 Allocator                                    │
 └─────────────────────────────────────────────────────────┘
 ```
+
+**Note:** Tabs 5-7 added February 2026. See [ARCHITECTURE.md](ARCHITECTURE.md) for Oracle and Deployment tabs. See [allocator_reference.md](allocator_reference.md) for Allocator tab details.
 
 ### 3.2 Data Flow: All Strategies → Positions
 
@@ -1196,6 +1203,19 @@ if stats is None:
 
 ## 8. Design Principles
 
+**Note:** This section highlights key design principles relevant to the Positions Tab. For the complete list of 12+ system-wide design principles, see [design_notes.md](design_notes.md). For deployment and caching architecture, see [ARCHITECTURE.md](ARCHITECTURE.md).
+
+**Core Principles Referenced:**
+- #1: Timestamps as Unix Seconds (8.1 below)
+- #2: Forward-Looking Rates (8.2 below)
+- #3: Position Immutability (8.3 below)
+- #4: Event Sourcing Pattern (8.4 below)
+- #5: Token Identity via Contracts (8.5 below)
+- #6: Weight-Based Position Sizing (8.6 below)
+- #12: PnL Calculation: Token Amounts × Price, Not Deployment × Weight (8.6 below)
+- #13: Explicit Error Handling (implemented in position_statistics_calculator.py)
+- #14: Iterative Liquidity Updates in Portfolio Allocation (see allocator_reference.md)
+
 ### 8.1 Timestamps as Unix Seconds
 
 **Rule:** All timestamps stored and used internally as Unix seconds (int)
@@ -1452,7 +1472,7 @@ liq_distance = (liq_price - current_price) / current_price * 100
 | `get_active_positions()` | 408-527 | Get positions filtered by timestamp |
 | `get_position_by_id()` | 529-607 | Get single position with type conversion |
 | `calculate_position_value()` | 609-708 | Calculate PnL and metrics for segment |
-| `calculate_leg_earnings_split()` | 993-1077 | Calculate base/reward split for one leg |
+| `calculate_leg_earnings_split()` | 1002-1133 | Calculate base/reward split for one leg |
 | `rebalance_position()` | 1124-1176 | Execute rebalance workflow |
 | `capture_rebalance_snapshot()` | 1178-1342 | Capture all snapshot data |
 | `create_rebalance_record()` | 1351-1674 | Insert rebalance record |
@@ -1466,11 +1486,11 @@ liq_distance = (liq_price - current_price) / current_price * 100
 
 | Function | Lines | Purpose |
 |----------|-------|---------|
-| `calculate_position_statistics()` | 23-247 | Main statistics calculation function |
-| Live segment calculation | 79-122 | Calculate unrealized earnings |
-| Rebalanced segments | 124-194 | Sum realized earnings from history |
-| Totals calculation | 195-202 | Combine live + realized |
-| APR calculations | 204-229 | Calculate realized and current APRs |
+| `calculate_position_statistics()` | 23-269 | Main statistics calculation function |
+| Live segment calculation | 79-140 | Calculate unrealized earnings |
+| Rebalanced segments | 149-216 | Sum realized earnings from history |
+| Totals calculation | 218-226 | Combine live + realized |
+| APR calculations | 228-253 | Calculate realized and current APRs |
 
 ### 9.4 Database Schema
 
@@ -1689,7 +1709,8 @@ The architecture separates concerns:
 All calculations follow consistent principles:
 - Unix timestamps (int) for time
 - Forward-looking rates
-- Weight-based amounts
+- Weight-based sizing (for position structure, NOT for PnL calculation)
+- Token amounts × prices (for PnL calculation to account for price drift)
 - Token contracts for identity
 - Event sourcing for auditability
 
@@ -1703,6 +1724,7 @@ This design enables powerful features:
 ---
 
 **Document Status:** Complete
-**Version:** 1.0
-**Date:** February 2026
+**Version:** 1.1
+**Date:** February 9-10, 2026
+**Last Updated:** February 10, 2026 - Added cross-references to design_notes.md, ARCHITECTURE.md, and allocator_reference.md
 **Next Steps:** Use this as basis for README and user documentation

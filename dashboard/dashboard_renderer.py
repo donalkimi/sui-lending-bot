@@ -63,6 +63,63 @@ from utils.time_helpers import to_seconds, to_datetime_str
 
 
 # ============================================================================
+# SETTINGS INITIALIZATION
+# ============================================================================
+
+def initialize_allocator_settings():
+    """
+    Initialize allocator settings on dashboard startup.
+
+    Priority:
+    1. If already in session_state → use existing (already initialized)
+    2. Try loading 'last_used' from database
+    3. Fall back to config defaults
+
+    Sets:
+    - st.session_state.allocation_constraints
+    - st.session_state.sidebar_filters
+    """
+    # Skip if already initialized
+    if 'allocation_constraints' in st.session_state:
+        return
+
+    try:
+        from analysis.allocator_settings_service import AllocatorSettingsService
+
+        conn = get_db_connection()
+        service = AllocatorSettingsService(conn)
+
+        # Try loading last used settings
+        last_used = service.load_last_used()
+        conn.close()
+
+        if last_used:
+            st.session_state.allocation_constraints = last_used['allocator_constraints']
+            st.session_state.sidebar_filters = last_used.get('sidebar_filters', {})
+            print("✅ Loaded last used settings from database")
+            return
+    except Exception as e:
+        print(f"⚠️  Warning: Failed to load last used settings: {e}")
+        # Fall through to defaults
+
+    # Fall back to config defaults
+    from config.settings import DEFAULT_ALLOCATION_CONSTRAINTS, DEFAULT_DEPLOYMENT_USD
+
+    st.session_state.allocation_constraints = DEFAULT_ALLOCATION_CONSTRAINTS.copy()
+    st.session_state.sidebar_filters = {
+        'liquidation_distance': 0.20,
+        'deployment_usd': DEFAULT_DEPLOYMENT_USD,
+        'force_usdc_start': False,
+        'force_token3_equals_token1': False,
+        'stablecoin_only': False,
+        'min_net_apr': 0.0,
+        'token_filter': [],
+        'protocol_filter': []
+    }
+    print("ℹ️  Using default settings (no last_used found)")
+
+
+# ============================================================================
 # COMPONENT RENDERERS
 # ============================================================================
 
@@ -1378,6 +1435,76 @@ def render_positions_table_tab(timestamp_seconds: int):
 
         # OPTIMIZATION: Batch load rebalance history for all positions in ONE query
         all_rebalances = get_all_rebalance_history(position_ids, conn)
+
+        # Check if any positions are missing statistics
+        positions_missing_stats = []
+        for _, position in active_positions.iterrows():
+            stats = all_stats.get(position['position_id'])
+            if stats is None or to_seconds(stats.get('timestamp')) != latest_timestamp:
+                positions_missing_stats.append(position)
+
+        # Show "Calculate All Statistics" button if any positions are missing stats
+        if positions_missing_stats:
+            st.warning(f"⚠️ {len(positions_missing_stats)} position(s) missing statistics at {latest_timestamp_str}")
+
+            col_btn, col_info = st.columns([1, 3])
+            with col_btn:
+                if st.button("📊 Calculate All Statistics", type="primary", use_container_width=True):
+                    success_count = 0
+                    error_count = 0
+
+                    progress_bar = st.progress(0)
+                    status_text = st.empty()
+
+                    for idx, position in enumerate(positions_missing_stats):
+                        try:
+                            position_short_id = position['position_id'][:8]
+                            status_text.text(f"Calculating {idx+1}/{len(positions_missing_stats)}: {position_short_id}...")
+
+                            # Calculate statistics
+                            def get_rate_wrapper(token_contract, protocol, side):
+                                return get_rate(token_contract, protocol, side)
+
+                            def get_borrow_fee_wrapper(token_contract, protocol):
+                                return get_borrow_fee(token_contract, protocol)
+
+                            stats_dict = calculate_position_statistics(
+                                position_id=position['position_id'],
+                                timestamp=latest_timestamp,
+                                service=service,
+                                get_rate_func=get_rate_wrapper,
+                                get_borrow_fee_func=get_borrow_fee_wrapper
+                            )
+
+                            # Save to database
+                            tracker = RateTracker(
+                                use_cloud=settings.USE_CLOUD_DB,
+                                connection_url=settings.SUPABASE_URL
+                            )
+                            tracker.save_position_statistics(stats_dict)
+
+                            success_count += 1
+                        except Exception as e:
+                            error_count += 1
+                            st.error(f"Failed for {position_short_id}: {e}")
+
+                        progress_bar.progress((idx + 1) / len(positions_missing_stats))
+
+                    status_text.empty()
+                    progress_bar.empty()
+
+                    if success_count > 0:
+                        st.success(f"✅ Calculated statistics for {success_count} position(s)")
+                    if error_count > 0:
+                        st.warning(f"⚠️ Failed for {error_count} position(s)")
+
+                    # Reload page to show updated data
+                    st.rerun()
+
+            with col_info:
+                st.info("💡 This will calculate and save statistics for all positions at once (~1-2 seconds per position)")
+
+            st.markdown("---")
 
         # Load pre-calculated statistics for all positions
         for _, position in active_positions.iterrows():
@@ -2731,7 +2858,7 @@ def render_positions_table_tab(timestamp_seconds: int):
                                 rebalance_data.append(row)
 
                             rebalance_df = pd.DataFrame(rebalance_data)
-                            # DESIGN PRINCIPLE: Use width='stretch' instead of deprecated use_container_width=True
+                            # DESIGN PRINCIPLE: Use width='stretch' instead of deprecated width='stretch'
                             st.dataframe(rebalance_df, width='stretch', hide_index=True)
 
                             # Summary metrics
@@ -3239,9 +3366,146 @@ def render_data_controls(data_loader: DataLoader, mode: str):
             st.warning(f"⚠️ Snapshot is {age.days} days old")
 
 
+def render_allocator_settings_manager():
+    """
+    Render the allocator settings preset manager.
+
+    Allows users to:
+    - Load saved presets
+    - Save current settings as named preset
+    - Delete presets
+    - See current preset and last modified time
+
+    Returns:
+        None (updates session state)
+    """
+    st.markdown("#### 💾 Settings Presets")
+
+    try:
+        from analysis.allocator_settings_service import AllocatorSettingsService
+
+        conn = get_db_connection()
+        service = AllocatorSettingsService(conn)
+
+        # Get all presets
+        presets_df = service.get_all_presets()
+
+        # Build preset options: Last Used + named presets
+        preset_options = ['Last Used Settings']
+        preset_ids = ['last_used']
+
+        if not presets_df.empty:
+            for _, row in presets_df.iterrows():
+                preset_options.append(row['settings_name'])
+                preset_ids.append(row['settings_id'])
+
+        # 4-column layout
+        col1, col2, col3, col4 = st.columns([3, 1, 1, 1])
+
+        with col1:
+            selected_preset_idx = st.selectbox(
+                "Select Preset",
+                range(len(preset_options)),
+                format_func=lambda i: preset_options[i],
+                key="preset_selector"
+            )
+
+        selected_id = preset_ids[selected_preset_idx]
+
+        with col2:
+            if st.button("📥 Load", width='stretch'):
+                loaded = service.load_settings(selected_id)
+                if loaded:
+                    st.session_state.allocation_constraints = loaded['allocator_constraints']
+                    st.session_state.sidebar_filters = loaded.get('sidebar_filters', {})
+
+                    # Extract and restore portfolio_size
+                    if 'portfolio_size' in loaded['allocator_constraints']:
+                        st.session_state.portfolio_size = loaded['allocator_constraints']['portfolio_size']
+
+                    st.session_state.current_preset_id = selected_id
+                    st.session_state.current_preset_name = preset_options[selected_preset_idx]
+                    st.success(f"✅ Loaded: {preset_options[selected_preset_idx]}")
+                    st.rerun()
+                else:
+                    st.error("❌ Failed to load preset")
+
+        with col3:
+            if st.button("💾 Save As...", width='stretch'):
+                st.session_state.show_save_preset_dialog = True
+                st.rerun()
+
+        with col4:
+            delete_disabled = (selected_id == 'last_used')
+            if st.button("🗑️ Delete", width='stretch', disabled=delete_disabled):
+                if not delete_disabled:
+                    success = service.delete_preset(selected_id)
+                    if success:
+                        st.success(f"✅ Deleted: {preset_options[selected_preset_idx]}")
+                        st.rerun()
+                    else:
+                        st.error("❌ Failed to delete preset")
+
+        # Save preset dialog
+        if st.session_state.get('show_save_preset_dialog', False):
+            with st.form("save_preset_form"):
+                st.markdown("##### Save Current Settings As Preset")
+
+                preset_name = st.text_input("Preset Name", placeholder="e.g., Conservative Strategy")
+                preset_description = st.text_area("Description (optional)",
+                    placeholder="e.g., Low risk, high stablecoin allocation")
+
+                col_save, col_cancel = st.columns(2)
+
+                with col_save:
+                    save_clicked = st.form_submit_button("💾 Save", width='stretch')
+
+                with col_cancel:
+                    cancel_clicked = st.form_submit_button("❌ Cancel", width='stretch')
+
+                if save_clicked:
+                    if not preset_name or preset_name.strip() == "":
+                        st.error("❌ Preset name cannot be empty")
+                    else:
+                        # Capture current settings from session state
+                        allocator_constraints = st.session_state.get('allocation_constraints', {}).copy()
+                        sidebar_filters = st.session_state.get('sidebar_filters', {})
+
+                        # Capture portfolio_size from session state
+                        portfolio_size = st.session_state.get('portfolio_size', settings.DEFAULT_DEPLOYMENT_USD)
+                        allocator_constraints['portfolio_size'] = portfolio_size
+
+                        preset_id = service.create_named_preset(
+                            preset_name=preset_name.strip(),
+                            allocator_constraints=allocator_constraints,
+                            sidebar_filters=sidebar_filters,
+                            description=preset_description.strip() if preset_description else None
+                        )
+
+                        st.session_state.show_save_preset_dialog = False
+                        st.session_state.current_preset_id = preset_id
+                        st.session_state.current_preset_name = preset_name.strip()
+                        st.success(f"✅ Saved preset: {preset_name}")
+                        st.rerun()
+
+                if cancel_clicked:
+                    st.session_state.show_save_preset_dialog = False
+                    st.rerun()
+
+        # Current preset indicator
+        current_preset = st.session_state.get('current_preset_name', 'Last Used Settings')
+        st.caption(f"📌 Current: **{current_preset}**")
+
+        conn.close()
+
+    except Exception as e:
+        st.error(f"⚠️ Error loading settings manager: {e}")
+        print(f"Settings manager error: {e}")
+
+
 def render_sidebar_filters(display_results: pd.DataFrame):
     """
-    Render sidebar filters
+    Render sidebar filters with session state persistence.
 
     Args:
         display_results: Current filtered results (for token/protocol options)
@@ -3251,14 +3515,31 @@ def render_sidebar_filters(display_results: pd.DataFrame):
     """
     st.header("⚙️ Settings")
 
+    # Initialize sidebar_filters in session_state if not exists
+    if 'sidebar_filters' not in st.session_state:
+        st.session_state.sidebar_filters = {
+            'liquidation_distance': settings.DEFAULT_LIQUIDATION_DISTANCE,
+            'deployment_usd': settings.DEFAULT_DEPLOYMENT_USD,
+            'force_usdc_start': False,
+            'force_token3_equals_token1': False,
+            'stablecoin_only': False,
+            'min_net_apr': 0.0,
+            'token_filter': [],
+            'protocol_filter': []
+        }
+
+    filters = st.session_state.sidebar_filters
+
     # Liquidation Distance
     col1, col2 = st.columns([30, 7])
     with col1:
         st.markdown("**Liquidation Distance (%)**")
     with col2:
+        # Use saved value from session_state
+        default_liq = filters.get('liquidation_distance', settings.DEFAULT_LIQUIDATION_DISTANCE)
         liq_dist_text = st.text_input(
             label="Liquidation Distance (%)",
-            value=str(int(settings.DEFAULT_LIQUIDATION_DISTANCE * 100)),
+            value=str(int(default_liq * 100)),
             label_visibility="collapsed",
             key="liq_input"
         )
@@ -3289,9 +3570,11 @@ def render_sidebar_filters(display_results: pd.DataFrame):
     with col1:
         st.markdown("**Deployment USD**")
     with col2:
+        # Use saved value from session_state
+        default_deployment = filters.get('deployment_usd', settings.DEFAULT_DEPLOYMENT_USD)
         deployment_text = st.text_input(
             label="Deployment USD",
-            value=str(int(settings.DEFAULT_DEPLOYMENT_USD)),
+            value=str(int(default_deployment)),
             label_visibility="collapsed",
             key="deployment_input"
         )
@@ -3307,22 +3590,22 @@ def render_sidebar_filters(display_results: pd.DataFrame):
 
     st.markdown("---")
 
-    # Toggles
+    # Toggles - Use saved values from session_state
     force_usdc_start = st.toggle(
         "Force token1 = USDC",
-        value=False,
+        value=filters.get('force_usdc_start', False),
         help="When enabled, only shows strategies starting with USDC"
     )
 
     force_token3_equals_token1 = st.toggle(
         "Force token3 = token1 (no conversion)",
-        value=False,
+        value=filters.get('force_token3_equals_token1', False),
         help="When enabled, only shows strategies where the closing stablecoin matches the starting stablecoin"
     )
 
     stablecoin_only = st.toggle(
         "Stablecoin Only",
-        value=False,
+        value=filters.get('stablecoin_only', False),
         help="When enabled, only shows strategies where all three tokens are stablecoins"
     )
 
@@ -3331,19 +3614,35 @@ def render_sidebar_filters(display_results: pd.DataFrame):
     # Filters section
     st.subheader("🔍 Filters")
 
-    min_apr = st.number_input("Min Net APR (%)", value=0.0, step=0.5)
+    min_apr = st.number_input(
+        "Min Net APR (%)",
+        value=filters.get('min_net_apr', 0.0),
+        step=0.5
+    )
 
     token_filter = st.multiselect(
         "Filter by Token",
         options=sorted(set(display_results['token1']).union(set(display_results['token2'])).union(set(display_results['token3']))) if not display_results.empty else [],
-        default=[]
+        default=filters.get('token_filter', [])
     )
 
     protocol_filter = st.multiselect(
         "Filter by Protocol",
         options=['Navi', 'AlphaFi', 'Suilend', 'ScallopLend', 'ScallopBorrow'],
-        default=[]
+        default=filters.get('protocol_filter', [])
     )
+
+    # Update session_state before returning
+    st.session_state.sidebar_filters.update({
+        'liquidation_distance': liquidation_distance,
+        'deployment_usd': deployment_usd,
+        'force_usdc_start': force_usdc_start,
+        'force_token3_equals_token1': force_token3_equals_token1,
+        'stablecoin_only': stablecoin_only,
+        'min_net_apr': min_apr,
+        'token_filter': token_filter,
+        'protocol_filter': protocol_filter
+    })
 
     return (liquidation_distance, deployment_usd, force_usdc_start, force_token3_equals_token1,
             stablecoin_only, min_apr, token_filter, protocol_filter)
@@ -3369,6 +3668,11 @@ def render_allocation_tab(all_strategies_df: pd.DataFrame):
         "and greedily allocates capital while respecting exposure limits."
     )
 
+    # Settings Preset Manager
+    render_allocator_settings_manager()
+
+    st.markdown("---")
+
     # Initialize constraints in session state
     if 'allocation_constraints' not in st.session_state:
         from config.settings import DEFAULT_ALLOCATION_CONSTRAINTS
@@ -3379,20 +3683,44 @@ def render_allocation_tab(all_strategies_df: pd.DataFrame):
     st.markdown("---")
 
     # Portfolio Size Input
-    col_size1, col_size2 = st.columns([1, 2])
+    col_size1, col_size2 = st.columns(2)
     with col_size1:
+        # Try to get portfolio_size from multiple sources (fallback chain)
+        default_portfolio_size = (
+            st.session_state.get('portfolio_size') or
+            st.session_state.get('allocation_constraints', {}).get('portfolio_size') or
+            settings.DEFAULT_DEPLOYMENT_USD
+        )
+
         portfolio_size = st.number_input(
             "Portfolio Size (USD)",
             min_value=100.0,
             max_value=1000000.0,
-            value=st.session_state.get('portfolio_size', settings.DEFAULT_DEPLOYMENT_USD),
+            value=default_portfolio_size,
             step=500.0,
             format="%.2f",
             key="portfolio_size_input"
         )
         st.session_state.portfolio_size = portfolio_size
+
     with col_size2:
-        st.info(f"💰 Allocating **${portfolio_size:,.0f}** across selected strategies")
+        # Max single allocation % constraint
+        default_max_single_pct = constraints.get('max_single_allocation_pct', 0.40)
+
+        max_single_allocation_pct = st.number_input(
+            "Max Single Strategy (%)",
+            min_value=1.0,
+            max_value=100.0,
+            value=default_max_single_pct * 100,
+            step=5.0,
+            format="%.0f",
+            help="Maximum percentage of portfolio that can be allocated to a single strategy",
+            key="max_single_allocation_pct_input"
+        )
+        constraints['max_single_allocation_pct'] = max_single_allocation_pct / 100
+
+    # Info note below both inputs
+    st.info(f"💰 Allocating **${portfolio_size:,.0f}** across selected strategies (max **{max_single_allocation_pct:.0f}%** per strategy)")
 
     st.markdown("---")
     st.subheader("⚙️ Allocation Constraints")
@@ -3854,6 +4182,40 @@ def render_allocation_tab(all_strategies_df: pd.DataFrame):
             st.error(f"❌ Portfolio name '{final_portfolio_name}' already exists. Please choose a different name.")
             return
 
+        # ============================================================
+        # AUTO-SAVE: Save current settings to "last_used"
+        # ============================================================
+        try:
+            from analysis.allocator_settings_service import AllocatorSettingsService
+
+            conn = get_db_connection()
+            service = AllocatorSettingsService(conn)
+
+            # Capture current allocator constraints
+            allocator_constraints = constraints.copy()
+            # Add portfolio_size to constraints
+            allocator_constraints['portfolio_size'] = portfolio_size
+
+            # Capture current sidebar filters from session state
+            sidebar_filters = st.session_state.get('sidebar_filters', {})
+
+            # Save to last_used
+            service.save_settings(
+                settings_id='last_used',
+                settings_name='Last Used Settings',
+                allocator_constraints=allocator_constraints,
+                sidebar_filters=sidebar_filters
+            )
+
+            conn.close()
+            print("✅ Auto-saved settings to last_used")
+        except Exception as e:
+            # Don't block portfolio generation on save failure
+            print(f"⚠️  Warning: Failed to auto-save settings: {e}")
+
+        # ============================================================
+        # Continue with portfolio generation
+        # ============================================================
         st.markdown("---")
         with st.spinner("🔄 Generating optimal portfolio..."):
             try:
@@ -3871,6 +4233,7 @@ def render_allocation_tab(all_strategies_df: pd.DataFrame):
                 # Save to session state
                 st.session_state.generated_portfolio = portfolio_df
                 st.session_state.portfolio_debug_info = debug_info
+                st.session_state.portfolio_strategies_source = all_strategies_df  # For reconstructing initial matrix
                 st.session_state.portfolio_name = final_portfolio_name
                 st.session_state.portfolio_generated = True
 
@@ -4008,18 +4371,37 @@ def render_portfolio_preview(portfolio_df: pd.DataFrame, portfolio_size: float, 
         (portfolio_df['adjusted_apr'] * portfolio_df['allocation_usd']).sum() / total_allocated
         if total_allocated > 0 else 0
     )
+
+    # Calculate weighted averages for net_apr, apr5, apr30
+    weighted_net_apr = (
+        (portfolio_df['net_apr'] * portfolio_df['allocation_usd']).sum() / total_allocated
+        if total_allocated > 0 else 0
+    )
+    weighted_apr5 = (
+        (portfolio_df['apr5'] * portfolio_df['allocation_usd']).sum() / total_allocated
+        if total_allocated > 0 else 0
+    )
+    weighted_apr30 = (
+        (portfolio_df['apr30'] * portfolio_df['allocation_usd']).sum() / total_allocated
+        if total_allocated > 0 else 0
+    )
+
     num_strategies = len(portfolio_df)
 
     # Portfolio Summary
     portfolio_name = st.session_state.get('portfolio_name', 'Portfolio')
     st.success(f"✅ Portfolio Generated: **{portfolio_name}** ({num_strategies} strategies)")
 
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4, col5 = st.columns(5)
     with col1:
         st.metric("Total Allocated", f"${total_allocated:,.0f}")
     with col2:
-        st.metric("Capital Utilization", f"{utilization_pct:.1f}%")
+        st.metric("Weighted Avg Net APR", f"{weighted_net_apr*100:.2f}%")
     with col3:
+        st.metric("Weighted Avg APR5", f"{weighted_apr5*100:.2f}%")
+    with col4:
+        st.metric("Weighted Avg APR30", f"{weighted_apr30*100:.2f}%")
+    with col5:
         st.metric("Weighted APR (Adjusted)", f"{weighted_adjusted_apr*100:.2f}%")
 
     st.markdown("---")
@@ -4162,9 +4544,69 @@ def render_portfolio_preview(portfolio_df: pd.DataFrame, portfolio_size: float, 
 
         # Detailed constraint breakdown (expandable)
         with st.expander("📊 Detailed Constraint Analysis"):
+            # Show initial matrix state before any allocations
+            st.markdown("### 📋 Initial Liquidity State")
+            st.caption("_Available borrow liquidity before any portfolio allocations_")
+
+            try:
+                # Reconstruct initial matrix from strategies
+                from analysis.portfolio_allocator import PortfolioAllocator
+
+                # Get strategies from portfolio or use all_strategies_df
+                if 'portfolio_strategies_source' in st.session_state:
+                    strategies_for_matrix = st.session_state.portfolio_strategies_source
+                else:
+                    # Fallback: reconstruct from portfolio
+                    strategies_for_matrix = portfolio_df
+
+                initial_matrix = PortfolioAllocator._prepare_available_borrow_matrix(strategies_for_matrix)
+
+                if not initial_matrix.empty:
+                    # Transpose for display (protocols as rows, tokens as columns)
+                    matrix_display = initial_matrix.T
+                    styled_matrix = matrix_display.style.format("${:,.0f}")
+                    st.dataframe(styled_matrix, width='stretch')
+                else:
+                    st.caption("_No initial matrix data available_")
+            except Exception as e:
+                st.caption(f"_Could not display initial matrix: {e}_")
+
+            st.markdown("---")
+            st.markdown("### 🎯 Strategy-by-Strategy Allocation")
+
             for record in debug_info:
                 strategy_name = f"{record['token1']}/{record['token2']}/{record['token3']}"
                 st.markdown(f"**Strategy #{record['strategy_num']}: {strategy_name}**")
+
+                # Display available borrow matrix (if available)
+                if 'available_borrow_snapshot' in record and record['available_borrow_snapshot'] is not None:
+                    st.markdown("**Available Borrow Matrix (after this allocation):**")
+                    st.caption("_Shows remaining liquidity per Token×Protocol after allocating to this strategy_")
+                    try:
+                        matrix_data = record['available_borrow_snapshot']
+
+                        # Handle both DataFrame and dict formats
+                        if isinstance(matrix_data, pd.DataFrame):
+                            # Already a DataFrame: index=tokens, columns=protocols
+                            matrix_df = matrix_data
+                        elif isinstance(matrix_data, dict):
+                            # Convert dict to DataFrame
+                            # Could be {token: {protocol: amount}} or {protocol: {token: amount}}
+                            matrix_df = pd.DataFrame(matrix_data)
+                        else:
+                            st.caption("_Unsupported matrix format_")
+                            matrix_df = None
+
+                        if matrix_df is not None and not matrix_df.empty:
+                            # Transpose so protocols are rows, tokens are columns (easier to read)
+                            matrix_df_display = matrix_df.T
+                            # Format values as currency
+                            styled_matrix = matrix_df_display.style.format("${:,.0f}")
+                            st.dataframe(styled_matrix, width='stretch')
+                        else:
+                            st.caption("_No borrow matrix data available_")
+                    except Exception as e:
+                        st.caption(f"_Error displaying matrix: {e}_")
 
                 constraint_info = record['constraint_info']
 
@@ -4196,6 +4638,59 @@ def render_portfolio_preview(portfolio_df: pd.DataFrame, portfolio_size: float, 
                         'Max from Protocol': f"${pc['max_from_protocol']:,.0f}"
                     })
                 st.dataframe(pd.DataFrame(protocol_constraint_data), hide_index=True)
+
+                # Max Single Allocation Constraint
+                if 'max_single_constraint' in constraint_info:
+                    st.markdown("**Max Single Allocation Constraint:**")
+                    max_single_data = []
+                    msc = constraint_info['max_single_constraint']
+                    is_limiting = constraint_info['limiting_constraint'] == 'max_single_allocation'
+                    max_single_data.append({
+                        'Limit (%)': f"{msc['limit_pct']*100:.0f}%",
+                        'Limit (USD)': f"${msc['limit_amount']:,.0f}",
+                        'Max from Constraint': f"${msc['max_from_single']:,.0f}",
+                        'Limited By': 'Yes' if is_limiting else 'No'
+                    })
+                    st.dataframe(pd.DataFrame(max_single_data), hide_index=True)
+
+                # Size Constraints
+                st.markdown("**Size Constraints:**")
+                size_constraint_data = []
+
+                # Remaining capital constraint
+                size_constraint_data.append({
+                    'Constraint Type': 'Remaining Capital',
+                    'Value': f"${record['remaining_capital']:,.0f}",
+                    'Limited By': 'Yes' if constraint_info['limiting_constraint'] == 'remaining_capital' else 'No'
+                })
+
+                # Strategy max size constraint (if exists)
+                max_size_before = record.get('max_size_before', None)
+                if max_size_before is not None and pd.notna(max_size_before):
+                    is_limiting = constraint_info['limiting_constraint'] == 'strategy_max_size'
+                    size_constraint_data.append({
+                        'Constraint Type': 'Strategy Max Size (before)',
+                        'Value': f"${max_size_before:,.0f}",
+                        'Limited By': 'Yes' if is_limiting else 'No'
+                    })
+
+                # Max size after (if iterative updates enabled)
+                max_size_after = record.get('max_size_after', None)
+                if max_size_after is not None and pd.notna(max_size_after):
+                    size_constraint_data.append({
+                        'Constraint Type': 'Strategy Max Size (after)',
+                        'Value': f"${max_size_after:,.0f}",
+                        'Limited By': 'N/A'
+                    })
+
+                # Final allocation
+                size_constraint_data.append({
+                    'Constraint Type': '→ Final Allocation',
+                    'Value': f"${record['max_amount']:,.0f}",
+                    'Limited By': constraint_info['limiting_constraint'].replace('_', ' ').title()
+                })
+
+                st.dataframe(pd.DataFrame(size_constraint_data), hide_index=True)
 
                 st.markdown("---")
 
@@ -4345,7 +4840,15 @@ def render_portfolio_preview(portfolio_df: pd.DataFrame, portfolio_size: float, 
 
                 # Get portfolio name and timestamp from session state
                 portfolio_name = st.session_state.get('portfolio_name', 'Unnamed Portfolio')
-                timestamp_seconds = st.session_state.get('selected_timestamp', int(datetime.now().timestamp()))
+
+                # Get timestamp - MUST be present (Design Note #2: fail loudly, no datetime.now() defaults)
+                if 'selected_timestamp' not in st.session_state:
+                    st.error("❌ Error: No timestamp selected. This should not happen.")
+                    return
+
+                # Convert to Unix seconds (Design Note #5: use to_seconds() helper at boundaries)
+                from utils.time_helpers import to_seconds
+                timestamp_seconds = to_seconds(st.session_state['selected_timestamp'])
 
                 # Save portfolio
                 portfolio_id = service.save_portfolio(
@@ -4387,15 +4890,59 @@ def render_portfolios_tab(timestamp_seconds: int):
     try:
         # Connect to database
         from analysis.portfolio_service import PortfolioService
+        from dashboard.db_utils import get_db_engine
 
         conn = get_db_connection()
+        engine = get_db_engine()
         service = PortfolioService(conn)
 
         # Get all active portfolios
         portfolios = service.get_active_portfolios()
 
+        # Check for standalone positions (portfolio_id IS NULL)
+        standalone_positions = service.get_standalone_positions()
+
+        # If we have standalone positions, create a virtual portfolio for them
+        if not standalone_positions.empty:
+            # Calculate metrics for standalone positions
+            total_deployed = standalone_positions['deployment_usd'].sum()
+
+            # Calculate weighted APR
+            if total_deployed > 0:
+                weighted_apr = (
+                    (standalone_positions['entry_net_apr'] * standalone_positions['deployment_usd']).sum()
+                    / total_deployed
+                )
+            else:
+                weighted_apr = 0.0
+
+            # Get earliest entry timestamp
+            earliest_entry = standalone_positions['entry_timestamp'].min()
+
+            # Create virtual portfolio record (using None as special marker for virtual portfolio)
+            virtual_portfolio = pd.DataFrame([{
+                'portfolio_id': None,  # Special marker for virtual standalone portfolio
+                'portfolio_name': '🎯 Single Positions',
+                'status': 'active',
+                'entry_timestamp': earliest_entry,
+                'target_portfolio_size': total_deployed,
+                'actual_allocated_usd': total_deployed,
+                'utilization_pct': 100.0,
+                'entry_weighted_net_apr': weighted_apr,
+                'is_paper_trade': True,
+                'created_timestamp': earliest_entry,
+                'constraints_json': '{}'  # Empty constraints for virtual portfolio
+            }])
+
+            # Prepend virtual portfolio to portfolios list
+            # Handle empty portfolios case to avoid FutureWarning
+            if portfolios.empty:
+                portfolios = virtual_portfolio
+            else:
+                portfolios = pd.concat([virtual_portfolio, portfolios], ignore_index=True)
+
         if portfolios.empty:
-            st.info("📭 No portfolios saved yet. Generate and save a portfolio from the Allocation tab!")
+            st.info("📭 No portfolios or positions saved yet. Generate and save a portfolio from the Allocation tab, or deploy individual strategies!")
             conn.close()
             return
 
@@ -4419,12 +4966,100 @@ def render_portfolios_tab(timestamp_seconds: int):
         # Display portfolios list
         st.markdown("### 📋 Saved Portfolios")
 
+        # Batch load statistics for all positions
+        all_position_ids = []
         for _, portfolio in portfolios.iterrows():
-            # Create expander for each portfolio
+            if portfolio['portfolio_id'] is None or pd.isna(portfolio['portfolio_id']):
+                positions_df = service.get_standalone_positions()
+            else:
+                positions_df = service.get_portfolio_positions(portfolio['portfolio_id'])
+            all_position_ids.extend(positions_df['position_id'].tolist())
+
+        # Load pre-calculated statistics once for all positions
+        all_stats = get_all_position_statistics(all_position_ids, timestamp_seconds, engine)
+
+        for _, portfolio in portfolios.iterrows():
+            # Get all positions in this portfolio
+            if portfolio['portfolio_id'] is None or pd.isna(portfolio['portfolio_id']):
+                # Virtual "Single Positions" portfolio
+                positions_df = service.get_standalone_positions()
+            else:
+                # Real portfolio
+                positions_df = service.get_portfolio_positions(portfolio['portfolio_id'])
+
+            # Calculate portfolio metrics from pre-calculated statistics
+            if not positions_df.empty:
+                deployed_size = positions_df['deployment_usd'].sum()
+
+                # Aggregate metrics from pre-calculated statistics
+                total_current_value = 0.0
+                total_pnl = 0.0
+                total_base_earnings = 0.0
+                total_reward_earnings = 0.0
+                total_fees = 0.0
+
+                # Weighted APR calculations
+                weighted_entry_apr_sum = 0.0
+                weighted_current_apr_sum = 0.0
+                weighted_realised_apr_sum = 0.0
+                total_weight = deployed_size
+
+                for _, pos in positions_df.iterrows():
+                    pos_id = pos['position_id']
+                    pos_deployment = pos['deployment_usd']
+
+                    # Get pre-calculated statistics
+                    stats = all_stats.get(pos_id)
+                    if stats:
+                        # Sum dollar amounts
+                        total_current_value += stats.get('current_value', pos_deployment)
+                        total_pnl += stats.get('total_pnl', 0.0)
+                        total_base_earnings += stats.get('base_earnings', 0.0)
+                        total_reward_earnings += stats.get('reward_earnings', 0.0)
+                        total_fees += stats.get('total_fees', 0.0)
+
+                        # Weighted APRs
+                        entry_apr = pos.get('entry_net_apr', 0.0)
+                        weighted_entry_apr_sum += entry_apr * pos_deployment
+
+                        current_apr = stats.get('current_apr', entry_apr)
+                        weighted_current_apr_sum += current_apr * pos_deployment
+
+                        realised_apr = stats.get('realized_apr', 0.0)
+                        weighted_realised_apr_sum += realised_apr * pos_deployment
+                    else:
+                        # No stats available, use deployment as current value
+                        total_current_value += pos_deployment
+                        entry_apr = pos.get('entry_net_apr', 0.0)
+                        weighted_entry_apr_sum += entry_apr * pos_deployment
+                        weighted_current_apr_sum += entry_apr * pos_deployment
+
+                # Calculate weighted averages
+                entry_net_apr = (weighted_entry_apr_sum / total_weight) if total_weight > 0 else 0.0
+                current_net_apr = (weighted_current_apr_sum / total_weight) if total_weight > 0 else 0.0
+                realised_net_apr = (weighted_realised_apr_sum / total_weight) if total_weight > 0 else 0.0
+
+            else:
+                # Empty portfolio
+                deployed_size = 0.0
+                total_current_value = 0.0
+                entry_net_apr = 0.0
+                current_net_apr = 0.0
+                realised_net_apr = 0.0
+                total_pnl = 0.0
+                total_base_earnings = 0.0
+                total_reward_earnings = 0.0
+                total_fees = 0.0
+
+            # Format entry timestamp
+            entry_ts_str = portfolio['entry_timestamp'].strftime('%Y-%m-%d %H:%M:%S')
+
+            # Create expander with new format
             with st.expander(
-                f"**{portfolio['portfolio_name']}** | "
-                f"{portfolio['entry_weighted_net_apr']*100:.2f}% APR | "
-                f"${portfolio['actual_allocated_usd']:,.0f} allocated"
+                f"{entry_ts_str} | **{portfolio['portfolio_name']}** | "
+                f"💰 ${deployed_size:,.0f} → ${total_current_value:,.0f} | "
+                f"Entry {entry_net_apr*100:.2f}% | Curr {current_net_apr*100:.2f}% | Real {realised_net_apr*100:.2f}% | "
+                f"PnL ${total_pnl:,.0f} | Base ${total_base_earnings:,.0f} | Rew ${total_reward_earnings:,.0f} | Fees ${total_fees:,.0f}"
             ):
                 render_portfolio_detail(portfolio, timestamp_seconds, service)
 
@@ -4456,7 +5091,11 @@ def render_portfolio_detail(portfolio: pd.Series, timestamp_seconds: int, servic
         st.metric("Utilization", f"{portfolio['utilization_pct']:.1f}%")
 
     # Get positions in this portfolio
-    positions_df = service.get_portfolio_positions(portfolio['portfolio_id'])
+    # Special handling for virtual standalone portfolio (portfolio_id is None)
+    if portfolio['portfolio_id'] is None or pd.isna(portfolio['portfolio_id']):
+        positions_df = service.get_standalone_positions()
+    else:
+        positions_df = service.get_portfolio_positions(portfolio['portfolio_id'])
 
     if positions_df.empty:
         st.info("📭 No positions in this portfolio yet.")
@@ -4467,7 +5106,7 @@ def render_portfolio_detail(portfolio: pd.Series, timestamp_seconds: int, servic
 
     display_df = positions_df[[
         'token1', 'token2', 'token3',
-        'protocol_A', 'protocol_B',
+        'protocol_a', 'protocol_b',
         'deployment_usd', 'entry_net_apr',
         'status'
     ]].copy()
@@ -4481,8 +5120,8 @@ def render_portfolio_detail(portfolio: pd.Series, timestamp_seconds: int, servic
         'token1': 'Token 1',
         'token2': 'Token 2',
         'token3': 'Token 3',
-        'protocol_A': 'Protocol A',
-        'protocol_B': 'Protocol B',
+        'protocol_a': 'Protocol A',
+        'protocol_b': 'Protocol B',
         'deployment_usd': 'Deployment',
         'entry_net_apr': 'Entry APR',
         'status': 'Status'
@@ -4490,31 +5129,34 @@ def render_portfolio_detail(portfolio: pd.Series, timestamp_seconds: int, servic
 
     st.dataframe(display_df, width='stretch', hide_index=True)
 
-    # Action buttons
-    st.markdown("---")
-    col_btn1, col_btn2, _ = st.columns([1, 1, 2])
-    with col_btn1:
-        if st.button("🗑️ Delete", key=f"delete_{portfolio['portfolio_id']}", width='stretch'):
-            try:
-                service.delete_portfolio(portfolio['portfolio_id'])
-                st.success(f"✅ Portfolio '{portfolio['portfolio_name']}' deleted")
-                st.rerun()
-            except Exception as e:
-                st.error(f"❌ Error: {str(e)}")
+    # Action buttons (only for real portfolios, not for virtual "Single Positions")
+    if portfolio['portfolio_id'] is not None and not pd.isna(portfolio['portfolio_id']):
+        st.markdown("---")
+        col_btn1, col_btn2, _ = st.columns([1, 1, 2])
+        with col_btn1:
+            if st.button("🗑️ Delete", key=f"delete_{portfolio['portfolio_id']}", width='stretch'):
+                try:
+                    service.delete_portfolio(portfolio['portfolio_id'])
+                    st.success(f"✅ Portfolio '{portfolio['portfolio_name']}' deleted")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"❌ Error: {str(e)}")
 
-    with col_btn2:
-        if st.button("🔒 Close", key=f"close_{portfolio['portfolio_id']}", width='stretch'):
-            try:
-                service.close_portfolio(
-                    portfolio['portfolio_id'],
-                    timestamp_seconds,
-                    close_reason="Manual close",
-                    close_notes=None
-                )
-                st.success(f"✅ Portfolio '{portfolio['portfolio_name']}' closed")
-                st.rerun()
-            except Exception as e:
-                st.error(f"❌ Error: {str(e)}")
+        with col_btn2:
+            if st.button("🔒 Close", key=f"close_{portfolio['portfolio_id']}", width='stretch'):
+                try:
+                    service.close_portfolio(
+                        portfolio['portfolio_id'],
+                        timestamp_seconds,
+                        close_reason="Manual close",
+                        close_notes=None
+                    )
+                    st.success(f"✅ Portfolio '{portfolio['portfolio_name']}' closed")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"❌ Error: {str(e)}")
+    else:
+        st.info("💡 These are standalone positions deployed individually. To manage, use the Positions tab.")
 
     # Show constraints used
     with st.expander("⚙️ Allocation Constraints"):
@@ -4538,6 +5180,9 @@ def render_dashboard(data_loader: DataLoader, mode: str):
     import time
     dashboard_start = time.time()
     print(f"\n[{'0.0':>7}ms] [DASHBOARD] Starting render")
+
+    # Initialize allocator settings on first load
+    initialize_allocator_settings()
 
     # Custom CSS
     st.markdown("""

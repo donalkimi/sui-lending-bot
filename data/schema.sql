@@ -45,7 +45,11 @@ CREATE TABLE IF NOT EXISTS rates_snapshot (
     -- Metadata
     market TEXT,
     side TEXT,
-    
+
+    -- PnL Optimization (added 2026-02-10)
+    -- Marks snapshots to use for PnL calculations (one per hour, closest to top of hour)
+    use_for_pnl BOOLEAN NOT NULL DEFAULT FALSE,
+
     -- Composite primary key for PostgreSQL ON CONFLICT support
     PRIMARY KEY (timestamp, protocol, token_contract)
 );
@@ -54,6 +58,11 @@ CREATE TABLE IF NOT EXISTS rates_snapshot (
 CREATE INDEX IF NOT EXISTS idx_rates_time ON rates_snapshot(timestamp);
 CREATE INDEX IF NOT EXISTS idx_rates_contract ON rates_snapshot(token_contract);
 CREATE INDEX IF NOT EXISTS idx_rates_protocol_contract ON rates_snapshot(protocol, token_contract);
+
+-- PnL optimization indexes (added 2026-02-10)
+-- Partial indexes only include rows where use_for_pnl = TRUE for efficiency
+CREATE INDEX IF NOT EXISTS idx_rates_pnl_flag ON rates_snapshot(use_for_pnl, timestamp) WHERE use_for_pnl = TRUE;
+CREATE INDEX IF NOT EXISTS idx_rates_pnl_lookup ON rates_snapshot(token_contract, protocol, timestamp) WHERE use_for_pnl = TRUE;
 
 
 -- Table 2: token_registry
@@ -575,3 +584,76 @@ USING (true);
 ALTER TABLE positions
 ADD CONSTRAINT IF NOT EXISTS fk_positions_portfolio
 FOREIGN KEY (portfolio_id) REFERENCES portfolios(portfolio_id) ON DELETE SET NULL;
+
+-- =============================================================================
+-- Table 11: allocator_settings
+-- Stores allocator constraint settings and sidebar filter presets
+-- Supports both "last_used" (auto-saved) and named presets
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS allocator_settings (
+    -- Identification
+    settings_id TEXT PRIMARY KEY,           -- 'last_used' or UUID for named presets
+    settings_name TEXT NOT NULL,            -- Display name (e.g., "Conservative Strategy")
+
+    -- Settings Blob (JSON)
+    -- Structure:
+    -- {
+    --   "allocator_constraints": {
+    --     "portfolio_size": 1000.0,
+    --     "token2_exposure_limit": 0.30,
+    --     "token2_exposure_overrides": {"SUI": 0.40},
+    --     "stablecoin_exposure_limit": -1,
+    --     "stablecoin_exposure_overrides": {"USDC": -1},
+    --     "protocol_exposure_limit": 0.40,
+    --     "max_single_allocation_pct": 0.40,
+    --     "max_strategies": 5,
+    --     "min_apy_confidence": 0.70,
+    --     "apr_weights": {"net_apr": 0.30, "apr5": 0.30, "apr30": 0.30, "apr90": 0.10},
+    --     "stablecoin_preferences": {"USDC": 1.00, "USDY": 0.95}
+    --   },
+    --   "sidebar_filters": {
+    --     "liquidation_distance": 0.20,
+    --     "deployment_usd": 100.0,
+    --     "force_usdc_start": false,
+    --     "force_token3_equals_token1": false,
+    --     "stablecoin_only": false,
+    --     "min_net_apr": 0.0,
+    --     "token_filter": ["SUI", "DEEP"],
+    --     "protocol_filter": ["Navi", "Suilend"]
+    --   }
+    -- }
+    settings_json TEXT NOT NULL,
+
+    -- Ownership (Phase 2 multi-user support)
+    user_id TEXT DEFAULT NULL,              -- Nullable for Phase 1
+
+    -- Usage Tracking
+    last_used_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    use_count INTEGER DEFAULT 0,
+
+    -- Metadata
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    description TEXT DEFAULT NULL           -- Optional user description
+);
+
+-- Indexes for allocator_settings
+CREATE INDEX IF NOT EXISTS idx_allocator_settings_name ON allocator_settings(settings_name);
+CREATE INDEX IF NOT EXISTS idx_allocator_settings_user ON allocator_settings(user_id);
+CREATE INDEX IF NOT EXISTS idx_allocator_settings_last_used ON allocator_settings(last_used_at DESC);
+
+-- RLS for allocator_settings
+ALTER TABLE allocator_settings ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Service role has full access to allocator_settings"
+ON allocator_settings
+FOR ALL
+TO service_role
+USING (true)
+WITH CHECK (true);
+
+CREATE POLICY "Authenticated users can read allocator_settings"
+ON allocator_settings
+FOR SELECT
+TO authenticated
+USING (true);

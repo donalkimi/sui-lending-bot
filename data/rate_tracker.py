@@ -102,8 +102,7 @@ class RateTracker:
             # Commit
             conn.commit()
 
-            print(f"[OK] Saved snapshot: {rows_saved} rate rows, {reward_rows} reward price rows")
-            print(f"   Timestamp: {timestamp.strftime('%Y-%m-%d %H:%M:%S UTC')}")
+            print(f"[DB] Saved snapshot: {rows_saved} rates, {reward_rows} rewards @ {timestamp.strftime('%Y-%m-%d %H:%M:%S UTC')}")
 
             # Validate snapshot quality
             self._validate_snapshot_quality(conn, timestamp, rows_saved)
@@ -324,26 +323,75 @@ class RateTracker:
                 self._insert_rates_sqlite(conn, rows)
         
         return len(rows) 
+    def _should_use_for_pnl_sqlite(self, cursor, timestamp: datetime, protocol: str, token_contract: str) -> bool:
+        """
+        SQLite version of _should_use_for_pnl using ? placeholders.
+        See _should_use_for_pnl() for full documentation.
+        """
+        from datetime import timedelta
+
+        hour_start = timestamp.replace(minute=0, second=0, microsecond=0)
+        hour_end = hour_start + timedelta(hours=1)
+
+        query = """
+        SELECT timestamp
+        FROM rates_snapshot
+        WHERE timestamp >= ? AND timestamp < ?
+          AND protocol = ? AND token_contract = ?
+          AND use_for_pnl = 1
+        LIMIT 1
+        """
+
+        cursor.execute(query, (hour_start, hour_end, protocol, token_contract))
+        existing = cursor.fetchone()
+
+        if not existing:
+            return True
+
+        existing_ts = existing[0]
+        existing_distance = abs((existing_ts - hour_start).total_seconds())
+        new_distance = abs((timestamp - hour_start).total_seconds())
+
+        if new_distance < existing_distance:
+            cursor.execute("""
+                UPDATE rates_snapshot
+                SET use_for_pnl = 0
+                WHERE timestamp = ? AND protocol = ? AND token_contract = ?
+            """, (existing_ts, protocol, token_contract))
+            return True
+
+        return False
+
     def _insert_rates_sqlite(self, conn, rows):
-        """Insert rates into SQLite"""
+        """Insert rates into SQLite with PnL flag optimization"""
         cursor = conn.cursor()
-        
+
         for row in rows:
+            # Determine if this snapshot should be used for PnL calculations
+            use_for_pnl = self._should_use_for_pnl_sqlite(
+                cursor,
+                row['timestamp'],
+                row['protocol'],
+                row['token_contract']
+            )
+
             cursor.execute('''
                 INSERT OR REPLACE INTO rates_snapshot
                 (timestamp, protocol, token, token_contract,
                     lend_base_apr, lend_reward_apr, lend_total_apr,
                     borrow_base_apr, borrow_reward_apr, borrow_total_apr,
                     collateral_ratio, liquidation_threshold, price_usd,
-                    utilization, total_supply_usd, total_borrow_usd, available_borrow_usd, borrow_fee, borrow_weight)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    utilization, total_supply_usd, total_borrow_usd, available_borrow_usd, borrow_fee, borrow_weight,
+                    use_for_pnl)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 row['timestamp'], row['protocol'], row['token'], row['token_contract'],
                 row['lend_base_apr'], row['lend_reward_apr'], row['lend_total_apr'],
                 row['borrow_base_apr'], row['borrow_reward_apr'], row['borrow_total_apr'],
                 row['collateral_ratio'], row['liquidation_threshold'], row['price_usd'],
                 row['utilization'], row['total_supply_usd'], row['total_borrow_usd'],
-                row['available_borrow_usd'], row['borrow_fee'], row['borrow_weight']
+                row['available_borrow_usd'], row['borrow_fee'], row['borrow_weight'],
+                1 if use_for_pnl else 0  # SQLite uses 1/0 for boolean
             ))
 
     def _convert_to_native_types(self, value):
@@ -359,11 +407,79 @@ class RateTracker:
         # Already a native Python type
         return value
 
+    def _should_use_for_pnl(self, cursor, timestamp: datetime, protocol: str, token_contract: str) -> bool:
+        """
+        Determine if this snapshot should be used for PnL calculations.
+
+        Logic: Query existing snapshots in this hour and check if this is closest to top of hour.
+        Ensures exactly one snapshot per hour per (protocol, token) by:
+        1. Finding existing flagged snapshot in this hour
+        2. Comparing distances from top of hour
+        3. Unflagging old snapshot if new one is closer
+
+        Args:
+            cursor: Database cursor for queries
+            timestamp: Snapshot timestamp
+            protocol: Protocol name (e.g., 'Navi', 'Suilend')
+            token_contract: Token contract address
+
+        Returns:
+            True if this snapshot should be flagged for PnL, False otherwise
+        """
+        from datetime import timedelta
+
+        # Calculate hour boundaries
+        hour_start = timestamp.replace(minute=0, second=0, microsecond=0)
+        hour_end = hour_start + timedelta(hours=1)
+
+        # Query existing PnL snapshot in this hour for this protocol/token
+        query = """
+        SELECT timestamp
+        FROM rates_snapshot
+        WHERE timestamp >= %s AND timestamp < %s
+          AND protocol = %s AND token_contract = %s
+          AND use_for_pnl = TRUE
+        LIMIT 1
+        """
+
+        cursor.execute(query, (hour_start, hour_end, protocol, token_contract))
+        existing = cursor.fetchone()
+
+        if not existing:
+            # No existing PnL snapshot in this hour - flag this one
+            return True
+
+        # Calculate distances from top of hour
+        existing_ts = existing[0]
+        existing_distance = abs((existing_ts - hour_start).total_seconds())
+        new_distance = abs((timestamp - hour_start).total_seconds())
+
+        if new_distance < existing_distance:
+            # This snapshot is closer to top of hour - unset old flag and use this one
+            cursor.execute("""
+                UPDATE rates_snapshot
+                SET use_for_pnl = FALSE
+                WHERE timestamp = %s AND protocol = %s AND token_contract = %s
+            """, (existing_ts, protocol, token_contract))
+            return True
+
+        # Existing snapshot is closer - don't flag this one
+        return False
+
     def _insert_rates_postgres(self, conn, rows):
-        """Insert rates into PostgreSQL"""
+        """Insert rates into PostgreSQL with PnL flag optimization"""
         cursor = conn.cursor()
 
         for row in rows:
+            # Determine if this snapshot should be used for PnL calculations
+            # Uses precise approach: finds closest snapshot to top of each hour
+            use_for_pnl = self._should_use_for_pnl(
+                cursor,
+                row['timestamp'],
+                row['protocol'],
+                row['token_contract']
+            )
+
             # Convert all values to Python native types
             values = (
                 row['timestamp'],
@@ -384,7 +500,8 @@ class RateTracker:
                 self._convert_to_native_types(row['total_borrow_usd']),
                 self._convert_to_native_types(row['available_borrow_usd']),
                 self._convert_to_native_types(row['borrow_fee']),
-                self._convert_to_native_types(row['borrow_weight'])
+                self._convert_to_native_types(row['borrow_weight']),
+                use_for_pnl  # PnL optimization flag (added 2026-02-10)
             )
 
             cursor.execute('''
@@ -393,9 +510,27 @@ class RateTracker:
                     lend_base_apr, lend_reward_apr, lend_total_apr,
                     borrow_base_apr, borrow_reward_apr, borrow_total_apr,
                     collateral_ratio, liquidation_threshold, price_usd,
-                    utilization, total_supply_usd, total_borrow_usd, available_borrow_usd, borrow_fee, borrow_weight)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (timestamp, protocol, token_contract) DO NOTHING
+                    utilization, total_supply_usd, total_borrow_usd, available_borrow_usd, borrow_fee, borrow_weight,
+                    use_for_pnl)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (timestamp, protocol, token_contract)
+                DO UPDATE SET
+                    lend_base_apr = EXCLUDED.lend_base_apr,
+                    lend_reward_apr = EXCLUDED.lend_reward_apr,
+                    lend_total_apr = EXCLUDED.lend_total_apr,
+                    borrow_base_apr = EXCLUDED.borrow_base_apr,
+                    borrow_reward_apr = EXCLUDED.borrow_reward_apr,
+                    borrow_total_apr = EXCLUDED.borrow_total_apr,
+                    collateral_ratio = EXCLUDED.collateral_ratio,
+                    liquidation_threshold = EXCLUDED.liquidation_threshold,
+                    price_usd = EXCLUDED.price_usd,
+                    utilization = EXCLUDED.utilization,
+                    total_supply_usd = EXCLUDED.total_supply_usd,
+                    total_borrow_usd = EXCLUDED.total_borrow_usd,
+                    available_borrow_usd = EXCLUDED.available_borrow_usd,
+                    borrow_fee = EXCLUDED.borrow_fee,
+                    borrow_weight = EXCLUDED.borrow_weight,
+                    use_for_pnl = EXCLUDED.use_for_pnl
             ''', values)
 
     def _save_reward_prices(
@@ -856,27 +991,23 @@ class RateTracker:
         cursor = conn.cursor()
 
         # Delete old analysis_cache entries
-        # For PostgreSQL, convert Unix timestamp to timestamp type
-        if self.db_type == 'postgresql':
-            cursor.execute(
-                f"DELETE FROM analysis_cache WHERE created_at < to_timestamp({ph})",
-                (cutoff_time,)
-            )
-        else:
-            cursor.execute(
-                f"DELETE FROM analysis_cache WHERE created_at < {ph}",
-                (cutoff_time,)
-            )
+        # Both PostgreSQL and SQLite: created_at is INTEGER (Unix timestamp), compare directly
+        cursor.execute(
+            f"DELETE FROM analysis_cache WHERE created_at < {ph}",
+            (cutoff_time,)
+        )
         deleted_analysis = cursor.rowcount
 
         # Delete old chart_cache entries
-        # For PostgreSQL, convert Unix timestamp to timestamp type
-        if self.db_type == 'postgresql':
+        # Handle database type difference: PostgreSQL uses TIMESTAMP, SQLite uses INTEGER
+        if psycopg2 and isinstance(self.conn, psycopg2.extensions.connection):
+            # PostgreSQL: created_at is TIMESTAMP, convert Unix timestamp to TIMESTAMP
             cursor.execute(
                 f"DELETE FROM chart_cache WHERE created_at < to_timestamp({ph})",
                 (cutoff_time,)
             )
         else:
+            # SQLite: created_at is INTEGER (Unix timestamp)
             cursor.execute(
                 f"DELETE FROM chart_cache WHERE created_at < {ph}",
                 (cutoff_time,)
