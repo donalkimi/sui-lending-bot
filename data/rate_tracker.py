@@ -9,11 +9,7 @@ from datetime import datetime, timezone
 import pandas as pd
 from pathlib import Path
 from typing import Optional
-
-try:
-    import psycopg2
-except ImportError:
-    psycopg2 = None
+import psycopg2
 
 
 class RateTracker:
@@ -46,7 +42,7 @@ class RateTracker:
     
     def _get_connection(self):
         """Get database connection based on configuration"""
-        if self.db_type == 'postgresql':
+        if self.use_cloud:
             if not self.connection_url:
                 raise ValueError("PostgreSQL connection_url required when use_cloud=True")
             if psycopg2 is None:
@@ -156,7 +152,7 @@ class RateTracker:
             live_pnl = self._convert_to_native_types(stats['live_pnl'])
             realized_pnl = self._convert_to_native_types(stats['realized_pnl'])
 
-            if self.db_type == 'postgresql':
+            if self.use_cloud:
                 # PostgreSQL INSERT ... ON CONFLICT DO UPDATE
                 cursor = conn.cursor()
                 cursor.execute("""
@@ -317,7 +313,7 @@ class RateTracker:
         
         # Insert rows
         if rows:
-            if self.db_type == 'postgresql':
+            if self.use_cloud:
                 self._insert_rates_postgres(conn, rows)
             else:
                 self._insert_rates_sqlite(conn, rows)
@@ -626,14 +622,14 @@ class RateTracker:
             inserted = len([t for t in token_list if t not in existing])
             updated_count = len(token_list) - inserted
 
-            if self.db_type == "sqlite":
+            if not self.use_cloud:
                 self._upsert_token_registry_sqlite(conn, ts, df)
             else:
                 self._upsert_token_registry_postgres(conn, ts, df)
 
             total = self._count_table("token_registry", conn=conn)
 
-            if self.db_type == "sqlite":
+            if not self.use_cloud:
                 conn.commit()
             else:
                 conn.commit()
@@ -648,7 +644,7 @@ class RateTracker:
             return set()
 
         cur = conn.cursor()
-        if self.db_type == "sqlite":
+        if not self.use_cloud:
             placeholders = ",".join(["?"] * len(token_contracts))
             cur.execute(f"SELECT token_contract FROM token_registry WHERE token_contract IN ({placeholders})", token_contracts)
         else:
@@ -848,7 +844,7 @@ class RateTracker:
         """
         cur = conn.cursor()
 
-        if self.db_type == 'postgresql':
+        if self.use_cloud:
             cur.execute(
                 "SELECT COUNT(DISTINCT protocol) FROM rates_snapshot WHERE timestamp = %s",
                 (timestamp,)
@@ -869,7 +865,7 @@ class RateTracker:
         """Create cache tables for analysis and chart data"""
         conn = self._get_connection()
         try:
-            if self.db_type == 'sqlite':
+            if not self.use_cloud:
                 # Create analysis_cache table
                 conn.execute("""
                     CREATE TABLE IF NOT EXISTS analysis_cache (
@@ -943,7 +939,7 @@ class RateTracker:
                 cursor = conn.cursor()
 
                 # Adjust placeholder based on database type
-                ph = '%s' if self.db_type == 'postgresql' else '?'
+                ph = '%s' if self.use_cloud else '?'
 
                 # Use PostgreSQL-compatible UPSERT syntax
                 cursor.execute(f"""
@@ -986,7 +982,7 @@ class RateTracker:
         cutoff_time = current_time - (retention_hours * 3600)
 
         # Adjust placeholder based on database type
-        ph = '%s' if self.db_type == 'postgresql' else '?'
+        ph = '%s' if self.use_cloud else '?'
 
         cursor = conn.cursor()
 
@@ -1000,7 +996,7 @@ class RateTracker:
 
         # Delete old chart_cache entries
         # Handle database type difference: PostgreSQL uses TIMESTAMP, SQLite uses INTEGER
-        if psycopg2 and isinstance(self.conn, psycopg2.extensions.connection):
+        if self.use_cloud:
             # PostgreSQL: created_at is TIMESTAMP, convert Unix timestamp to TIMESTAMP
             cursor.execute(
                 f"DELETE FROM chart_cache WHERE created_at < to_timestamp({ph})",
@@ -1042,7 +1038,7 @@ class RateTracker:
                 cursor = conn.cursor()
 
                 # Adjust placeholder based on database type
-                ph = '%s' if self.db_type == 'postgresql' else '?'
+                ph = '%s' if self.use_cloud else '?'
 
                 cursor.execute(f"""
                     SELECT results_json, strategy_count FROM analysis_cache
@@ -1094,7 +1090,7 @@ class RateTracker:
                 cursor = conn.cursor()
 
                 # Adjust placeholder based on database type
-                ph = '%s' if self.db_type == 'postgresql' else '?'
+                ph = '%s' if self.use_cloud else '?'
 
                 # Use PostgreSQL-compatible UPSERT syntax
                 cursor.execute(f"""
@@ -1129,7 +1125,7 @@ class RateTracker:
                 cursor = conn.cursor()
 
                 # Adjust placeholder based on database type
-                ph = '%s' if self.db_type == 'postgresql' else '?'
+                ph = '%s' if self.use_cloud else '?'
 
                 cursor.execute(f"""
                     SELECT chart_html FROM chart_cache

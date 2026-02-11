@@ -222,13 +222,19 @@ class PositionService:
         entry_borrow_weight_2a = strategy_row.get('borrow_weight_2a', 1.0)
         entry_borrow_weight_3b = strategy_row.get('borrow_weight_3b', 1.0)
 
+        # Calculate entry token amounts: (weight * deployment) / price
+        entry_token_amount_1a = (l_a * deployment_usd) / entry_price_1a if entry_price_1a > 0 else 0
+        entry_token_amount_2a = (b_a * deployment_usd) / entry_price_2a if entry_price_2a > 0 else 0
+        entry_token_amount_2b = (L_B * deployment_usd) / entry_price_2b if entry_price_2b > 0 else 0
+        entry_token_amount_3b = (b_b * deployment_usd) / entry_price_3b if b_b and entry_price_3b and entry_price_3b > 0 else 0
+
         # Convert timestamp to datetime string for DB
         entry_timestamp_str = to_datetime_str(entry_timestamp)
 
         # Insert position
         cursor = self.conn.cursor()
         ph = self._get_placeholder()
-        placeholders = ', '.join([ph] * 48)  # 48 values (added portfolio_id)
+        placeholders = ', '.join([ph] * 52)  # 52 values (added portfolio_id + 4 token amounts)
 
         try:
             cursor.execute(f"""
@@ -242,6 +248,7 @@ class PositionService:
                     deployment_usd, l_a, b_a, l_b, b_b,
                     entry_lend_rate_1a, entry_borrow_rate_2a, entry_lend_rate_2b, entry_borrow_rate_3b,
                     entry_price_1a, entry_price_2a, entry_price_2b, entry_price_3b,
+                    entry_token_amount_1a, entry_token_amount_2a, entry_token_amount_2b, entry_token_amount_3b,
                     entry_collateral_ratio_1a, entry_collateral_ratio_2b,
                     entry_liquidation_threshold_1a, entry_liquidation_threshold_2b,
                     entry_net_apr, entry_apr5, entry_apr30, entry_apr90, entry_days_to_breakeven, entry_liquidation_distance,
@@ -270,6 +277,10 @@ class PositionService:
                 self._to_native_type(entry_price_2a),
                 self._to_native_type(entry_price_2b),
                 self._to_native_type(entry_price_3b),
+                self._to_native_type(entry_token_amount_1a),
+                self._to_native_type(entry_token_amount_2a),
+                self._to_native_type(entry_token_amount_2b),
+                self._to_native_type(entry_token_amount_3b),
                 self._to_native_type(entry_collateral_ratio_1a),
                 self._to_native_type(entry_collateral_ratio_2b),
                 self._to_native_type(entry_liquidation_threshold_1a),
@@ -295,6 +306,127 @@ class PositionService:
             # Rollback on error (especially important for PostgreSQL)
             self.conn.rollback()
             raise Exception(f"Failed to create position: {e}")
+
+        # Create initial rebalance record (sequence_number=1) for this position
+        # This ensures all positions have baseline token amounts for liquidation calculations
+        try:
+            # Calculate entry token amounts: (weight * deployment) / price
+            entry_token_amount_1a = (l_a * deployment_usd) / entry_price_1a if entry_price_1a > 0 else 0
+            entry_token_amount_2a = (b_a * deployment_usd) / entry_price_2a if entry_price_2a > 0 else 0
+            entry_token_amount_2b = (L_B * deployment_usd) / entry_price_2b if entry_price_2b > 0 else 0
+            entry_token_amount_3b = (b_b * deployment_usd) / entry_price_3b if b_b and entry_price_3b and entry_price_3b > 0 else 0
+
+            # Calculate entry size USD: weight * deployment
+            entry_size_usd_1a = l_a * deployment_usd
+            entry_size_usd_2a = b_a * deployment_usd
+            entry_size_usd_2b = L_B * deployment_usd
+            entry_size_usd_3b = b_b * deployment_usd if b_b else 0
+
+            # Build snapshot for initial deployment (rebalance with opening but no closing)
+            initial_snapshot = {
+                'opening_timestamp': entry_timestamp,  # Unix seconds (int)
+                'closing_timestamp': None,  # Still open
+                'deployment_usd': deployment_usd,
+                'l_a': l_a,
+                'b_a': b_a,
+                'l_b': L_B,
+                'b_b': b_b,
+
+                # Opening rates/prices (from position entry)
+                'opening_lend_rate_1a': entry_lend_rate_1a,
+                'opening_borrow_rate_2a': entry_borrow_rate_2a,
+                'opening_lend_rate_2b': entry_lend_rate_2b,
+                'opening_borrow_rate_3b': entry_borrow_rate_3b,
+                'opening_price_1a': entry_price_1a,
+                'opening_price_2a': entry_price_2a,
+                'opening_price_2b': entry_price_2b,
+                'opening_price_3b': entry_price_3b,
+
+                # Closing rates/prices (NULL for initial deployment)
+                'closing_lend_rate_1a': None,
+                'closing_borrow_rate_2a': None,
+                'closing_lend_rate_2b': None,
+                'closing_borrow_rate_3b': None,
+                'closing_price_1a': None,
+                'closing_price_2a': None,
+                'closing_price_2b': None,
+                'closing_price_3b': None,
+
+                # Closing liquidation prices/distances (NULL for initial deployment)
+                'closing_liq_price_1a': None,
+                'closing_liq_price_2a': None,
+                'closing_liq_price_2b': None,
+                'closing_liq_price_3b': None,
+                'closing_liq_dist_1a': None,
+                'closing_liq_dist_2a': None,
+                'closing_liq_dist_2b': None,
+                'closing_liq_dist_3b': None,
+
+                # Collateral ratios and liquidation thresholds
+                'collateral_ratio_1a': entry_collateral_ratio_1a,
+                'collateral_ratio_2b': entry_collateral_ratio_2b,
+                'liquidation_threshold_1a': entry_liquidation_threshold_1a,
+                'liquidation_threshold_2b': entry_liquidation_threshold_2b,
+
+                # Entry actions (what this position does)
+                'entry_action_1a': 'lend',
+                'entry_action_2a': 'borrow',
+                'entry_action_2b': 'lend',
+                'entry_action_3b': 'borrow' if b_b else None,
+
+                # Exit actions (NULL for initial deployment)
+                'exit_action_1a': None,
+                'exit_action_2a': None,
+                'exit_action_2b': None,
+                'exit_action_3b': None,
+
+                # Entry token amounts (calculated above)
+                'entry_token_amount_1a': entry_token_amount_1a,
+                'entry_token_amount_2a': entry_token_amount_2a,
+                'entry_token_amount_2b': entry_token_amount_2b,
+                'entry_token_amount_3b': entry_token_amount_3b,
+
+                # Exit token amounts (NULL for initial deployment)
+                'exit_token_amount_1a': None,
+                'exit_token_amount_2a': None,
+                'exit_token_amount_2b': None,
+                'exit_token_amount_3b': None,
+
+                # Entry size USD (calculated above)
+                'entry_size_usd_1a': entry_size_usd_1a,
+                'entry_size_usd_2a': entry_size_usd_2a,
+                'entry_size_usd_2b': entry_size_usd_2b,
+                'entry_size_usd_3b': entry_size_usd_3b,
+
+                # Exit size USD (NULL for initial deployment)
+                'exit_size_usd_1a': None,
+                'exit_size_usd_2a': None,
+                'exit_size_usd_2b': None,
+                'exit_size_usd_3b': None,
+
+                # Realised values (all 0 for initial deployment)
+                'realised_fees': 0,
+                'realised_pnl': 0,
+                'realised_lend_earnings': 0,
+                'realised_borrow_costs': 0,
+            }
+
+            # Create the initial rebalance record
+            self.create_rebalance_record(
+                position_id=position_id,
+                snapshot=initial_snapshot,
+                rebalance_reason='initial_deployment',
+                rebalance_notes='Initial position deployment (sequence_number=1)'
+            )
+
+            print(f"[CREATE POSITION] Created initial rebalance record (sequence_number=1) for position {position_id[:8]}...")
+
+        except Exception as e:
+            # Log error but don't fail position creation
+            # The position is already committed, just the rebalance record failed
+            print(f"[CREATE POSITION] Warning: Failed to create initial rebalance record for position {position_id[:8]}...: {e}")
+            import traceback
+            traceback.print_exc()
 
         return position_id
 

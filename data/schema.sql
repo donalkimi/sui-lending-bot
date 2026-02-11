@@ -219,6 +219,12 @@ CREATE TABLE IF NOT EXISTS positions (
     entry_price_2B DECIMAL(20, 10) NOT NULL,
     entry_price_3B DECIMAL(20, 10) NOT NULL,
 
+    -- Entry Token Amounts (calculated at position creation: deployment_usd * weight / price)
+    entry_token_amount_1A DECIMAL(30, 10),  -- Token amount for Leg 1A (lend)
+    entry_token_amount_2A DECIMAL(30, 10),  -- Token amount for Leg 2A (borrow)
+    entry_token_amount_2B DECIMAL(30, 10),  -- Token amount for Leg 2B (lend)
+    entry_token_amount_3B DECIMAL(30, 10),  -- Token amount for Leg 3B (borrow, nullable)
+
     -- Entry Collateral Ratios
     entry_collateral_ratio_1A DECIMAL(10, 6) NOT NULL,
     entry_collateral_ratio_2B DECIMAL(10, 6) NOT NULL,

@@ -84,8 +84,8 @@ async function main() {
       : coinTypesJson;
 
     const cmd = process.platform === 'win32'
-      ? `python3 "${pythonScript}" "${escapedJson}"`
-      : `python3 "${pythonScript}" '${coinTypesJson}'`;
+      ? `python "${pythonScript}" "${escapedJson}"`
+      : `python "${pythonScript}" '${coinTypesJson}'`;
 
     const result = execSync(cmd, {
       encoding: 'utf8'
@@ -104,7 +104,7 @@ async function main() {
       fs.writeFileSync(errorFile, JSON.stringify({
         timestamp: new Date().toISOString(),
         error: 'Tokens found in Suilend with NULL or missing decimals in token_registry',
-        instructions: 'Run: python3 utils/fetch_token_decimals.py --all',
+        instructions: 'Run: python utils/fetch_token_decimals.py --all',
         tokens: missingDecimalsTokens
       }, null, 2), 'utf8');
 
@@ -112,7 +112,7 @@ async function main() {
       console.error(`[ERROR] ${missingDecimalsTokens.length} tokens are missing decimals!`);
       console.error(`[ERROR] These tokens cannot be processed without decimals.`);
       console.error(`[ERROR] Details written to: ${errorFile}`);
-      console.error(`[FIX] Run: python3 utils/fetch_token_decimals.py --all`);
+      console.error(`[FIX] Run: python utils/fetch_token_decimals.py --all`);
       console.error(`${'='.repeat(80)}\n`);
 
       // Exit with error - we refuse to process without decimals

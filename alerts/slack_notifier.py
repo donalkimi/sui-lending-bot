@@ -14,15 +14,6 @@ import pandas as pd  # ADDED: Required for DataFrame operations
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import settings
 from utils.time_helpers import to_datetime_str  # ADDED: CRITICAL - required for timestamp formatting
-from utils.time_helpers import to_datetime_str
-
-# MODULE LOAD DEBUG
-print("=" * 80)
-print("[MODULE] slack_notifier.py loaded")
-print(f"[MODULE] to_datetime_str function: {to_datetime_str}")
-print(f"[MODULE] pandas version: {pd.__version__}")
-print("=" * 80)
-
 
 
 def format_usd_abbreviated(value: float) -> str:
@@ -95,63 +86,115 @@ class SlackNotifier:
         
     def send_message(self, message: str, blocks: List[Dict] = None, variables: Dict = None) -> bool:
         """
-        Send a message to Slack
-        
+        Send a message to Slack with retry logic and timeout
+
         Args:
             message: Plain text message (fallback)
             blocks: Slack blocks for rich formatting (for classic webhooks)
             variables: Dictionary of variables for Slack Workflows
-            
+
         Returns:
             True if successful, False otherwise
         """
+        import time
+        from requests.adapters import HTTPAdapter
+        from urllib3.util.retry import Retry
+
         if not self.webhook_url or self.webhook_url == "YOUR_SLACK_WEBHOOK_URL_HERE":
             print("⚠️  Slack webhook not configured. Set SLACK_WEBHOOK_URL in config/settings.py")
             return False
-        
+
+        # Check if this is a Slack Workflow webhook (contains '/workflows/' or '/triggers/')
+        is_workflow = '/workflows/' in self.webhook_url or '/triggers/' in self.webhook_url
+
+        print(f"[DEBUG] Webhook URL check: is_workflow={is_workflow}")
+        print(f"[DEBUG] Webhook URL contains: {self.webhook_url[:50]}...")
+        print(f"[DEBUG] Variables received: {'None' if variables is None else f'{len(variables)} keys'}")
+
+        # Build payload
+        if is_workflow and variables:
+            # For Slack Workflows, send variables directly
+            payload = variables
+            print(f"[DEBUG] ✅ Using workflow mode with variables")
+            # Show first 3 variables as preview
+            preview = {k: v[:50] if isinstance(v, str) and len(v) > 50 else v
+                      for k, v in list(variables.items())[:3]}
+            print(f"[DEBUG] Payload preview (first 3 vars): {json.dumps(preview, indent=2)}")
+        elif is_workflow and not variables:
+            # Workflow webhook requires variables but none provided
+            print(f"[ERROR] ⚠️  Workflow webhook detected but variables is None - notification will fail")
+            print(f"[ERROR] Falling back to error message")
+            return False
+        else:
+            # For classic Incoming Webhooks, use text/blocks
+            payload = {"text": message}
+            print(f"[DEBUG] Using classic mode: is_workflow={is_workflow}")
+            if blocks:
+                payload["blocks"] = blocks
+
+        print(f"[DEBUG] Final payload keys: {list(payload.keys())}")
+
+        # Validate payload size
+        payload_str = json.dumps(payload)
+        payload_size = len(payload_str)
+        print(f"[DEBUG] Payload size: {payload_size} bytes")
+
+        if is_workflow and payload_size > 3000:
+            print(f"[WARNING] Payload size ({payload_size} bytes) exceeds recommended limit (3000 bytes)")
+
+        # Configure retry strategy for transient failures
+        retry_strategy = Retry(
+            total=3,  # Max 3 retries
+            backoff_factor=1,  # Wait 1s, 2s, 4s between retries
+            status_forcelist=[429, 500, 502, 503, 504],  # Retry on these HTTP codes
+            allowed_methods=["POST"],  # Retry POST requests
+            raise_on_status=False  # Don't raise exception on bad status
+        )
+
+        adapter = HTTPAdapter(max_retries=retry_strategy)
+        session = requests.Session()
+        session.mount("https://", adapter)
+        session.mount("http://", adapter)
+
         try:
-            # Check if this is a Slack Workflow webhook (contains '/workflows/' or '/triggers/')
-            is_workflow = '/workflows/' in self.webhook_url or '/triggers/' in self.webhook_url
-            
-            print(f"[DEBUG] Webhook URL check: is_workflow={is_workflow}")
-            print(f"[DEBUG] Webhook URL contains: {self.webhook_url[:50]}...")
-            print(f"[DEBUG] Variables received: {'None' if variables is None else f'{len(variables)} keys'}")
-            
-            if is_workflow and variables:
-                # For Slack Workflows, send variables directly
-                payload = variables
-                print(f"[DEBUG] ✅ Using workflow mode with variables")
-                # Show first 3 variables as preview
-                preview = {k: v[:50] if isinstance(v, str) and len(v) > 50 else v 
-                          for k, v in list(variables.items())[:3]}
-                print(f"[DEBUG] Payload preview (first 3 vars): {json.dumps(preview, indent=2)}")
-            else:
-                # For classic Incoming Webhooks, use text/blocks
-                payload = {"text": message}
-                print(f"[DEBUG] ❌ Using classic mode: is_workflow={is_workflow}, variables={'None' if variables is None else f'{len(variables)} keys'}")
-                if blocks:
-                    payload["blocks"] = blocks
-            
-            print(f"[DEBUG] Final payload keys: {list(payload.keys())}")
-            
-            response = requests.post(
+            print(f"[DEBUG] Sending Slack notification (timeout=10s, max_retries=3)...")
+            start_time = time.time()
+
+            response = session.post(
                 self.webhook_url,
-                data=json.dumps(payload),
-                headers={'Content-Type': 'application/json'}
+                data=payload_str,
+                headers={'Content-Type': 'application/json'},
+                timeout=10  # 10 seconds timeout (connect + read)
             )
-            
+
+            elapsed = (time.time() - start_time) * 1000
+            print(f"[DEBUG] Response received in {elapsed:.0f}ms: {response.status_code}")
+
             if response.status_code == 200:
-                print(f"[OK] Slack notification sent")
+                print(f"[OK] ✅ Slack notification sent successfully")
                 return True
             else:
-                print(f"[ERROR] Slack notification failed: {response.status_code} - {response.text}")
+                print(f"[ERROR] ❌ Slack notification failed: {response.status_code} - {response.text}")
                 return False
 
+        except requests.exceptions.Timeout as e:
+            print(f"[ERROR] ⏱️  Slack notification timeout after 10s: {e}")
+            print(f"[ERROR] This usually indicates network issues or Slack API is slow")
+            return False
+        except requests.exceptions.ConnectionError as e:
+            print(f"[ERROR] 🔌 Slack connection error: {e}")
+            print(f"[ERROR] Check network connectivity and webhook URL")
+            return False
+        except requests.exceptions.RequestException as e:
+            print(f"[ERROR] 🌐 Slack request failed: {e}")
+            return False
         except Exception as e:
-            print(f"[ERROR] Error sending Slack notification: {e}")
+            print(f"[ERROR] ⚠️  Unexpected error sending Slack notification: {e}")
             import traceback
             traceback.print_exc()
             return False
+        finally:
+            session.close()
     
     def alert_high_apr(self, strategy: Dict) -> bool:
         """
@@ -358,8 +401,21 @@ class SlackNotifier:
             print(f"[DEBUG]   timestamp: {variables['timestamp']}")
             print(f"[DEBUG]   set1_line1: {variables['set1_line1'][:80] if variables['set1_line1'] else 'EMPTY'}...")
             
+        except KeyError as e:
+            print(f"[ERROR] ❌ Missing key in strategy data: {e}")
+            print(f"[ERROR] Available DataFrame columns: {list(all_results.columns) if hasattr(all_results, 'columns') else 'N/A'}")
+            import traceback
+            traceback.print_exc()
+            variables = None  # Ensure it stays None if exception
+        except AttributeError as e:
+            print(f"[ERROR] ❌ Attribute error building variables: {e}")
+            print(f"[ERROR] all_results type: {type(all_results)}")
+            import traceback
+            traceback.print_exc()
+            variables = None
         except Exception as e:
-            print(f"[ERROR] ❌ EXCEPTION building variables dict: {e}")
+            print(f"[ERROR] ❌ Unexpected exception building variables dict: {e}")
+            print(f"[ERROR] Exception type: {type(e).__name__}")
             import traceback
             traceback.print_exc()
             variables = None  # Ensure it stays None if exception

@@ -630,3 +630,105 @@ except KeyError as e:
 - ✅ dashboard_renderer.py: Strategy table column handling (lines 3754-3786)
 - ✅ dashboard_renderer.py: Portfolio preview column handling (lines 4027-4071)
 - ✅ portfolio_allocator.py: Strategy max_size constraint (lines 159-169)
+
+### 15. No Fallback Values: Fail Loudly, Debug Quickly
+
+**Core Principle:** NEVER fall back to random/guessed/wrong/alternative variables when the primary variable fails or is missing. Fail loudly and provide proper debug info. Silent fallbacks hide bugs instead of exposing data problems.
+
+**Why:**
+- **Bug visibility:** Fallbacks mask the root cause instead of exposing it
+- **Data integrity:** Wrong fallback values produce incorrect results that appear correct
+- **Fast debugging:** Seeing "N/A" or an error immediately shows where data is missing
+- **Trust:** Users can trust displayed values are correct, not approximations
+
+**The Problem (Silent Fallback):**
+```python
+# ❌ WRONG: Silently use wrong value if correct value is missing
+price_for_entry_calc = segment_entry_price if safe_value(segment_entry_price) else entry_price
+
+if safe_value(price_for_entry_calc) and live_liq_price > 0:
+    entry_liq_dist_pct = (live_liq_price - price_for_entry_calc) / price_for_entry_calc
+    entry_liq_dist_str = f"{entry_liq_dist_pct * 100:+.1f}%"
+# If segment_entry_price is missing, uses entry_price instead
+# Result: Shows "28.4%" when correct value is "25%" - SILENTLY WRONG!
+```
+
+**The Solution (Fail Loudly):**
+```python
+# ✅ CORRECT: Use only the correct value, fail loudly if missing
+if safe_value(segment_entry_price) and live_liq_price > 0 and live_liq_price != float('inf'):
+    entry_liq_dist_pct = (live_liq_price - segment_entry_price) / segment_entry_price
+    entry_liq_dist_str = f"{entry_liq_dist_pct * 100:+.1f}%"
+else:
+    entry_liq_dist_str = "N/A"
+# If segment_entry_price is missing, shows "N/A" - LOUDLY EXPOSES THE PROBLEM!
+```
+
+**Real Example (Bug Found February 11, 2026):**
+
+Position with AlphaFi/LBTC/Borrow leg:
+- Entry price (position start): 70562.4637
+- Segment entry price (after rebalance): Different value
+- Liquidation price: 88228.9698
+
+**With fallback (WRONG):**
+```python
+# Used entry_price (70562) instead of segment_entry_price
+# Result: 28.4% liquidation distance (INCORRECT)
+```
+
+**Without fallback (CORRECT):**
+```python
+# Used segment_entry_price
+# Result: 25.0% liquidation distance (CORRECT)
+# Or shows "N/A" if segment_entry_price is missing (exposes data problem)
+```
+
+**Common fallback anti-patterns to avoid:**
+```python
+# ❌ WRONG: Fallback to default value
+value = correct_value if correct_value else 0.0
+
+# ❌ WRONG: Fallback to related but different value
+price = segment_price if segment_price else position_price
+
+# ❌ WRONG: Fallback to calculated approximation
+token_amount = stored_amount if stored_amount else (deployment * weight / price)
+
+# ❌ WRONG: Fallback to previous value
+current_ltv = live_ltv if live_ltv else entry_ltv
+
+# ✅ CORRECT: Use only the correct value, show N/A if missing
+display_value = f"{correct_value:.2f}" if safe_value(correct_value) else "N/A"
+```
+
+**When fallbacks ARE acceptable:**
+- Default configuration values (e.g., `settings.get('TIMEOUT', 30)`)
+- User preference settings with sensible defaults
+- UI display preferences (e.g., theme, page size)
+- Never for calculations, metrics, or financial values
+
+**Pattern requirements:**
+1. **Single source:** Use only the correct variable for calculations
+2. **Explicit checks:** Verify the variable is valid before using it
+3. **Visible failures:** Display "N/A", "-", or error message when data is missing
+4. **Debug info:** Log what was missing and why (for developers)
+5. **No approximations:** Don't calculate fallback values from other fields
+
+**Effect:**
+- Calculations are either correct or visibly failed (no middle ground)
+- Missing data is immediately obvious to users and developers
+- Root cause problems get fixed instead of masked
+- Users can trust that displayed values are accurate
+
+**Implementation locations:**
+- **position_renderers.py (Lines 682-685, 845-848):** Segment entry liquidation distance
+  - Removed fallback to `entry_price`
+  - Now shows "N/A" if `segment_entry_price` is missing
+  - Fixed bug where fallback caused 28.4% instead of 25% for LBTC position
+
+**Implementation date:** February 11, 2026
+
+**Verification status:**
+- ✅ position_renderers.py: Removed entry_price fallback for segment calculations
+- ⚠️ Codebase audit needed: Check for other inappropriate fallback patterns
