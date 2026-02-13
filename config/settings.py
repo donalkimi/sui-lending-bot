@@ -59,7 +59,7 @@ RATE_SPREAD_THRESHOLD = float(os.getenv('RATE_SPREAD_THRESHOLD', '0.00'))
 ALERT_RATE_SPREAD_THRESHOLD = float(os.getenv('ALERT_RATE_SPREAD_THRESHOLD', '2.0'))
 ALERT_NET_APR_THRESHOLD = float(os.getenv('ALERT_NET_APR_THRESHOLD', '5.0'))
 CHECK_INTERVAL_MINUTES = int(os.getenv('CHECK_INTERVAL_MINUTES', '60'))
-REBALANCE_THRESHOLD = float(os.getenv('REBALANCE_THRESHOLD', '0.05'))
+REBALANCE_THRESHOLD = float(os.getenv('REBALANCE_THRESHOLD', '0.01'))
 SAVE_SNAPSHOTS = get_bool_env('SAVE_SNAPSHOTS', default=True)
 
 # ==============================================================================
