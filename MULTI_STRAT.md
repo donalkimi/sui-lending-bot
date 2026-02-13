@@ -1,5 +1,23 @@
 # Plan: Add Multi-Strategy Support (3 Strategy Types)
 
+## Implementation Status
+
+| Phase | Status | Description |
+|-------|--------|-------------|
+| **Phase 1** | ✅ **COMPLETE** | Strategy Calculator Layer - Created base class, 3 calculators, and registry |
+| **Phase 2** | ⏳ Planned | Update Rate Analyzer to support multiple strategy types |
+| **Phase 3** | ⏳ Planned | Update Position Service & Creation |
+| **Phase 4** | ⏳ Planned | Update Portfolio Allocator |
+| **Phase 5** | ⏳ Planned | Create Strategy Renderers |
+| **Phase 6** | ⏳ Planned | Update Rebalance Calculation |
+| **Phase 7** | ⏳ Planned | Update Dashboard Strategy Display |
+| **Phase 8** | ⏳ Planned | Update Refresh Pipeline |
+
+**Last Updated**: February 2026
+**Current Phase**: Phase 1 Complete, Ready for Phase 2
+
+---
+
 ## Context
 
 The Sui Lending Bot currently supports only one strategy type: **RECURSIVE_LENDING** (4-leg levered loop strategy). The goal is to expand the system to support multiple strategy types with varying complexity levels, while maintaining all existing functionality.
@@ -281,7 +299,59 @@ APR: Highest due to recursive leverage multiplier
 
 ## Implementation Plan
 
-### Phase 1: Refactor Strategy Calculation Layer (Foundation)
+### Phase 1: Refactor Strategy Calculation Layer (Foundation) ✅ COMPLETE
+
+**Status**: ✅ Implemented and tested
+**Date**: February 2026
+**Files Created**: 5 new files in `analysis/strategy_calculators/`
+
+**What Was Built**:
+1. `base.py` - Abstract base class defining calculator interface
+2. `stablecoin_lending.py` - 1-leg calculator (simplest strategy)
+3. `noloop_cross_protocol.py` - 3-leg calculator (moderate complexity)
+4. `recursive_lending.py` - 4-leg calculator (extracted from existing code)
+5. `__init__.py` - Registry with auto-registration
+
+**Validation**:
+- ✅ All 3 calculators registered successfully
+- ✅ Correct leg counts: stablecoin=1, noloop=3, recursive=4
+- ✅ Position calculations working correctly
+- ✅ Data validation (fail fast on missing data, log warnings for nullable fields)
+- ✅ Uses float('inf') for unbounded values
+- ✅ Uses 0.0 (not None) for unused legs (b_b)
+
+**Key Design Decisions Implemented**:
+- ✅ Use total APRs (base + reward already combined from database)
+- ✅ Explicit validation: raise errors for critical missing rates
+- ✅ Log warnings for nullable borrow fees with 0.0 fallback
+- ✅ max_size = inf for stablecoin lending (no supply cap tracking yet)
+- ✅ liquidation_distance = inf for stablecoin (no liquidation risk)
+
+**Files Created**:
+```
+analysis/strategy_calculators/
+├── __init__.py                  (115 lines) - Registry + auto-registration
+├── base.py                      (91 lines)  - Abstract base class
+├── stablecoin_lending.py        (163 lines) - 1-leg calculator
+├── noloop_cross_protocol.py     (291 lines) - 3-leg calculator
+└── recursive_lending.py         (381 lines) - 4-leg calculator
+```
+
+**Test Output**:
+```
+✅ Registered strategy types: ['stablecoin_lending', 'noloop_cross_protocol_lending', 'recursive_lending']
+✅ stablecoin_lending: 1 legs
+✅ noloop_cross_protocol_lending: 3 legs
+✅ recursive_lending: 4 legs
+✅ Stablecoin lending positions correct
+✅ All Phase 1 tests passed!
+```
+
+**Next Steps**: Phase 2 - Update RateAnalyzer to use calculator registry and generate strategies for all three types.
+
+---
+
+### Phase 1: Refactor Strategy Calculation Layer (Foundation) [ORIGINAL SPEC]
 
 **Goal**: Abstract strategy-specific calculations into pluggable calculators
 
@@ -359,26 +429,48 @@ class StablecoinLendingCalculator(StrategyCalculatorBase):
             'l_a': 1.0,      # Lend $1 for every $1 deployed
             'b_a': 0.0,      # No borrowing
             'l_b': 0.0,      # No second lending
-            'b_b': None      # No second borrowing
+            'b_b': 0.0       # No second borrowing (consistent with b_a/l_b)
         }
 
     def calculate_net_apr(self, positions, rates, fees) -> float:
-        # APR = lend_rate_1A + lend_reward_1A
+        # APR = lend_total_apr (which includes base + reward)
+        # rates['lend_total_apr_1A'] already contains base + reward from database
         # No borrowing costs, no fees
-        return rates['lend_rate_1A'] + rates.get('lend_reward_1A', 0.0)
+
+        lend_total_apr = rates['lend_total_apr_1A']
+
+        # Validate data quality - warn if missing
+        if lend_total_apr is None:
+            raise ValueError(f"Missing lend_total_apr for token1 in protocol_A")
+
+        return lend_total_apr
 
     def analyze_strategy(self, token1, protocol_a, market_data) -> Dict:
-        # Minimal analysis: just token1 in protocol_a
-        # No token2, token3, protocol_b needed
+        """
+        Analyze stablecoin lending strategy.
+
+        Args:
+            token1: Stablecoin symbol (e.g., 'USDC')
+            protocol_a: Protocol name (e.g., 'navi')
+            market_data: Dict with keys:
+                - lend_total_apr_1A: Total lending APR (base + reward)
+                - price_1A: Token price
+                - ... other protocol data
+
+        Returns:
+            Strategy dict with all required fields
+        """
         return {
             'l_a': 1.0,
             'b_a': 0.0,
             'l_b': 0.0,
-            'b_b': None,
-            'net_apr': lend_rate_1A,
-            'liquidation_distance': None,  # No liquidation risk
-            'max_size': available_supply_1A,  # Limited by supply cap
-            'valid': True
+            'b_b': 0.0,
+            'net_apr': market_data['lend_total_apr_1A'],
+            'liquidation_distance': float('inf'),  # No liquidation risk
+            'max_size': float('inf'),  # Not limited by liquidity constraints
+            'valid': True,
+            # Note: We don't track lending supply caps in the database
+            # Only borrow liquidity limits (available_borrow_usd)
         }
 ```
 
@@ -386,7 +478,12 @@ class StablecoinLendingCalculator(StrategyCalculatorBase):
 - Simplest strategy: single token, single protocol
 - No borrowing, no leverage, no liquidation risk
 - No rebalancing needed
-- APR = lending rate only
+- APR = total lending rate (base + reward already combined in database)
+
+**Data Validation**:
+- Raises error if `lend_total_apr` is missing (prefer explicit failure over silent 0)
+- Uses `float('inf')` for unbounded values (clearer than `None`)
+- `max_size = inf` because we don't track lending supply caps
 
 ---
 
@@ -395,6 +492,10 @@ class StablecoinLendingCalculator(StrategyCalculatorBase):
 **New File**: `analysis/strategy_calculators/noloop_cross_protocol.py`
 
 ```python
+import logging
+
+logger = logging.getLogger(__name__)
+
 class NoLoopCrossProtocolCalculator(StrategyCalculatorBase):
     def get_strategy_type(self) -> str:
         return 'noloop_cross_protocol_lending'
@@ -405,6 +506,17 @@ class NoLoopCrossProtocolCalculator(StrategyCalculatorBase):
     def calculate_positions(self, liquidation_threshold_a,
                            collateral_ratio_a,
                            liquidation_distance=0.20) -> Dict[str, float]:
+        """
+        Calculate position multipliers for no-loop cross-protocol strategy.
+
+        Args:
+            liquidation_threshold_a: LTV at which liquidation occurs (e.g., 0.80)
+            collateral_ratio_a: Max collateral factor (e.g., 0.75)
+            liquidation_distance: Safety buffer (default 0.20 = 20%)
+
+        Returns:
+            Dict with l_a, b_a, l_b, b_b multipliers
+        """
         # No recursive leverage - linear calculation
         l_a = 1.0
 
@@ -413,6 +525,7 @@ class NoLoopCrossProtocolCalculator(StrategyCalculatorBase):
         r_a = liquidation_threshold_a / (1.0 + liquidation_distance)
 
         # Use minimum of calculated ratio and collateral factor
+        # (Collateral factor is typically lower than liquidation threshold)
         b_a = l_a * min(r_a, collateral_ratio_a)
 
         # Lend all borrowed tokens in protocol B
@@ -422,28 +535,67 @@ class NoLoopCrossProtocolCalculator(StrategyCalculatorBase):
             'l_a': l_a,
             'b_a': b_a,
             'l_b': l_b,
-            'b_b': None  # No 4th leg - no loop back
+            'b_b': 0.0  # No 4th leg - no loop back (use 0 not None for consistency)
         }
 
     def calculate_net_apr(self, positions, rates, fees) -> float:
-        # APR = (L_A × lend_rate_1A) + (L_B × lend_rate_2B)
-        #       - (B_A × borrow_rate_2A) - (B_A × borrow_fee_2A)
+        """
+        Calculate net APR for no-loop cross-protocol strategy.
+
+        APR = (L_A × lend_total_apr_1A) + (L_B × lend_total_apr_2B)
+              - (B_A × borrow_total_apr_2A) - (B_A × borrow_fee_2A)
+
+        Args:
+            positions: Dict with l_a, b_a, l_b, b_b
+            rates: Dict with lend_total_apr_1A, lend_total_apr_2B, borrow_total_apr_2A
+            fees: Dict with borrow_fee_2A
+
+        Returns:
+            Net APR as decimal (e.g., 0.0524 = 5.24%)
+        """
         l_a = positions['l_a']
         b_a = positions['b_a']
         l_b = positions['l_b']
 
-        earnings = (l_a * rates['lend_rate_1A']) + (l_b * rates['lend_rate_2B'])
-        costs = b_a * rates['borrow_rate_2A']
-        fees_cost = b_a * fees.get('borrow_fee_2A', 0.0)
+        # Use total APRs (base + reward already combined)
+        lend_total_1A = rates['lend_total_apr_1A']
+        lend_total_2B = rates['lend_total_apr_2B']
+        borrow_total_2A = rates['borrow_total_apr_2A']
+
+        # Validate critical rates are present
+        if lend_total_1A is None:
+            raise ValueError(f"Missing lend_total_apr_1A")
+        if lend_total_2B is None:
+            raise ValueError(f"Missing lend_total_apr_2B")
+        if borrow_total_2A is None:
+            raise ValueError(f"Missing borrow_total_apr_2A")
+
+        # Calculate earnings and costs
+        earnings = (l_a * lend_total_1A) + (l_b * lend_total_2B)
+        costs = b_a * borrow_total_2A
+
+        # Borrow fees - use .get() with 0.0 fallback since it's nullable in DB
+        # But log warning if missing so we know about data quality issues
+        borrow_fee_2A = fees.get('borrow_fee_2A', None)
+        if borrow_fee_2A is None:
+            logger.warning(f"Missing borrow_fee_2A, assuming 0.0")
+            borrow_fee_2A = 0.0
+
+        fees_cost = b_a * borrow_fee_2A
 
         return earnings - costs - fees_cost
 ```
 
 **Key Differences from Recursive**:
 - No geometric series (linear calculation: `b_a = l_a × ratio`)
-- No 4th leg (B_B = None, token3 = None)
-- Simpler APR calculation (3 terms instead of 4)
+- No 4th leg (`b_b = 0.0` not `None` for consistency)
+- Simpler APR calculation (3 legs instead of 4)
 - Still has liquidation risk (on leg 2A only)
+
+**Data Validation**:
+- Raises errors for missing critical rates (fail fast)
+- Logs warnings for missing borrow fees but continues with 0.0 fallback
+- Uses `lend_total_apr` and `borrow_total_apr` (base + reward already combined)
 
 #### 1.5 Create Calculator Registry
 
