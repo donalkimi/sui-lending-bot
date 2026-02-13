@@ -142,10 +142,97 @@ Net APR = (L_A × lend_rate_1A) + (L_B × lend_rate_2B)
 | **Protocols** | 1 | 2 | 2 |
 | **Leverage** | None (1x) | Moderate (~1.5x) | High (~2-4x) |
 | **Market Neutral** | N/A | No | Yes |
-| **Liquidation Risk** | None | Single leg | Two legs |
+| **Liquidation Risk** | None | Single leg (2A) | Two legs (2A, 3B) |
 | **Rebalancing** | Not needed | Needed | Needed (complex) |
 | **Complexity** | Minimal | Moderate | High |
 | **Expected APR** | Lowest (3-5%) | Medium (5-15%) | Highest (10-30%) |
+| **Position Multipliers** | L_A=1, rest=0 | L_A=1, B_A>0, L_B>0 | All 4 legs > 0 |
+
+---
+
+## Visual Flow Diagrams
+
+### STABLECOIN_LENDING (1-Leg)
+```
+┌─────────────┐
+│   User $    │
+│  (Deploy)   │
+└──────┬──────┘
+       │
+       ▼
+┌─────────────────────┐
+│   Protocol A        │
+│  Lend USDC @ 4%     │
+│   (L_A = 1.0)       │
+└─────────────────────┘
+
+Flow: User → Lend USDC → Earn Rate
+Risk: Protocol risk only
+```
+
+### NOLOOP_CROSS_PROTOCOL_LENDING (3-Leg)
+```
+┌─────────────┐
+│   User $    │
+│  (Deploy)   │
+└──────┬──────┘
+       │
+       ▼
+┌─────────────────────┐
+│   Protocol A        │
+│  Lend USDC @ 3%     │◄─┐ (Token1 as collateral)
+│   (L_A = 1.0)       │  │
+├─────────────────────┤  │
+│ Borrow DEEP @ 8%    │──┘ (Liquidation risk here!)
+│   (B_A = 0.67)      │
+└──────┬──────────────┘
+       │
+       ▼
+┌─────────────────────┐
+│   Protocol B        │
+│  Lend DEEP @ 12%    │
+│   (L_B = 0.67)      │
+└─────────────────────┘
+
+Flow: Lend USDC → Borrow DEEP → Lend DEEP
+Risk: DEEP price exposure + liquidation on leg 2A
+```
+
+### RECURSIVE_LENDING (4-Leg)
+```
+┌─────────────┐
+│   User $    │
+│  (Deploy)   │
+└──────┬──────┘
+       │
+       ▼
+┌─────────────────────┐
+│   Protocol A        │
+│  Lend USDC @ 3%     │◄─┐ (Recursive loop!)
+│   (L_A = 2.5)       │  │
+├─────────────────────┤  │
+│ Borrow DEEP @ 8%    │──┘ (Liquidation risk #1)
+│   (B_A = 1.5)       │
+└──────┬──────────────┘
+       │
+       ▼
+┌─────────────────────┐
+│   Protocol B        │
+│  Lend DEEP @ 12%    │◄─┐ (Collateral for token3)
+│   (L_B = 1.5)       │  │
+├─────────────────────┤  │
+│ Borrow USDY @ 5%    │──┘ (Liquidation risk #2)
+│   (B_B = 1.0)       │
+└──────┬──────────────┘
+       │
+       ▼ (Convert USDY → USDC at 1:1)
+       │
+       └──────────────► Loops back to Protocol A
+
+Flow: Lend USDC → Borrow DEEP → Lend DEEP → Borrow USDY → Convert → Loop
+Risk: Market neutral (USDC = USDY), but dual liquidation risks
+APR: Highest due to recursive leverage multiplier
+```
 
 ---
 
@@ -405,7 +492,12 @@ register_calculator(RecursiveLendingCalculator)
 ```python
 class RateAnalyzer:
     def __init__(self, ..., strategy_types: List[str] = None):
-        self.strategy_types = strategy_types or ['recursive_lending']
+        # Default to all strategy types if not specified
+        self.strategy_types = strategy_types or [
+            'stablecoin_lending',
+            'noloop_cross_protocol_lending',
+            'recursive_lending'
+        ]
         # Load calculators for each strategy type
         self.calculators = {
             st: get_calculator(st) for st in self.strategy_types
@@ -421,16 +513,40 @@ class RateAnalyzer:
             )
             all_strategies.append(strategies)
 
-        # Combine all strategy types
+        # Combine all strategy types into single DataFrame
         combined = pd.concat(all_strategies, ignore_index=True)
+
+        # Sort by net_apr descending (best strategies first)
         return combined.sort_values(by='net_apr', ascending=False)
 
     def _analyze_combinations_for_strategy(self,
                                            calculator: StrategyCalculatorBase,
                                            tokens) -> pd.DataFrame:
-        # Existing logic, but use calculator.analyze_strategy()
-        # instead of hardcoded position_calculator
-        ...
+        """
+        Generate strategies for a specific strategy type.
+
+        For STABLECOIN_LENDING:
+          - Iterate: token1 (stablecoins only) × protocol_a
+          - Single token, single protocol
+
+        For NOLOOP_CROSS_PROTOCOL_LENDING:
+          - Iterate: token1 (stablecoins) × token2 (all) × protocol_a × protocol_b
+          - Two tokens, two protocols, no token3
+
+        For RECURSIVE_LENDING:
+          - Iterate: token1 × token2 × token3 (stablecoins) × protocol_a × protocol_b
+          - Three tokens, two protocols, full loop
+        """
+        strategy_type = calculator.get_strategy_type()
+
+        if strategy_type == 'stablecoin_lending':
+            return self._generate_stablecoin_strategies(calculator, tokens)
+        elif strategy_type == 'noloop_cross_protocol_lending':
+            return self._generate_noloop_strategies(calculator, tokens)
+        elif strategy_type == 'recursive_lending':
+            return self._generate_recursive_strategies(calculator, tokens)
+        else:
+            raise ValueError(f"Unknown strategy type: {strategy_type}")
 ```
 
 **Key Changes**:
@@ -536,42 +652,83 @@ constraints = {
 
 ---
 
-### Phase 5: Create Unlevered Lending Renderer
+### Phase 5: Create Strategy Renderers
 
-**Goal**: Display 3-leg strategies correctly in dashboard
+**Goal**: Display each strategy type correctly in dashboard
 
-#### 5.1 Implement UnleveredLendingRenderer
+#### 5.1 Implement StablecoinLendingRenderer
 
 **File Modified**: `dashboard/position_renderers.py`
 
 ```python
-@register_strategy_renderer('unlevered_lending')
-class UnleveredLendingRenderer(StrategyRendererBase):
+@register_strategy_renderer('stablecoin_lending')
+class StablecoinLendingRenderer(StrategyRendererBase):
 
     def get_strategy_name(self) -> str:
-        return "Unlevered Lending"
+        return "Stablecoin Lending"
+
+    def build_token_flow_string(self, position: pd.Series) -> str:
+        # Single token: just show token name
+        return f"{position['token1']}"
+
+    def get_metrics_layout(self) -> List[str]:
+        return ['total_earnings', 'base_earnings', 'reward_earnings']
+
+    def render_detail_table(self, position, get_rate, get_borrow_fee,
+                            get_price_with_fallback, ...) -> None:
+        # Render 1 leg only:
+        # Leg 1A: Lend token1 in Protocol A
+
+        # Display: Token, Protocol, Weight (always 1.0), Entry Rate, Live Rate,
+        #          Entry Price, Live Price, Token Amount
+
+        # No borrowing legs, no protocol B
+        ...
+```
+
+**Key Characteristics**:
+- Token flow: Just token name (e.g., "USDC")
+- Single row in detail table
+- No liquidation info (no risk)
+- Simplest display
+
+---
+
+#### 5.2 Implement NoLoopCrossProtocolRenderer
+
+**File Modified**: `dashboard/position_renderers.py`
+
+```python
+@register_strategy_renderer('noloop_cross_protocol_lending')
+class NoLoopCrossProtocolRenderer(StrategyRendererBase):
+
+    def get_strategy_name(self) -> str:
+        return "Cross-Protocol Lending (No Loop)"
 
     def build_token_flow_string(self, position: pd.Series) -> str:
         # 3-leg flow: token1 → token2 (no loop back)
         return f"{position['token1']} → {position['token2']}"
 
     def get_metrics_layout(self) -> List[str]:
-        return ['total_pnl', 'total_earnings', 'total_fees']
+        return ['total_pnl', 'total_earnings', 'total_fees', 'liquidation_buffer']
 
     def render_detail_table(self, position, get_rate, get_borrow_fee,
                             get_price_with_fallback, ...) -> None:
-        # Render 3 legs only:
+        # Render 3 legs:
         # Leg 1A: Lend token1 in Protocol A
-        # Leg 2A: Borrow token2 from Protocol A
+        # Leg 2A: Borrow token2 from Protocol A (show liquidation risk)
         # Leg 2B: Lend token2 in Protocol B
 
         # NO Leg 3B (no borrow loop back)
+
+        # Display liquidation distance for leg 2A
         ...
 ```
 
-**Key Differences**:
+**Key Differences from Recursive**:
 - Token flow: `token1 → token2` (no closing leg)
 - Only 3 rows in detail table
+- Single liquidation risk indicator (leg 2A only)
 - No `b_b` multiplier displayed
 
 ---
@@ -596,8 +753,17 @@ class StrategyCalculatorBase(ABC):
 ```
 
 Implement in each calculator:
+- **Stablecoin Lending**: No rebalancing needed (no borrowed assets)
+  ```python
+  def calculate_rebalance_amounts(self, position, live_rates, live_prices):
+      return None  # No rebalancing for single-leg strategy
+  ```
+- **NoLoop Cross-Protocol**: Rebalance 3 legs (no B_B term)
+  - Adjust token amounts to maintain L_A, B_A, L_B USD values
+  - Only one liquidation threshold to monitor (leg 2A)
 - **Recursive**: Rebalance all 4 legs to maintain constant USD weights
-- **Unlevered**: Rebalance 3 legs (no B_B term)
+  - Most complex: maintain L_A, B_A, L_B, B_B USD values
+  - Two liquidation thresholds to monitor (legs 2A and 3B)
 
 #### 6.2 Update PositionService.rebalance_position()
 
@@ -630,14 +796,20 @@ def rebalance_position(self, position_id, live_timestamp, ...):
 **File Modified**: `dashboard/dashboard_renderer.py`
 
 ```python
-# When initializing RateAnalyzer, specify both strategy types
+# When initializing RateAnalyzer, specify all strategy types
 analyzer = RateAnalyzer(
     ...,
-    strategy_types=['recursive_lending', 'unlevered_lending']
+    strategy_types=[
+        'stablecoin_lending',
+        'noloop_cross_protocol_lending',
+        'recursive_lending'
+    ]
 )
 
-# find_best_protocol_pair() will now return strategies from both types
+# find_best_protocol_pair() will now return strategies from all three types
 protocol_a, protocol_b, all_results = analyzer.find_best_protocol_pair()
+
+# all_results DataFrame will have 'strategy_type' column for filtering
 ```
 
 #### 7.2 Add Strategy Type Filter in UI
@@ -648,8 +820,21 @@ Add to sidebar filters:
 ```python
 strategy_type_filter = st.multiselect(
     "Strategy Types",
-    options=['recursive_lending', 'unlevered_lending'],
-    default=['recursive_lending', 'unlevered_lending']
+    options=[
+        'stablecoin_lending',
+        'noloop_cross_protocol_lending',
+        'recursive_lending'
+    ],
+    default=[  # Default to showing all types
+        'stablecoin_lending',
+        'noloop_cross_protocol_lending',
+        'recursive_lending'
+    ],
+    format_func=lambda x: {
+        'stablecoin_lending': '💰 Stablecoin Lending',
+        'noloop_cross_protocol_lending': '🔄 Cross-Protocol (No Loop)',
+        'recursive_lending': '♾️ Recursive Leverage'
+    }[x]
 )
 
 # Filter displayed strategies
@@ -681,9 +866,13 @@ title = f"{token_flow} | {protocol_pair} | {strategy_type} | APR: {apr}%"
 def refresh_pipeline(timestamp, save_snapshots=True,
                      strategy_types=None):
 
-    # Default to both strategy types
+    # Default to all three strategy types
     if strategy_types is None:
-        strategy_types = ['recursive_lending', 'unlevered_lending']
+        strategy_types = [
+            'stablecoin_lending',
+            'noloop_cross_protocol_lending',
+            'recursive_lending'
+        ]
 
     # Initialize analyzer with multiple strategy types
     analyzer = RateAnalyzer(
@@ -694,7 +883,8 @@ def refresh_pipeline(timestamp, save_snapshots=True,
     # Generate strategies for all types
     protocol_a, protocol_b, all_results = analyzer.find_best_protocol_pair()
 
-    # all_results now contains strategies from both types
+    # all_results now contains strategies from all three types
+    # Sorted by net_apr descending (best strategies first)
     ...
 ```
 
@@ -705,18 +895,19 @@ def refresh_pipeline(timestamp, save_snapshots=True,
 ### New Files to Create:
 1. `analysis/strategy_calculators/__init__.py` - Calculator registry
 2. `analysis/strategy_calculators/base.py` - Abstract base class
-3. `analysis/strategy_calculators/recursive_lending.py` - Extracted existing logic
-4. `analysis/strategy_calculators/unlevered_lending.py` - New 3-leg calculator
+3. `analysis/strategy_calculators/recursive_lending.py` - Extracted existing 4-leg logic
+4. `analysis/strategy_calculators/stablecoin_lending.py` - New 1-leg calculator
+5. `analysis/strategy_calculators/noloop_cross_protocol.py` - New 3-leg calculator
 
 ### Files to Modify:
-1. `analysis/rate_analyzer.py` - Accept strategy_types parameter, loop through types
+1. `analysis/rate_analyzer.py` - Accept strategy_types parameter, loop through types, add generation methods for each type
 2. `analysis/position_calculator.py` - Facade pattern, delegate to calculators
 3. `analysis/position_service.py` - Add strategy_type parameter to create_position()
 4. `analysis/portfolio_allocator.py` - Add strategy type filtering
-5. `dashboard/position_renderers.py` - Add UnleveredLendingRenderer
-6. `dashboard/dashboard_renderer.py` - Display multiple strategy types, add filter
-7. `data/refresh_pipeline.py` - Specify strategy_types when creating analyzer
-8. `config/settings.py` - Add default strategy types config
+5. `dashboard/position_renderers.py` - Add StablecoinLendingRenderer and NoLoopCrossProtocolRenderer
+6. `dashboard/dashboard_renderer.py` - Display all three strategy types, add filter with icons
+7. `data/refresh_pipeline.py` - Specify all three strategy_types when creating analyzer
+8. `config/settings.py` - Add default strategy types config, rebalance thresholds per type
 
 ### Files That Need NO Changes:
 - `data/schema.sql` - Already has strategy_type column
@@ -817,9 +1008,11 @@ def refresh_pipeline(timestamp, save_snapshots=True,
 
 ### ➕ Needs Creation:
 - Calculator base class and registry
-- RecursiveLendingCalculator (extracted)
-- UnleveredLendingCalculator (new)
-- UnleveredLendingRenderer (new)
+- RecursiveLendingCalculator (extracted from existing code)
+- StablecoinLendingCalculator (new - simplest)
+- NoLoopCrossProtocolCalculator (new - 3-leg)
+- StablecoinLendingRenderer (new)
+- NoLoopCrossProtocolRenderer (new)
 
 ---
 
@@ -842,7 +1035,15 @@ def refresh_pipeline(timestamp, save_snapshots=True,
 
 **Core Insight**: The system is *already 80% ready* for multiple strategies. The main work is:
 1. Extracting hardcoded recursive logic into pluggable calculators
-2. Making RateAnalyzer loop through multiple strategy types
-3. Passing strategy_type through the call chain
+2. Creating two new simple calculators (stablecoin and noloop)
+3. Making RateAnalyzer loop through multiple strategy types
+4. Passing strategy_type through the call chain
 
 The database, rendering system, and data pipeline are already strategy-agnostic by design!
+
+**Complexity Progression**:
+1. **STABLECOIN_LENDING**: Simplest (1 leg, no borrowing, no rebalancing, no liquidation risk)
+2. **NOLOOP_CROSS_PROTOCOL_LENDING**: Moderate (3 legs, one borrow, rebalancing needed, single liquidation risk)
+3. **RECURSIVE_LENDING**: Most complex (4 legs, recursive leverage, complex rebalancing, dual liquidation risks)
+
+This progression allows users to choose their desired risk/reward profile!

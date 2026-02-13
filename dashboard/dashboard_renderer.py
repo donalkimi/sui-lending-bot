@@ -3619,13 +3619,6 @@ def render_portfolio_expander(
         timestamp_seconds=timestamp_seconds
     )
 
-    # Get entry APR from portfolio metadata (optional field)
-    entry_apr_value = portfolio.get('entry_weighted_net_apr')
-    if entry_apr_value is None or pd.isna(entry_apr_value):
-        entry_apr = 0.0  # Genuinely optional field
-    else:
-        entry_apr = float(entry_apr_value)
-
     # ========================================
     # BUILD ENHANCED PORTFOLIO TITLE
     # ========================================
@@ -3633,6 +3626,7 @@ def render_portfolio_expander(
     # Extract values from calculated stats
     total_deployed = summary_stats['total_deployed']
     total_pnl = summary_stats['total_pnl']
+    avg_entry_apr = summary_stats['avg_entry_apr']
     avg_realised_apr = summary_stats['avg_realised_apr']
     current_value = total_deployed + total_pnl
 
@@ -3640,7 +3634,7 @@ def render_portfolio_expander(
         f"**{portfolio_name}** | "
         f"Positions: {num_positions} | "
         f"Total Deployed: \\${total_deployed:,.2f} | "
-        f"Entry APR: {entry_apr * 100:.2f}% | "
+        f"Entry APR: {avg_entry_apr * 100:.2f}% | "
         f"Realised APR: {avg_realised_apr * 100:.2f}% | "
         f"Total PnL: \\${total_pnl:,.2f} | "
         f"Current Value: \\${current_value:,.2f}"

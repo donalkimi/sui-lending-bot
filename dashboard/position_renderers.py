@@ -408,8 +408,9 @@ def calculate_position_summary_stats(
             'reward_earnings': float,
             'total_fees': float,
             'roi': float,
-            'avg_realised_apr': float,
-            'avg_current_apr': float
+            'avg_entry_apr': float,  # Time-and-capital-weighted
+            'avg_realised_apr': float,  # Time-and-capital-weighted
+            'avg_current_apr': float  # Time-and-capital-weighted
         }
 
     Raises:
@@ -467,6 +468,7 @@ def calculate_position_summary_stats(
     base_earnings = 0.0
     reward_earnings = 0.0
     total_fees = 0.0
+    weighted_entry_apr_sum = 0.0
     weighted_realised_apr_sum = 0.0
     weighted_current_apr_sum = 0.0
     total_weight = 0.0
@@ -489,6 +491,9 @@ def calculate_position_summary_stats(
         entry_ts = to_seconds(position.get('entry_timestamp'))
         strategy_days = (timestamp_seconds - entry_ts) / 86400
 
+        # Extract entry APR from position (not from stats)
+        entry_net_apr = _safe_float(position.get('entry_net_apr'))
+
         # Extract statistics
         strategy_pnl = _safe_float(stats['total_pnl'])
         strategy_total_earnings = _safe_float(stats['total_earnings'])
@@ -506,14 +511,16 @@ def calculate_position_summary_stats(
         reward_earnings += strategy_reward_earnings
         total_fees += strategy_fees
 
-        # Weighted APR components
+        # Weighted APR components (all time-and-capital weighted)
         weight = strategy_days * deployment_usd
+        weighted_entry_apr_sum += weight * entry_net_apr
         weighted_realised_apr_sum += weight * strategy_net_apr
         weighted_current_apr_sum += weight * current_net_apr
         total_weight += weight
 
     # Calculate derived metrics
     roi = (total_pnl / total_deployed * 100) if total_deployed > 0 else 0.0
+    avg_entry_apr = (weighted_entry_apr_sum / total_weight) if total_weight > 0 else 0.0
     avg_realised_apr = (weighted_realised_apr_sum / total_weight) if total_weight > 0 else 0.0
     avg_current_apr = (weighted_current_apr_sum / total_weight) if total_weight > 0 else 0.0
 
@@ -526,6 +533,7 @@ def calculate_position_summary_stats(
         'reward_earnings': reward_earnings,
         'total_fees': total_fees,
         'roi': roi,
+        'avg_entry_apr': avg_entry_apr,
         'avg_realised_apr': avg_realised_apr,
         'avg_current_apr': avg_current_apr
     }
