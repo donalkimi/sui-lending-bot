@@ -378,98 +378,56 @@ class SlackNotifier:
             timestamp_str = to_datetime_str(timestamp) + ' UTC'
             print(f"[DEBUG] timestamp_str={timestamp_str}")
             
+            # Build formatted message with just the top strategy
+            if set1_lines and len(set1_lines) > 0:
+                formatted_message = f"{timestamp_str}: {set1_lines[0]}"
+            else:
+                formatted_message = f"{timestamp_str}: No strategies found"
+
             variables = {
                 "liq_dist": str(liq_dist_pct),
                 "timestamp": timestamp_str,
-                "set1_count": str(len(set1_lines)),
-                "set1_line1": set1_lines[0] if len(set1_lines) > 0 else "",
-                "set1_line2": set1_lines[1] if len(set1_lines) > 1 else "",
-                "set1_line3": set1_lines[2] if len(set1_lines) > 2 else "",
-                "set2_count": str(len(set2_lines)),
-                "set2_line1": set2_lines[0] if len(set2_lines) > 0 else "",
-                "set2_line2": set2_lines[1] if len(set2_lines) > 1 else "",
-                "set2_line3": set2_lines[2] if len(set2_lines) > 2 else "",
-                "set3_count": str(len(set3_lines)),
-                "set3_line1": set3_lines[0] if len(set3_lines) > 0 else "",
-                "set3_line2": set3_lines[1] if len(set3_lines) > 1 else "",
-                "set3_line3": set3_lines[2] if len(set3_lines) > 2 else "",
+                "notification_text": formatted_message  # Renamed from "message" to avoid Slack conflicts
             }
-            
-            print(f"[DEBUG] ✅ Variables dict created with {len(variables)} keys")
+
+            print(f"[DEBUG] ✅ Variables dict created with {len(variables)} keys (including 'notification_text')")
             print(f"[DEBUG] Sample variable values:")
             print(f"[DEBUG]   liq_dist: {variables['liq_dist']}")
             print(f"[DEBUG]   timestamp: {variables['timestamp']}")
-            print(f"[DEBUG]   set1_line1: {variables['set1_line1'][:80] if variables['set1_line1'] else 'EMPTY'}...")
-            
+            print(f"[DEBUG]   notification_text (first 100 chars): {formatted_message[:100]}...")
+
         except KeyError as e:
             print(f"[ERROR] ❌ Missing key in strategy data: {e}")
             print(f"[ERROR] Available DataFrame columns: {list(all_results.columns) if hasattr(all_results, 'columns') else 'N/A'}")
             import traceback
             traceback.print_exc()
-            variables = None  # Ensure it stays None if exception
+            variables = None
+            formatted_message = None
         except AttributeError as e:
             print(f"[ERROR] ❌ Attribute error building variables: {e}")
             print(f"[ERROR] all_results type: {type(all_results)}")
             import traceback
             traceback.print_exc()
             variables = None
+            formatted_message = None
         except Exception as e:
             print(f"[ERROR] ❌ Unexpected exception building variables dict: {e}")
             print(f"[ERROR] Exception type: {type(e).__name__}")
             import traceback
             traceback.print_exc()
-            variables = None  # Ensure it stays None if exception
-        
-        # Build fallback message for classic webhooks
-        timestamp_str_fallback = to_datetime_str(timestamp) + ' UTC' if timestamp and variables is None else (variables.get('timestamp', 'N/A') if variables else 'N/A')
-        
-        message_lines = [
-            f"🚀 Top Lending Strategies",
-            f"📅 {timestamp_str_fallback}",
-            ""
-        ]
-        
-        # Build message from variables if available, otherwise from filtered results
-        if variables:
-            set1_lines_temp = [variables.get(f'set1_line{i}', '') for i in [1, 2, 3]]
-            set2_lines_temp = [variables.get(f'set2_line{i}', '') for i in [1, 2, 3]]
-            set3_lines_temp = [variables.get(f'set3_line{i}', '') for i in [1, 2, 3]]
+            variables = None
+            formatted_message = None
+
+        # Use formatted message or build fallback
+        if formatted_message:
+            message = formatted_message
         else:
-            # Fallback if variables creation failed
-            set1_lines_temp = []
-            set2_lines_temp = []
-            set3_lines_temp = []
-        
-        message_lines.append("📊 All Strategies (Top 3):")
-        if set1_lines_temp and any(set1_lines_temp):
-            for i, line in enumerate(set1_lines_temp, 1):
-                if line:
-                    message_lines.append(f"{i}. {line}")
-        else:
-            message_lines.append("No strategies found")
-        
-        message_lines.append("")
-        message_lines.append("💰 USDC-Only Strategies (Top 3):")
-        if set2_lines_temp and any(set2_lines_temp):
-            for i, line in enumerate(set2_lines_temp, 1):
-                if line:
-                    message_lines.append(f"{i}. {line}")
-        else:
-            message_lines.append("No strategies found")
-        
-        message_lines.append("")
-        message_lines.append("🔧 Top Unlevered Strategies:")
-        if set3_lines_temp and any(set3_lines_temp):
-            for i, line in enumerate(set3_lines_temp, 1):
-                if line:
-                    message_lines.append(f"{i}. {line}")
-        else:
-            message_lines.append("No strategies found")
-        
-        message = "\n".join(message_lines)
-        
+            # Fallback if message creation failed
+            timestamp_str_fallback = to_datetime_str(timestamp) + ' UTC' if timestamp else 'N/A'
+            message = f"🚀 Top Lending Strategies\n📅 {timestamp_str_fallback}\n\nNo strategies available"
+
         print(f"[DEBUG] About to call send_message with variables={'None' if variables is None else f'{len(variables)} keys'}")
-        
+
         return self.send_message(message, blocks=None, variables=variables)
 
     def alert_rebalance_opportunity(
@@ -591,6 +549,162 @@ class SlackNotifier:
         ]
         
         return self.send_message(message, blocks)
+
+    def alert_position_rebalanced(
+        self,
+        position_id: str,
+        token1: str,
+        token2: str,
+        token3: str,
+        protocol_a: str,
+        protocol_b: str,
+        liq_dist_2a_before: float,
+        liq_dist_2a_after: float,
+        liq_dist_2b_before: float,
+        liq_dist_2b_after: float,
+        rebalance_timestamp: int
+    ) -> bool:
+        """
+        Alert when a position has been rebalanced.
+
+        Sends a single-line notification with position details and liquidation distance changes.
+        For recursive_lending strategy type (all positions have token3).
+
+        Args:
+            position_id: Full position UUID
+            token1: First token symbol (lent at Protocol A)
+            token2: Second token symbol (borrowed from A, lent to B)
+            token3: Third token symbol (borrowed from B)
+            protocol_a: First protocol name
+            protocol_b: Second protocol name
+            liq_dist_2a_before: Liquidation distance for token2 at protocol_a before rebalance
+            liq_dist_2a_after: Liquidation distance for token2 at protocol_a after rebalance
+            liq_dist_2b_before: Liquidation distance for token2 at protocol_b before rebalance
+            liq_dist_2b_after: Liquidation distance for token2 at protocol_b after rebalance
+            rebalance_timestamp: Unix timestamp of rebalance
+
+        Returns:
+            True if successful
+        """
+        from datetime import datetime
+
+        # Format timestamp
+        time_str = datetime.fromtimestamp(rebalance_timestamp).strftime('%H:%M:%S')
+
+        # Format token flow (recursive_lending always has 3 tokens)
+        token_flow = f"{token1}<->{token2}<->{token3}"
+
+        # Format protocols
+        protocols = f"{protocol_a}/{protocol_b}"
+
+        # Helper function to format percentage with sign
+        def fmt_pct(value):
+            if value is None or (isinstance(value, float) and (value == float('inf') or value == float('-inf'))):
+                return "N/A"
+            return f"{value:+.1f}%"
+
+        # Helper function to get delta indicator
+        def get_delta(before, after):
+            if before is None or after is None:
+                return ""
+            if isinstance(before, float) and (before == float('inf') or before == float('-inf')):
+                return ""
+            if isinstance(after, float) and (after == float('inf') or after == float('-inf')):
+                return ""
+
+            # Positive liquidation distance is good (further from liquidation)
+            # If after > before, distance improved (safer)
+            delta = after - before
+            if abs(delta) < 0.5:  # Less than 0.5% change, no indicator
+                return ""
+            elif delta > 0:
+                return " ✅"  # Improved (increased distance)
+            else:
+                return " ⚠️"  # Worsened (decreased distance)
+
+        # Format leg 2A (token2 at protocol_a)
+        leg_2a_label = f"{token2} in {protocol_a}"
+        leg_2a_before = fmt_pct(liq_dist_2a_before * 100 if liq_dist_2a_before is not None else None)
+        leg_2a_after = fmt_pct(liq_dist_2a_after * 100 if liq_dist_2a_after is not None else None)
+        leg_2a_delta = get_delta(
+            liq_dist_2a_before * 100 if liq_dist_2a_before is not None else None,
+            liq_dist_2a_after * 100 if liq_dist_2a_after is not None else None
+        )
+        leg_2a_str = f"Liq Dist {leg_2a_label}: {leg_2a_before} → {leg_2a_after}{leg_2a_delta}"
+
+        # Format leg 2B (token2 at protocol_b)
+        leg_2b_label = f"{token2} in {protocol_b}"
+        leg_2b_before = fmt_pct(liq_dist_2b_before * 100 if liq_dist_2b_before is not None else None)
+        leg_2b_after = fmt_pct(liq_dist_2b_after * 100 if liq_dist_2b_after is not None else None)
+        leg_2b_delta = get_delta(
+            liq_dist_2b_before * 100 if liq_dist_2b_before is not None else None,
+            liq_dist_2b_after * 100 if liq_dist_2b_after is not None else None
+        )
+        leg_2b_str = f" | {leg_2b_label}: {leg_2b_before} → {leg_2b_after}{leg_2b_delta}"
+
+        # Build the main message line
+        main_line = f"🔄 {time_str} | {token_flow} | {protocols} | {leg_2a_str}{leg_2b_str}"
+
+        # Full message with Position ID on new line
+        message = f"{main_line}\nPosition ID: {position_id}"
+
+        # Variables for Slack Workflows
+        variables = {
+            "time": time_str,
+            "position_id": position_id,
+            "token_flow": token_flow,
+            "protocols": protocols,
+            "leg_2a_label": leg_2a_label,
+            "leg_2a_before": leg_2a_before,
+            "leg_2a_after": leg_2a_after,
+            "leg_2b_label": leg_2b_label,
+            "leg_2b_before": leg_2b_before,
+            "leg_2b_after": leg_2b_after,
+            "notification_text": message  # Renamed from "message" to avoid Slack conflicts
+        }
+
+        # Blocks for classic webhooks
+        blocks = [
+            {
+                "type": "header",
+                "text": {
+                    "type": "plain_text",
+                    "text": "🔄 Position Rebalanced",
+                    "emoji": True
+                }
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"*{token_flow}* | {protocols}"
+                }
+            },
+            {
+                "type": "section",
+                "fields": [
+                    {
+                        "type": "mrkdwn",
+                        "text": f"*{leg_2a_label}:*\n{leg_2a_before} → {leg_2a_after}{leg_2a_delta}"
+                    },
+                    {
+                        "type": "mrkdwn",
+                        "text": f"*{leg_2b_label}:*\n{leg_2b_before} → {leg_2b_after}{leg_2b_delta}"
+                    }
+                ]
+            },
+            {
+                "type": "context",
+                "elements": [
+                    {
+                        "type": "mrkdwn",
+                        "text": f"Position ID: `{position_id}` | {time_str}"
+                    }
+                ]
+            }
+        ]
+
+        return self.send_message(message, blocks, variables)
 
 
 # Example usage

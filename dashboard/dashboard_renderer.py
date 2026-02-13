@@ -27,6 +27,8 @@ from dashboard.position_renderers import (
     build_oracle_prices,
     render_position_expander,
     render_positions_batch,
+    calculate_position_summary_stats,
+    render_position_summary_stats,
     get_registered_strategy_types
 )
 
@@ -1420,21 +1422,6 @@ def render_positions_table_tab(timestamp_seconds: int):
         # ========================================================================
         # PHASE 1: LOAD PRE-CALCULATED POSITION STATISTICS FROM DATABASE
         # ========================================================================
-        # Initialize portfolio aggregators
-        portfolio_total_deployed = 0.0
-        portfolio_total_pnl = 0.0
-        portfolio_total_earnings = 0.0
-        portfolio_base_earnings = 0.0
-        portfolio_reward_earnings = 0.0
-        portfolio_fees = 0.0
-
-        # For time-and-capital-weighted average APR calculations
-        weighted_realised_apr_sum = 0.0  # Sum(strategy_time × deployUSD × RealisedAPR)
-        weighted_current_apr_sum = 0.0   # Sum(strategy_time × deployUSD × CurrentAPR)
-        total_weight = 0.0  # Sum(strategy_time × deployUSD)
-
-        # Store position results for rendering
-        position_results = []
 
         # OPTIMIZATION: Batch load statistics for all positions in ONE query
         position_ids = active_positions['position_id'].tolist()
@@ -1513,159 +1500,22 @@ def render_positions_table_tab(timestamp_seconds: int):
 
             st.markdown("---")
 
-        # Load pre-calculated statistics for all positions
-        for _, position in active_positions.iterrows():
-            deployment_usd = safe_float(position['deployment_usd'])
-            entry_ts = to_seconds(position['entry_timestamp'])
-            strategy_days = (latest_timestamp - entry_ts) / 86400
-
-            # Look up pre-loaded statistics from batch
-            stats = all_stats.get(position['position_id'])
-
-            # Check if stats are for the exact timestamp we're viewing
-            if stats is not None and to_seconds(stats.get('timestamp')) != latest_timestamp:
-                # Stats exist but for different timestamp - treat as missing for button display
-                stats = None
-
-            if stats is None:
-                # Statistics missing - show button to calculate on-the-fly
-                position_short_id = position['position_id'][:8]
-
-                with st.expander(f"⚠️ Position {position_short_id}... - Missing statistics at {latest_timestamp_str}", expanded=True):
-                    st.warning("Statistics not found in database for this timestamp.")
-                    st.info("You can calculate statistics on-the-fly (takes ~1-2 seconds) or run the backfill script to pre-populate all historical data.")
-
-                    col1, col2 = st.columns([1, 3])
-                    with col1:
-                        button_key = f"calc_stats_{position['position_id']}_{latest_timestamp}"
-                        if st.button("📊 Calculate Statistics", key=button_key, type="primary"):
-                            try:
-                                with st.spinner(f"Calculating statistics for position {position_short_id}..."):
-                                    # Wrapper functions to match expected signature
-                                    def get_rate_wrapper(token_contract, protocol, side):
-                                        """Wrapper to match calculate_position_statistics signature"""
-                                        return get_rate(token_contract, protocol, side)
-
-                                    def get_borrow_fee_wrapper(token_contract, protocol):
-                                        """Wrapper to match calculate_position_statistics signature"""
-                                        return get_borrow_fee(token_contract, protocol)
-
-                                    # Calculate statistics using existing proven logic
-                                    stats_dict = calculate_position_statistics(
-                                        position_id=position['position_id'],
-                                        timestamp=latest_timestamp,
-                                        service=service,
-                                        get_rate_func=get_rate_wrapper,
-                                        get_borrow_fee_func=get_borrow_fee_wrapper
-                                    )
-
-                                    # Save to database for future use
-                                    tracker = RateTracker(
-                                        use_cloud=settings.USE_CLOUD_DB,
-                                        connection_url=settings.SUPABASE_URL
-                                    )
-                                    tracker.save_position_statistics(stats_dict)
-
-                                    st.success(f"✅ Statistics calculated and saved! Refresh the page to see the position in the table.")
-                                    st.info("💡 Tip: Run the backfill script (see `addStatisticsBackfill.md`) to pre-populate all historical statistics.")
-
-                            except ValueError as e:
-                                st.error(f"❌ Cannot calculate: {e}")
-                                st.caption("This usually means rate data is not available for this timestamp (position may predate data collection).")
-                            except Exception as e:
-                                st.error(f"❌ Calculation failed: {e}")
-                                import traceback
-                                with st.expander("Error details"):
-                                    st.code(traceback.format_exc())
-
-                    with col2:
-                        st.caption(f"Position ID: {position['position_id']}")
-                        st.caption(f"Entry: {position['entry_timestamp']}")
-
-                # Skip this position for now in the main table
-                continue
-
-            # Extract statistics
-            strategy_pnl = safe_float(stats['total_pnl'])
-            strategy_total_earnings = safe_float(stats['total_earnings'])
-            strategy_base_earnings = safe_float(stats['base_earnings'])
-            strategy_reward_earnings = safe_float(stats['reward_earnings'])
-            strategy_fees = safe_float(stats['total_fees'])
-            strategy_net_apr = safe_float(stats['realized_apr'])
-            current_net_apr_decimal = safe_float(stats['current_apr'])
-            
-            # Extract live/realized breakdown
-            live_pnl = safe_float(stats.get('live_pnl', 0.0))
-            realized_pnl = safe_float(stats.get('realized_pnl', 0.0))
-
-            # Accumulate portfolio totals
-            portfolio_total_deployed += deployment_usd
-            portfolio_total_pnl += strategy_pnl
-            portfolio_total_earnings += strategy_total_earnings
-            portfolio_base_earnings += strategy_base_earnings
-            portfolio_reward_earnings += strategy_reward_earnings
-            portfolio_fees += strategy_fees
-
-            # Time-and-capital-weighted APR calculations
-            # Weight = strategy_time × deployment_usd
-            weight = strategy_days * deployment_usd
-            weighted_realised_apr_sum += weight * strategy_net_apr
-            weighted_current_apr_sum += weight * current_net_apr_decimal
-            total_weight += weight
-
-            # Store for rendering
-            position_results.append({
-                'position': position,
-                'deployment_usd': deployment_usd,
-                'strategy_pnl': strategy_pnl,
-                'strategy_total_earnings': strategy_total_earnings,
-                'strategy_base_earnings': strategy_base_earnings,
-                'strategy_reward_earnings': strategy_reward_earnings,
-                'strategy_fees': strategy_fees,
-                'strategy_net_apr': strategy_net_apr,
-                'current_net_apr_decimal': current_net_apr_decimal,
-                'strategy_days': strategy_days,
-                'live_pnl': live_pnl,
-                'realized_pnl': realized_pnl,
-            })
-
-        # Calculate derived metrics
-        portfolio_roi = (portfolio_total_pnl / portfolio_total_deployed * 100) if portfolio_total_deployed > 0 else 0.0
-        portfolio_avg_realised_apr = (weighted_realised_apr_sum / total_weight) if total_weight > 0 else 0.0
-        portfolio_avg_current_apr = (weighted_current_apr_sum / total_weight) if total_weight > 0 else 0.0
-
         # ========================================================================
-        # PHASE 3: RENDER PORTFOLIO SUMMARY
+        # PHASE 3: RENDER ALL POSITIONS SUMMARY
         # ========================================================================
-        st.markdown("### 📊 Portfolio Summary")
 
-        # Row 1: 4 columns
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            st.metric("Total Deployed", f"${portfolio_total_deployed:,.2f}")
-        with col2:
-            roi_display = f"ROI: {portfolio_roi:.2f}%"
-            st.metric("Total PnL (Real+Unreal)", f"${portfolio_total_pnl:,.2f}", delta=roi_display)
-        with col3:
-            st.metric("Total Earnings", f"${portfolio_total_earnings:,.2f}")
-        with col4:
-            st.metric("Base Earnings", f"${portfolio_base_earnings:,.2f}")
+        # Calculate stats (pure calculation, no rendering)
+        summary_stats = calculate_position_summary_stats(
+            position_ids=position_ids,
+            timestamp_seconds=latest_timestamp
+        )
 
-        # Row 2: 3 columns
-        col5, col6, col7 = st.columns(3)
-        with col5:
-            st.metric("Reward Earnings", f"${portfolio_reward_earnings:,.2f}")
-        with col6:
-            st.metric("Fees", f"${portfolio_fees:,.2f}")
-        with col7:
-            st.metric("Avg Realised APR", f"{portfolio_avg_realised_apr * 100:.2f}%")
+        # Render stats (pure rendering, no calculation)
+        render_position_summary_stats(
+            stats=summary_stats,
+            title="All Positions Summary"
+        )
 
-        # Row 3: 1 column
-        col8, _, _ = st.columns(3)
-        with col8:
-            st.metric("Avg Current APR", f"{portfolio_avg_current_apr * 100:.2f}%")
-
-        st.markdown("---")  # Separator before individual positions
 
         # ========================================================================
         # PHASE 4: Render positions using BATCH RENDERER
@@ -3756,24 +3606,44 @@ def render_portfolio_expander(
     """
 
     # ========================================
-    # CALCULATE PORTFOLIO AGGREGATES
+    # CALCULATE PORTFOLIO AGGREGATES FOR TITLE
     # ========================================
 
     portfolio_name = portfolio.get('portfolio_name', 'Unknown Portfolio')
     num_positions = len(portfolio_positions)
-    total_deployed = portfolio_positions['deployment_usd'].sum()
+    position_ids = portfolio_positions['position_id'].tolist()
 
-    # Simple aggregation - no complex calculations
-    # (PnL already pre-calculated in position_statistics)
+    # Calculate stats ONCE using shared calculation function
+    summary_stats = calculate_position_summary_stats(
+        position_ids=position_ids,
+        timestamp_seconds=timestamp_seconds
+    )
+
+    # Get entry APR from portfolio metadata (optional field)
+    entry_apr_value = portfolio.get('entry_weighted_net_apr')
+    if entry_apr_value is None or pd.isna(entry_apr_value):
+        entry_apr = 0.0  # Genuinely optional field
+    else:
+        entry_apr = float(entry_apr_value)
 
     # ========================================
-    # BUILD PORTFOLIO TITLE
+    # BUILD ENHANCED PORTFOLIO TITLE
     # ========================================
+
+    # Extract values from calculated stats
+    total_deployed = summary_stats['total_deployed']
+    total_pnl = summary_stats['total_pnl']
+    avg_realised_apr = summary_stats['avg_realised_apr']
+    current_value = total_deployed + total_pnl
 
     title = (
         f"**{portfolio_name}** | "
         f"Positions: {num_positions} | "
-        f"Total Deployed: ${total_deployed:,.2f}"
+        f"Total Deployed: \\${total_deployed:,.2f} | "
+        f"Entry APR: {entry_apr * 100:.2f}% | "
+        f"Realised APR: {avg_realised_apr * 100:.2f}% | "
+        f"Total PnL: \\${total_pnl:,.2f} | "
+        f"Current Value: \\${current_value:,.2f}"
     )
 
     # ========================================
@@ -3783,17 +3653,20 @@ def render_portfolio_expander(
     with st.expander(title, expanded=False):
         st.markdown(f"### Positions in {portfolio_name}")
 
-        # Portfolio metadata (optional)
-        if not portfolio.get('is_virtual'):
-            render_portfolio_metadata(portfolio)
-            st.markdown("---")
+        # ========================================
+        # RENDER PORTFOLIO SUMMARY STATISTICS
+        # ========================================
+
+        # Render the already-calculated stats (NO recalculation!)
+        render_position_summary_stats(
+            stats=summary_stats,
+            title=f"{portfolio_name} Summary"
+        )
 
         # ========================================
         # BATCH RENDER ALL POSITIONS IN PORTFOLIO
         # ========================================
         # Key design: Delegate to batch renderer
-
-        position_ids = portfolio_positions['position_id'].tolist()
 
         # Determine context based on portfolio type
         context = 'portfolio2'
@@ -3894,295 +3767,8 @@ def render_portfolio2_tab(timestamp_seconds: int):
     conn.close()
 
 
-# ============================================================================
-# PORTFOLIOS TAB
-# ============================================================================
-
-def render_portfolios_tab(timestamp_seconds: int):
-    """
-    Render portfolios tab showing all saved portfolios.
-
-    Args:
-        timestamp_seconds: Dashboard-selected timestamp (Unix seconds)
-    """
-    st.header("📁 Portfolios")
-
-    try:
-        # Connect to database
-        from analysis.portfolio_service import PortfolioService
-        from dashboard.db_utils import get_db_engine
-
-        conn = get_db_connection()
-        engine = get_db_engine()
-        service = PortfolioService(conn)
-
-        # Get all active portfolios
-        portfolios = service.get_active_portfolios()
-
-        # Check for standalone positions (portfolio_id IS NULL)
-        standalone_positions = service.get_standalone_positions()
-
-        # If we have standalone positions, create a virtual portfolio for them
-        if not standalone_positions.empty:
-            # Calculate metrics for standalone positions
-            total_deployed = standalone_positions['deployment_usd'].sum()
-
-            # Calculate weighted APR
-            if total_deployed > 0:
-                weighted_apr = (
-                    (standalone_positions['entry_net_apr'] * standalone_positions['deployment_usd']).sum()
-                    / total_deployed
-                )
-            else:
-                weighted_apr = 0.0
-
-            # Get earliest entry timestamp
-            earliest_entry = standalone_positions['entry_timestamp'].min()
-
-            # Create virtual portfolio record (using None as special marker for virtual portfolio)
-            virtual_portfolio = pd.DataFrame([{
-                'portfolio_id': None,  # Special marker for virtual standalone portfolio
-                'portfolio_name': '🎯 Single Positions',
-                'status': 'active',
-                'entry_timestamp': earliest_entry,
-                'target_portfolio_size': total_deployed,
-                'actual_allocated_usd': total_deployed,
-                'utilization_pct': 100.0,
-                'entry_weighted_net_apr': weighted_apr,
-                'is_paper_trade': True,
-                'created_timestamp': earliest_entry,
-                'constraints_json': '{}'  # Empty constraints for virtual portfolio
-            }])
-
-            # Prepend virtual portfolio to portfolios list
-            # Handle empty portfolios case to avoid FutureWarning
-            if portfolios.empty:
-                portfolios = virtual_portfolio
-            else:
-                portfolios = pd.concat([virtual_portfolio, portfolios], ignore_index=True)
-
-        if portfolios.empty:
-            st.info("📭 No portfolios or positions saved yet. Generate and save a portfolio from the Allocation tab, or deploy individual strategies!")
-            conn.close()
-            return
-
-        # Display summary metrics
-        st.markdown("### 📊 Portfolio Summary")
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            st.metric("Total Portfolios", len(portfolios))
-        with col2:
-            total_allocated = portfolios['actual_allocated_usd'].sum()
-            st.metric("Total Allocated", f"${total_allocated:,.0f}")
-        with col3:
-            avg_apr = portfolios['entry_weighted_net_apr'].mean() * 100
-            st.metric("Avg Entry APR", f"{avg_apr:.2f}%")
-        with col4:
-            avg_util = portfolios['utilization_pct'].mean()
-            st.metric("Avg Utilization", f"{avg_util:.1f}%")
-
-        st.markdown("---")
-
-        # Display portfolios list
-        st.markdown("### 📋 Saved Portfolios")
-
-        # Batch load statistics for all positions
-        all_position_ids = []
-        for _, portfolio in portfolios.iterrows():
-            if portfolio['portfolio_id'] is None or pd.isna(portfolio['portfolio_id']):
-                positions_df = service.get_standalone_positions()
-            else:
-                positions_df = service.get_portfolio_positions(portfolio['portfolio_id'])
-            all_position_ids.extend(positions_df['position_id'].tolist())
-
-        # Load pre-calculated statistics once for all positions
-        all_stats = get_all_position_statistics(all_position_ids, timestamp_seconds, engine)
-
-        for _, portfolio in portfolios.iterrows():
-            # Get all positions in this portfolio
-            if portfolio['portfolio_id'] is None or pd.isna(portfolio['portfolio_id']):
-                # Virtual "Single Positions" portfolio
-                positions_df = service.get_standalone_positions()
-            else:
-                # Real portfolio
-                positions_df = service.get_portfolio_positions(portfolio['portfolio_id'])
-
-            # Calculate portfolio metrics from pre-calculated statistics
-            if not positions_df.empty:
-                deployed_size = positions_df['deployment_usd'].sum()
-
-                # Aggregate metrics from pre-calculated statistics
-                total_current_value = 0.0
-                total_pnl = 0.0
-                total_base_earnings = 0.0
-                total_reward_earnings = 0.0
-                total_fees = 0.0
-
-                # Weighted APR calculations
-                weighted_entry_apr_sum = 0.0
-                weighted_current_apr_sum = 0.0
-                weighted_realised_apr_sum = 0.0
-                total_weight = deployed_size
-
-                for _, pos in positions_df.iterrows():
-                    pos_id = pos['position_id']
-                    pos_deployment = pos['deployment_usd']
-
-                    # Get pre-calculated statistics
-                    stats = all_stats.get(pos_id)
-                    if stats:
-                        # Sum dollar amounts
-                        total_current_value += stats.get('current_value', pos_deployment)
-                        total_pnl += stats.get('total_pnl', 0.0)
-                        total_base_earnings += stats.get('base_earnings', 0.0)
-                        total_reward_earnings += stats.get('reward_earnings', 0.0)
-                        total_fees += stats.get('total_fees', 0.0)
-
-                        # Weighted APRs
-                        entry_apr = pos.get('entry_net_apr', 0.0)
-                        weighted_entry_apr_sum += entry_apr * pos_deployment
-
-                        current_apr = stats.get('current_apr', entry_apr)
-                        weighted_current_apr_sum += current_apr * pos_deployment
-
-                        realised_apr = stats.get('realized_apr', 0.0)
-                        weighted_realised_apr_sum += realised_apr * pos_deployment
-                    else:
-                        # No stats available, use deployment as current value
-                        total_current_value += pos_deployment
-                        entry_apr = pos.get('entry_net_apr', 0.0)
-                        weighted_entry_apr_sum += entry_apr * pos_deployment
-                        weighted_current_apr_sum += entry_apr * pos_deployment
-
-                # Calculate weighted averages
-                entry_net_apr = (weighted_entry_apr_sum / total_weight) if total_weight > 0 else 0.0
-                current_net_apr = (weighted_current_apr_sum / total_weight) if total_weight > 0 else 0.0
-                realised_net_apr = (weighted_realised_apr_sum / total_weight) if total_weight > 0 else 0.0
-
-            else:
-                # Empty portfolio
-                deployed_size = 0.0
-                total_current_value = 0.0
-                entry_net_apr = 0.0
-                current_net_apr = 0.0
-                realised_net_apr = 0.0
-                total_pnl = 0.0
-                total_base_earnings = 0.0
-                total_reward_earnings = 0.0
-                total_fees = 0.0
-
-            # Format entry timestamp
-            entry_ts_str = portfolio['entry_timestamp'].strftime('%Y-%m-%d %H:%M:%S')
-
-            # Create expander with new format
-            with st.expander(
-                f"{entry_ts_str} | **{portfolio['portfolio_name']}** | "
-                f"💰 ${deployed_size:,.0f} → ${total_current_value:,.0f} | "
-                f"Entry {entry_net_apr*100:.2f}% | Curr {current_net_apr*100:.2f}% | Real {realised_net_apr*100:.2f}% | "
-                f"PnL ${total_pnl:,.0f} | Base ${total_base_earnings:,.0f} | Rew ${total_reward_earnings:,.0f} | Fees ${total_fees:,.0f}"
-            ):
-                render_portfolio_detail(portfolio, timestamp_seconds, service)
-
-        conn.close()
-
-    except Exception as e:
-        st.error(f"❌ Error loading portfolios: {str(e)}")
-        import traceback
-        st.code(traceback.format_exc())
 
 
-def render_portfolio_detail(portfolio: pd.Series, timestamp_seconds: int, service):
-    """
-    Render detailed view of a single portfolio.
-
-    Args:
-        portfolio: Portfolio series with metadata
-        timestamp_seconds: Current timestamp
-        service: PortfolioService instance
-    """
-    # Portfolio metadata
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("Status", portfolio['status'].title())
-    with col2:
-        entry_date = portfolio['entry_timestamp'].strftime('%Y-%m-%d %H:%M')
-        st.metric("Entry Date", entry_date)
-    with col3:
-        st.metric("Utilization", f"{portfolio['utilization_pct']:.1f}%")
-
-    # Get positions in this portfolio
-    # Special handling for virtual standalone portfolio (portfolio_id is None)
-    if portfolio['portfolio_id'] is None or pd.isna(portfolio['portfolio_id']):
-        positions_df = service.get_standalone_positions()
-    else:
-        positions_df = service.get_portfolio_positions(portfolio['portfolio_id'])
-
-    if positions_df.empty:
-        st.info("📭 No positions in this portfolio yet.")
-        return
-
-    # Display positions table
-    st.markdown("#### Strategies in Portfolio")
-
-    display_df = positions_df[[
-        'token1', 'token2', 'token3',
-        'protocol_a', 'protocol_b',
-        'deployment_usd', 'entry_net_apr',
-        'status'
-    ]].copy()
-
-    # Format columns
-    display_df['deployment_usd'] = display_df['deployment_usd'].apply(lambda x: f"${x:,.0f}")
-    display_df['entry_net_apr'] = display_df['entry_net_apr'].apply(lambda x: f"{x*100:.2f}%")
-
-    # Rename for display
-    display_df = display_df.rename(columns={
-        'token1': 'Token 1',
-        'token2': 'Token 2',
-        'token3': 'Token 3',
-        'protocol_a': 'Protocol A',
-        'protocol_b': 'Protocol B',
-        'deployment_usd': 'Deployment',
-        'entry_net_apr': 'Entry APR',
-        'status': 'Status'
-    })
-
-    st.dataframe(display_df, width='stretch', hide_index=True)
-
-    # Action buttons (only for real portfolios, not for virtual "Single Positions")
-    if portfolio['portfolio_id'] is not None and not pd.isna(portfolio['portfolio_id']):
-        st.markdown("---")
-        col_btn1, col_btn2, _ = st.columns([1, 1, 2])
-        with col_btn1:
-            if st.button("🗑️ Delete", key=f"delete_{portfolio['portfolio_id']}", width='stretch'):
-                try:
-                    service.delete_portfolio(portfolio['portfolio_id'])
-                    st.success(f"✅ Portfolio '{portfolio['portfolio_name']}' deleted")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"❌ Error: {str(e)}")
-
-        with col_btn2:
-            if st.button("🔒 Close", key=f"close_{portfolio['portfolio_id']}", width='stretch'):
-                try:
-                    service.close_portfolio(
-                        portfolio['portfolio_id'],
-                        timestamp_seconds,
-                        close_reason="Manual close",
-                        close_notes=None
-                    )
-                    st.success(f"✅ Portfolio '{portfolio['portfolio_name']}' closed")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"❌ Error: {str(e)}")
-    else:
-        st.info("💡 These are standalone positions deployed individually. To manage, use the Positions tab.")
-
-    # Show constraints used
-    with st.expander("⚙️ Allocation Constraints"):
-        import json
-        constraints = json.loads(portfolio['constraints_json'])
-        st.json(constraints)
 
 
 # ============================================================================
@@ -4443,14 +4029,13 @@ def render_dashboard(data_loader: DataLoader, mode: str):
     tabs_start = time.time()
     print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] Rendering tabs...")
 
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
         "📊 All Strategies",
         "🎯 Allocation",
         "📈 Rate Tables",
         "⚠️ 0 Liquidity",
         "💼 Positions",
         "📂 Portfolio View",
-        "📁 Portfolios",
         "💎 Oracle Prices",
         "🚀 Pending Deployments"
     ])
@@ -4515,21 +4100,15 @@ def render_dashboard(data_loader: DataLoader, mode: str):
 
     with tab7:
         tab7_start = time.time()
-        render_portfolios_tab(timestamp_seconds)
+        render_oracle_prices_tab(timestamp_seconds)
         tab7_time = (time.time() - tab7_start) * 1000
-        print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] Tab7 (Portfolios) rendered in {tab7_time:.1f}ms")
+        print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] Tab7 (Oracle Prices) rendered in {tab7_time:.1f}ms")
 
     with tab8:
         tab8_start = time.time()
-        render_oracle_prices_tab(timestamp_seconds)
-        tab8_time = (time.time() - tab8_start) * 1000
-        print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] Tab8 (Oracle Prices) rendered in {tab8_time:.1f}ms")
-
-    with tab9:
-        tab9_start = time.time()
         render_pending_deployments_tab()
-        tab9_time = (time.time() - tab9_start) * 1000
-        print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] Tab9 (Pending Deployments) rendered in {tab9_time:.1f}ms")
+        tab8_time = (time.time() - tab8_start) * 1000
+        print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] Tab8 (Pending Deployments) rendered in {tab8_time:.1f}ms")
 
     total_dashboard_time = (time.time() - dashboard_start) * 1000
     print(f"[{total_dashboard_time:7.1f}ms] [DASHBOARD] ✅ Dashboard render complete (total: {total_dashboard_time:.1f}ms)\n")

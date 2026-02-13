@@ -21,6 +21,34 @@ from utils.time_helpers import to_seconds, to_datetime_str
 
 
 # ============================================================================
+# HELPER FUNCTIONS
+# ============================================================================
+
+def _safe_float(value, default=0.0):
+    """
+    Safely convert value to float, handling bytes and edge cases.
+
+    Args:
+        value: Value to convert (can be float, int, bytes, None, etc.)
+        default: Default value to return if conversion fails
+
+    Returns:
+        float: Converted value or default
+    """
+    if pd.isna(value):
+        return default
+    if isinstance(value, bytes):
+        try:
+            return float(int.from_bytes(value, byteorder='little'))
+        except Exception:
+            return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+# ============================================================================
 # ABSTRACT BASE CLASS
 # ============================================================================
 
@@ -357,6 +385,205 @@ def render_position_single(
     render_positions_batch([position_id], timestamp_seconds, context)
 
 
+def calculate_position_summary_stats(
+    position_ids: List[str],
+    timestamp_seconds: int
+) -> Dict[str, float]:
+    """
+    Calculate aggregated summary statistics for a list of positions.
+
+    Pure calculation function - does NOT render anything.
+
+    Args:
+        position_ids: List of position IDs to aggregate
+        timestamp_seconds: Unix timestamp for stats lookup
+
+    Returns:
+        Dict of calculated metrics:
+        {
+            'total_deployed': float,
+            'total_pnl': float,
+            'total_earnings': float,
+            'base_earnings': float,
+            'reward_earnings': float,
+            'total_fees': float,
+            'roi': float,
+            'avg_realised_apr': float,
+            'avg_current_apr': float
+        }
+
+    Raises:
+        ValueError: If position_ids is empty or required position fields are missing
+
+    Note:
+        Connection management handled by USE_DB_CLOUD setting and service layer.
+        APR calculations use time-and-capital-weighted averaging.
+    """
+    # Handle empty case - fail loudly
+    if not position_ids:
+        raise ValueError(
+            "calculate_position_summary_stats requires at least one position_id. "
+            "Received empty list."
+        )
+
+    # Setup infrastructure
+    from dashboard.dashboard_utils import get_db_connection
+    from dashboard.db_utils import get_db_engine
+    from dashboard.dashboard_renderer import get_all_position_statistics
+    from analysis.position_service import PositionService
+
+    conn = get_db_connection()
+    engine = get_db_engine()
+    service = PositionService(conn)
+
+    # Batch load data
+    all_stats = get_all_position_statistics(position_ids, timestamp_seconds, engine)
+
+    positions_data = {}
+    for position_id in position_ids:
+        try:
+            position = service.get_position_by_id(position_id)
+            if position is None:
+                # This should never happen - position_id came from active_positions
+                raise ValueError(
+                    f"Position {position_id} not found in database. "
+                    f"This suggests data inconsistency - position_id exists in query "
+                    f"but get_position_by_id returned None. "
+                    f"Total positions requested: {len(position_ids)}"
+                )
+            positions_data[position_id] = position
+        except Exception as e:
+            # Fail loudly with context
+            raise ValueError(
+                f"Failed to load position {position_id} for summary stats. "
+                f"Position index: {list(position_ids).index(position_id) + 1}/{len(position_ids)}. "
+                f"Error: {e}"
+            ) from e
+
+    # Initialize accumulators
+    total_deployed = 0.0
+    total_pnl = 0.0
+    total_earnings = 0.0
+    base_earnings = 0.0
+    reward_earnings = 0.0
+    total_fees = 0.0
+    weighted_realised_apr_sum = 0.0
+    weighted_current_apr_sum = 0.0
+    total_weight = 0.0
+
+    # Aggregate metrics
+    for position_id in position_ids:
+        position = positions_data.get(position_id)
+        stats = all_stats.get(position_id)
+
+        # Skip if missing data
+        if position is None or stats is None:
+            continue
+
+        # Validate timestamp
+        if to_seconds(stats.get('timestamp')) != timestamp_seconds:
+            continue
+
+        # Extract position values
+        deployment_usd = _safe_float(position.get('deployment_usd'))
+        entry_ts = to_seconds(position.get('entry_timestamp'))
+        strategy_days = (timestamp_seconds - entry_ts) / 86400
+
+        # Extract statistics
+        strategy_pnl = _safe_float(stats['total_pnl'])
+        strategy_total_earnings = _safe_float(stats['total_earnings'])
+        strategy_base_earnings = _safe_float(stats['base_earnings'])
+        strategy_reward_earnings = _safe_float(stats['reward_earnings'])
+        strategy_fees = _safe_float(stats['total_fees'])
+        strategy_net_apr = _safe_float(stats['realized_apr'])
+        current_net_apr = _safe_float(stats['current_apr'])
+
+        # Accumulate sums
+        total_deployed += deployment_usd
+        total_pnl += strategy_pnl
+        total_earnings += strategy_total_earnings
+        base_earnings += strategy_base_earnings
+        reward_earnings += strategy_reward_earnings
+        total_fees += strategy_fees
+
+        # Weighted APR components
+        weight = strategy_days * deployment_usd
+        weighted_realised_apr_sum += weight * strategy_net_apr
+        weighted_current_apr_sum += weight * current_net_apr
+        total_weight += weight
+
+    # Calculate derived metrics
+    roi = (total_pnl / total_deployed * 100) if total_deployed > 0 else 0.0
+    avg_realised_apr = (weighted_realised_apr_sum / total_weight) if total_weight > 0 else 0.0
+    avg_current_apr = (weighted_current_apr_sum / total_weight) if total_weight > 0 else 0.0
+
+    # Return calculated metrics
+    return {
+        'total_deployed': total_deployed,
+        'total_pnl': total_pnl,
+        'total_earnings': total_earnings,
+        'base_earnings': base_earnings,
+        'reward_earnings': reward_earnings,
+        'total_fees': total_fees,
+        'roi': roi,
+        'avg_realised_apr': avg_realised_apr,
+        'avg_current_apr': avg_current_apr
+    }
+
+
+def render_position_summary_stats(
+    stats: Dict[str, float],
+    title: str = "Portfolio Summary"
+) -> None:
+    """
+    Render pre-calculated summary statistics.
+
+    Pure rendering function - takes pre-calculated stats and displays them.
+
+    Args:
+        stats: Pre-calculated stats dict from calculate_position_summary_stats()
+        title: Display title for the stats section
+
+    Returns:
+        None (only renders UI)
+
+    Displays metrics in a 3-row layout (4-3-3 columns):
+    - Row 1: Total Deployed, Total PnL (with ROI delta), Total Earnings, Base Earnings
+    - Row 2: Reward Earnings, Fees, Avg Realised APR
+    - Row 3: Avg Current APR
+    """
+    # Render UI - 3-row layout (4-3-3 columns)
+    st.markdown(f"### 📊 {title}")
+
+    # Row 1: 4 columns
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Total Deployed", f"${stats['total_deployed']:,.2f}")
+    with col2:
+        roi_display = f"ROI: {stats['roi']:.2f}%"
+        st.metric("Total PnL (Real+Unreal)", f"${stats['total_pnl']:,.2f}", delta=roi_display)
+    with col3:
+        st.metric("Total Earnings", f"${stats['total_earnings']:,.2f}")
+    with col4:
+        st.metric("Base Earnings", f"${stats['base_earnings']:,.2f}")
+
+    # Row 2: 3 columns
+    col5, col6, col7 = st.columns(3)
+    with col5:
+        st.metric("Reward Earnings", f"${stats['reward_earnings']:,.2f}")
+    with col6:
+        st.metric("Fees", f"${stats['total_fees']:,.2f}")
+    with col7:
+        st.metric("Avg Realised APR", f"{stats['avg_realised_apr'] * 100:.2f}%")
+
+    # Row 3: 3 columns
+    col8, _, _ = st.columns(3)
+    with col8:
+        st.metric("Avg Current APR", f"{stats['avg_current_apr'] * 100:.2f}%")
+
+    st.markdown("---")  # Separator
+
+
 # ============================================================================
 # SEGMENT DATA BUILDERS
 # ============================================================================
@@ -375,6 +602,9 @@ def build_segment_data_from_position(position: pd.Series) -> Dict:
         Dict with opening_token_amount_*, opening_price_*, opening_*_rate fields
     """
     segment_data = {
+        # REQUIRED: Explicit flag for segment type detection
+        'is_live_segment': True,
+
         # Token amounts from position entry (stored in positions table)
         'opening_token_amount_1a': position.get('entry_token_amount_1a'),
         'opening_token_amount_2a': position.get('entry_token_amount_2a'),
@@ -413,6 +643,9 @@ def build_segment_data_from_rebalance(rebalance: Dict) -> Dict:
         and closing_price_* fields (for historical segments)
     """
     segment_data = {
+        # REQUIRED: Explicit flag for segment type detection
+        'is_live_segment': False,
+
         # Token amounts from rebalance entry
         'opening_token_amount_1a': rebalance.get('entry_token_amount_1a'),
         'opening_token_amount_2a': rebalance.get('entry_token_amount_2a'),
@@ -516,12 +749,12 @@ def build_position_expander_title(
         f"Entry {entry_apr:.2f}%",
         f"Current {current_apr:.2f}%",
         f"Net APR {realized_apr:.2f}%",
-        f"Value ${current_value:,.2f}",
-        f"PnL ${total_pnl:,.2f}",
-        f"Earnings ${total_earnings:,.2f}",
-        f"Base ${base_earnings:,.2f}",
-        f"Rewards ${reward_earnings:,.2f}",
-        f"Fees ${total_fees:,.2f}"
+        f"Value \\${current_value:,.2f}",
+        f"PnL \\${total_pnl:,.2f}",
+        f"Earnings \\${total_earnings:,.2f}",
+        f"Base \\${base_earnings:,.2f}",
+        f"Rewards \\${reward_earnings:,.2f}",
+        f"Fees \\${total_fees:,.2f}"
     ])
 
     return "▶ " + " | ".join(title_parts)
@@ -688,11 +921,27 @@ def render_position_actions_standalone(
         if st.button("🔄 Rebalance Position", key=f"rebal_{position['position_id']}"):
             # Check for future rebalances
             if service.has_future_rebalances(position['position_id'], timestamp_seconds):
-                st.error("Cannot rebalance: future rebalances exist")
+                st.error("❌ Cannot rebalance: future rebalances exist")
             else:
-                # Rebalance logic
-                st.success("Position rebalanced")
-                st.rerun()
+                try:
+                    # Call rebalance method
+                    rebalance_id = service.rebalance_position(
+                        position['position_id'],
+                        timestamp_seconds,
+                        'manual_rebalance',
+                        'Rebalanced via dashboard (Positions tab)'
+                    )
+                    st.success(f"✅ Position rebalanced (ID: {rebalance_id[:8]}...)")
+                    st.rerun()
+                except ValueError as e:
+                    # Position validation errors (inactive, not found, etc.)
+                    st.error(f"❌ Rebalance failed: {e}")
+                except Exception as e:
+                    # Unexpected errors
+                    st.error(f"❌ Unexpected error during rebalance: {e}")
+                    print(f"⚠️ Rebalance error: {e}")
+                    import traceback
+                    traceback.print_exc()
 
     with col2:
         if st.button("❌ Close Position", key=f"close_{position['position_id']}"):
@@ -718,12 +967,29 @@ def render_position_actions_portfolio(
 
     with col1:
         if st.button("🔄 Rebalance Position", key=f"rebal_port_{position['position_id']}"):
-            # Same logic but might need to update portfolio stats
+            # Check for future rebalances
             if service.has_future_rebalances(position['position_id'], timestamp_seconds):
-                st.error("Cannot rebalance: future rebalances exist")
+                st.error("❌ Cannot rebalance: future rebalances exist")
             else:
-                st.success("Position rebalanced")
-                st.rerun()
+                try:
+                    # Call rebalance method
+                    rebalance_id = service.rebalance_position(
+                        position['position_id'],
+                        timestamp_seconds,
+                        'manual_rebalance',
+                        f'Rebalanced via dashboard (Portfolio {portfolio_id})'
+                    )
+                    st.success(f"✅ Position rebalanced (ID: {rebalance_id[:8]}...)")
+                    st.rerun()
+                except ValueError as e:
+                    # Position validation errors (inactive, not found, etc.)
+                    st.error(f"❌ Rebalance failed: {e}")
+                except Exception as e:
+                    # Unexpected errors
+                    st.error(f"❌ Unexpected error during rebalance: {e}")
+                    print(f"⚠️ Rebalance error: {e}")
+                    import traceback
+                    traceback.print_exc()
 
     with col2:
         if st.button("❌ Close Position", key=f"close_port_{position['position_id']}"):
@@ -806,14 +1072,10 @@ class RecursiveLendingRenderer(StrategyRendererBase):
         deployment = position['deployment_usd']
 
         # Build segment_data from last rebalance
-        # ALL positions should have at least sequence_number=1 (initial deployment)
+        # If position has rebalances, use the last one's entry values
         # The LAST rebalance in the list is always the current/live segment
         if not rebalances or len(rebalances) == 0:
-            position_id = position.get('position_id', 'unknown')
-            print(f"⚠️  [SEGMENT-DATA] No rebalances provided for position {position_id[:8] if len(position_id) > 8 else position_id}!")
-            print(f"    This should never happen - all positions have at least sequence_number=1")
-            print(f"    Token amounts will be None, liquidation calculations will fail")
-            # Use empty segment_data with None token amounts (will cause liquidation to show N/A)
+            # No rebalances yet - use position's entry data directly
             segment_data = build_segment_data_from_position(position)
         else:
             # ALWAYS use last rebalance's ENTRY values (start of current segment)
@@ -964,52 +1226,60 @@ class RecursiveLendingRenderer(StrategyRendererBase):
     ) -> Dict:
         """Build table row for a lending leg (16-column structure)."""
 
-        # Conditional column naming based on segment type
-        if segment_type == 'historical':
-            price_column_name = 'Exit Price ($)'
-            liq_dist_column_name = 'Segment Exit Liquidation Distance'
-        else:
-            price_column_name = 'Live Price ($)'
-            liq_dist_column_name = 'Segment Live Liquidation Distance'
+        # ========================================
+        # STEP 1: Detect segment type - FAIL LOUD if flag missing
+        # ========================================
+        if segment_data is None:
+            raise ValueError("segment_data is None - must provide segment_data with is_live_segment flag")
 
-        # Extract segment entry values
+        if 'is_live_segment' not in segment_data:
+            raise ValueError(
+                f"segment_data missing required 'is_live_segment' flag. "
+                f"Keys present: {list(segment_data.keys())}"
+            )
+
+        is_live_segment = segment_data['is_live_segment']  # No default - fail if missing
+
+        # Initialize variables (avoid "possibly unbound" errors)
         segment_entry_rate = None
         segment_entry_price = None
         token_amount = None
 
-        # For historical segments, use closing prices/rates from segment_data
-        # For live segments, use current market prices/rates
-        if segment_type == 'historical' and segment_data:
-            # Map leg_id to closing field names for historical segments
+        # ========================================
+        # STEP 2: Extract data based on segment type
+        # ========================================
+        if not is_live_segment:
+            # REBALANCE SEGMENT PATH: Use position_rebalances table
+            # segment_data contains rebalance opening values (from build_rebalance_segment_data)
             if leg_id == 'leg_1a':
                 segment_entry_rate = segment_data.get('opening_lend_rate_1a')
                 segment_entry_price = segment_data.get('opening_price_1a')
                 token_amount = segment_data.get('opening_token_amount_1a')
-                # Use closing values for "live" (exit) price/rate - convert from Decimal to float
+                # Use closing values for "exit" price/rate
                 live_rate = float(segment_data.get('closing_lend_rate_1a')) if segment_data.get('closing_lend_rate_1a') is not None else None
                 live_price = float(segment_data.get('closing_price_1a')) if segment_data.get('closing_price_1a') is not None else None
             elif leg_id == 'leg_2b':
                 segment_entry_rate = segment_data.get('opening_lend_rate_2b')
                 segment_entry_price = segment_data.get('opening_price_2b')
                 token_amount = segment_data.get('opening_token_amount_2b')
-                # Use closing values for "live" (exit) price/rate - convert from Decimal to float
+                # Use closing values for "exit" price/rate
                 live_rate = float(segment_data.get('closing_lend_rate_2b')) if segment_data.get('closing_lend_rate_2b') is not None else None
                 live_price = float(segment_data.get('closing_price_2b')) if segment_data.get('closing_price_2b') is not None else None
         else:
-            # Live segment - use current market prices/rates
+            # LIVE SEGMENT PATH: Use positions table + current rates
+            # segment_data already contains position entry values (from build_live_segment_data)
             live_rate = get_rate(token, protocol, 'lend_apr')
             live_price = get_price_with_fallback(token, protocol)
 
-            if segment_data:
-                # Map leg_id to field names
-                if leg_id == 'leg_1a':
-                    segment_entry_rate = segment_data.get('opening_lend_rate_1a')
-                    segment_entry_price = segment_data.get('opening_price_1a')
-                    token_amount = segment_data.get('opening_token_amount_1a')
-                elif leg_id == 'leg_2b':
-                    segment_entry_rate = segment_data.get('opening_lend_rate_2b')
-                    segment_entry_price = segment_data.get('opening_price_2b')
-                    token_amount = segment_data.get('opening_token_amount_2b')
+            # Map leg_id to field names
+            if leg_id == 'leg_1a':
+                segment_entry_rate = segment_data.get('opening_lend_rate_1a')
+                segment_entry_price = segment_data.get('opening_price_1a')
+                token_amount = segment_data.get('opening_token_amount_1a')
+            elif leg_id == 'leg_2b':
+                segment_entry_rate = segment_data.get('opening_lend_rate_2b')
+                segment_entry_price = segment_data.get('opening_price_2b')
+                token_amount = segment_data.get('opening_token_amount_2b')
 
         # Pandas-safe checks (avoid truth value ambiguity)
         def safe_value(val):
@@ -1100,24 +1370,49 @@ class RecursiveLendingRenderer(StrategyRendererBase):
                 import traceback
                 traceback.print_exc()
 
-        return {
-            'Protocol': protocol,
-            'Token': token,
-            'Action': 'Lend',
-            'Position Entry Rate (%)': f"{entry_rate * 100:.2f}" if safe_value(entry_rate) else "N/A",
-            'Segment Entry Rate (%)': f"{segment_entry_rate * 100:.2f}" if safe_value(segment_entry_rate) else f"{entry_rate * 100:.2f}" if safe_value(entry_rate) else "N/A",
-            'Live Rate (%)': f"{live_rate * 100:.2f}" if safe_value(live_rate) else "N/A",
-            'Segment Entry Price ($)': f"{segment_entry_price:.4f}" if safe_value(segment_entry_price) else f"{entry_price:.4f}" if safe_value(entry_price) else "N/A",
-            price_column_name: f"{live_price:.4f}" if safe_value(live_price) else "N/A",
-            'Liquidation Price ($)': liq_price_str,
-            'Token Amount': f"{token_amount:,.5f}" if safe_value(token_amount) else "N/A",
-            'Token Rebalance Required': "TBD",
-            'Fee Rate (%)': "-",  # Lend legs don't have fees
-            'Segment Entry Liquidation Distance': entry_liq_dist_str,
-            liq_dist_column_name: live_liq_dist_str,
-            'Segment Earnings': "TBD",
-            'Segment Fees': "TBD"
-        }
+        # ========================================
+        # STEP 3: Build row with conditional column headers
+        # ========================================
+        if is_live_segment:
+            # LIVE SEGMENT: Entry → Live
+            return {
+                'Protocol': protocol,
+                'Token': token,
+                'Action': 'Lend',
+                'Position Entry Rate (%)': f"{entry_rate * 100:.2f}" if safe_value(entry_rate) else "N/A",
+                'Entry Rate (%)': f"{segment_entry_rate * 100:.2f}" if safe_value(segment_entry_rate) else "N/A",
+                'Live Rate (%)': f"{live_rate * 100:.2f}" if safe_value(live_rate) else "N/A",
+                'Entry Price ($)': f"{segment_entry_price:.4f}" if safe_value(segment_entry_price) else "N/A",
+                'Live Price ($)': f"{live_price:.4f}" if safe_value(live_price) else "N/A",
+                'Liquidation Price ($)': liq_price_str,
+                'Token Amount': f"{token_amount:,.5f}" if safe_value(token_amount) else "N/A",
+                'Token Rebalance Required': "TBD",
+                'Fee Rate (%)': "-",  # Lend legs don't have fees
+                'Entry Liquidation Distance': entry_liq_dist_str,
+                'Live Liquidation Distance': live_liq_dist_str,
+                'Segment Earnings': "TBD",
+                'Segment Fees': "TBD"
+            }
+        else:
+            # REBALANCE SEGMENT: Segment Entry → Exit
+            return {
+                'Protocol': protocol,
+                'Token': token,
+                'Action': 'Lend',
+                'Position Entry Rate (%)': f"{entry_rate * 100:.2f}" if safe_value(entry_rate) else "N/A",
+                'Segment Entry Rate (%)': f"{segment_entry_rate * 100:.2f}" if safe_value(segment_entry_rate) else "N/A",
+                'Exit Rate (%)': f"{live_rate * 100:.2f}" if safe_value(live_rate) else "N/A",
+                'Segment Entry Price ($)': f"{segment_entry_price:.4f}" if safe_value(segment_entry_price) else "N/A",
+                'Exit Price ($)': f"{live_price:.4f}" if safe_value(live_price) else "N/A",
+                'Liquidation Price ($)': liq_price_str,
+                'Token Amount': f"{token_amount:,.5f}" if safe_value(token_amount) else "N/A",
+                'Token Rebalance Required': "TBD",
+                'Fee Rate (%)': "-",  # Lend legs don't have fees
+                'Segment Entry Liquidation Distance': entry_liq_dist_str,
+                'Exit Liquidation Distance': live_liq_dist_str,
+                'Segment Earnings': "TBD",
+                'Segment Fees': "TBD"
+            }
 
     @staticmethod
     def _build_borrow_leg_row(
@@ -1143,55 +1438,66 @@ class RecursiveLendingRenderer(StrategyRendererBase):
     ) -> Dict:
         """Build table row for a borrowing leg (16-column structure) with liquidation calculations."""
 
-        # Conditional column naming based on segment type
-        if segment_type == 'historical':
-            price_column_name = 'Exit Price ($)'
-            liq_dist_column_name = 'Segment Exit Liquidation Distance'
-        else:
-            price_column_name = 'Live Price ($)'
-            liq_dist_column_name = 'Segment Live Liquidation Distance'
+        # ========================================
+        # STEP 1: Detect segment type - FAIL LOUD if flag missing
+        # ========================================
+        if segment_data is None:
+            raise ValueError("segment_data is None - must provide segment_data with is_live_segment flag")
 
-        # Extract segment entry values
+        if 'is_live_segment' not in segment_data:
+            raise ValueError(
+                f"segment_data missing required 'is_live_segment' flag. "
+                f"Keys present: {list(segment_data.keys())}"
+            )
+
+        is_live_segment = segment_data['is_live_segment']  # No default - fail if missing
+
+        # Initialize variables (avoid "possibly unbound" errors)
         segment_entry_rate = None
         segment_entry_price = None
         token_amount = None
+        live_rate = None
+        live_price = None
+        borrow_fee = None
 
-        # For historical segments, use closing prices/rates from segment_data
-        # For live segments, use current market prices/rates
-        if segment_type == 'historical' and segment_data:
-            # Map leg_id to closing field names for historical segments
+        # ========================================
+        # STEP 2: Extract data based on segment type
+        # ========================================
+        if not is_live_segment:
+            # REBALANCE SEGMENT PATH: Use position_rebalances table
+            # segment_data contains rebalance opening values (from build_rebalance_segment_data)
             if leg_id == 'leg_2a':
                 segment_entry_rate = segment_data.get('opening_borrow_rate_2a')
                 segment_entry_price = segment_data.get('opening_price_2a')
                 token_amount = segment_data.get('opening_token_amount_2a')
-                # Use closing values for "live" (exit) price/rate - convert from Decimal to float
+                # Use closing values for "exit" price/rate
                 live_rate = float(segment_data.get('closing_borrow_rate_2a')) if segment_data.get('closing_borrow_rate_2a') is not None else None
                 live_price = float(segment_data.get('closing_price_2a')) if segment_data.get('closing_price_2a') is not None else None
             elif leg_id == 'leg_3b':
                 segment_entry_rate = segment_data.get('opening_borrow_rate_3b')
                 segment_entry_price = segment_data.get('opening_price_3b')
                 token_amount = segment_data.get('opening_token_amount_3b')
-                # Use closing values for "live" (exit) price/rate - convert from Decimal to float
+                # Use closing values for "exit" price/rate
                 live_rate = float(segment_data.get('closing_borrow_rate_3b')) if segment_data.get('closing_borrow_rate_3b') is not None else None
                 live_price = float(segment_data.get('closing_price_3b')) if segment_data.get('closing_price_3b') is not None else None
             # Get borrow fee (always from current market - not stored in rebalance history)
             borrow_fee = get_borrow_fee(token, protocol)
         else:
-            # Live segment - use current market prices/rates
+            # LIVE SEGMENT PATH: Use positions table + current rates
+            # segment_data already contains position entry values (from build_live_segment_data)
             live_rate = get_rate(token, protocol, 'borrow_apr')
             live_price = get_price_with_fallback(token, protocol)
             borrow_fee = get_borrow_fee(token, protocol)
 
-            if segment_data:
-                # Map leg_id to field names
-                if leg_id == 'leg_2a':
-                    segment_entry_rate = segment_data.get('opening_borrow_rate_2a')
-                    segment_entry_price = segment_data.get('opening_price_2a')
-                    token_amount = segment_data.get('opening_token_amount_2a')
-                elif leg_id == 'leg_3b':
-                    segment_entry_rate = segment_data.get('opening_borrow_rate_3b')
-                    segment_entry_price = segment_data.get('opening_price_3b')
-                    token_amount = segment_data.get('opening_token_amount_3b')
+            # Map leg_id to field names
+            if leg_id == 'leg_2a':
+                segment_entry_rate = segment_data.get('opening_borrow_rate_2a')
+                segment_entry_price = segment_data.get('opening_price_2a')
+                token_amount = segment_data.get('opening_token_amount_2a')
+            elif leg_id == 'leg_3b':
+                segment_entry_rate = segment_data.get('opening_borrow_rate_3b')
+                segment_entry_price = segment_data.get('opening_price_3b')
+                token_amount = segment_data.get('opening_token_amount_3b')
 
         # Pandas-safe checks (avoid truth value ambiguity)
         def safe_value(val):
@@ -1286,24 +1592,49 @@ class RecursiveLendingRenderer(StrategyRendererBase):
                 import traceback
                 traceback.print_exc()
 
-        return {
-            'Protocol': protocol,
-            'Token': token,
-            'Action': 'Borrow',
-            'Position Entry Rate (%)': f"{entry_rate * 100:.2f}" if safe_value(entry_rate) else "N/A",
-            'Segment Entry Rate (%)': f"{segment_entry_rate * 100:.2f}" if safe_value(segment_entry_rate) else f"{entry_rate * 100:.2f}" if safe_value(entry_rate) else "N/A",
-            'Live Rate (%)': f"{live_rate * 100:.2f}" if safe_value(live_rate) else "N/A",
-            'Segment Entry Price ($)': f"{segment_entry_price:.4f}" if safe_value(segment_entry_price) else f"{entry_price:.4f}" if safe_value(entry_price) else "N/A",
-            price_column_name: f"{live_price:.4f}" if safe_value(live_price) else "N/A",
-            'Liquidation Price ($)': liq_price_str,
-            'Token Amount': f"{token_amount:,.5f}" if safe_value(token_amount) else "N/A",
-            'Token Rebalance Required': "TBD",
-            'Fee Rate (%)': f"{borrow_fee * 100:.4f}" if safe_value(borrow_fee) else "N/A",
-            'Segment Entry Liquidation Distance': entry_liq_dist_str,
-            liq_dist_column_name: live_liq_dist_str,
-            'Segment Earnings': "TBD",
-            'Segment Fees': "TBD"
-        }
+        # ========================================
+        # STEP 3: Build return dict with conditional column headers
+        # ========================================
+        if is_live_segment:
+            # LIVE SEGMENT: Entry → Live (position deployment → current state)
+            return {
+                'Protocol': protocol,
+                'Token': token,
+                'Action': 'Borrow',
+                'Position Entry Rate (%)': f"{entry_rate * 100:.2f}" if safe_value(entry_rate) else "N/A",
+                'Entry Rate (%)': f"{segment_entry_rate * 100:.2f}" if safe_value(segment_entry_rate) else "N/A",
+                'Live Rate (%)': f"{live_rate * 100:.2f}" if safe_value(live_rate) else "N/A",
+                'Entry Price ($)': f"{segment_entry_price:.4f}" if safe_value(segment_entry_price) else "N/A",
+                'Live Price ($)': f"{live_price:.4f}" if safe_value(live_price) else "N/A",
+                'Liquidation Price ($)': liq_price_str,
+                'Token Amount': f"{token_amount:,.5f}" if safe_value(token_amount) else "N/A",
+                'Token Rebalance Required': "TBD",
+                'Fee Rate (%)': f"{borrow_fee * 100:.4f}" if safe_value(borrow_fee) else "N/A",
+                'Entry Liquidation Distance': entry_liq_dist_str,
+                'Live Liquidation Distance': live_liq_dist_str,
+                'Segment Earnings': "TBD",
+                'Segment Fees': "TBD"
+            }
+        else:
+            # REBALANCE SEGMENT: Segment Entry → Exit (segment opening → segment closing)
+            return {
+                'Protocol': protocol,
+                'Token': token,
+                'Action': 'Borrow',
+                'Position Entry Rate (%)': f"{entry_rate * 100:.2f}" if safe_value(entry_rate) else "N/A",
+                'Segment Entry Rate (%)': f"{segment_entry_rate * 100:.2f}" if safe_value(segment_entry_rate) else "N/A",
+                'Exit Rate (%)': f"{live_rate * 100:.2f}" if safe_value(live_rate) else "N/A",
+                'Segment Entry Price ($)': f"{segment_entry_price:.4f}" if safe_value(segment_entry_price) else "N/A",
+                'Exit Price ($)': f"{live_price:.4f}" if safe_value(live_price) else "N/A",
+                'Liquidation Price ($)': liq_price_str,
+                'Token Amount': f"{token_amount:,.5f}" if safe_value(token_amount) else "N/A",
+                'Token Rebalance Required': "TBD",
+                'Fee Rate (%)': f"{borrow_fee * 100:.4f}" if safe_value(borrow_fee) else "N/A",
+                'Segment Entry Liquidation Distance': entry_liq_dist_str,
+                'Exit Liquidation Distance': live_liq_dist_str,
+                'Segment Earnings': "TBD",
+                'Segment Fees': "TBD"
+            }
 
 
 # ============================================================================
@@ -1431,8 +1762,9 @@ def render_position_expander(
     )
 
     with st.expander(title, expanded=expanded):
-        # Strategy name badge
+        # Strategy name badge and position ID
         st.caption(f"📊 Strategy: {renderer.get_strategy_name()}")
+        st.caption(f"🔑 Position ID: {position['position_id']}")
 
         # Strategy summary metrics (uses strategy-specific layout)
         st.markdown("#### Total Position Summary (All Segments)")
@@ -1448,7 +1780,7 @@ def render_position_expander(
         else:
             rebalances_list = []
 
-        # ALWAYS fetch rebalances if empty - all positions have at least sequence_number=1 (initial deployment)
+        # Fetch rebalances if empty
         if not rebalances_list or len(rebalances_list) == 0:
             try:
                 position_id = position['position_id']
@@ -1457,7 +1789,8 @@ def render_position_expander(
                     rebalances_list = rebalances_df.to_dict('records')
                     print(f"ℹ️  [REBALANCES] Fetched {len(rebalances_list)} rebalance(s) for position {position_id[:8]}...")
                 else:
-                    print(f"⚠️  [REBALANCES] No rebalances found for position {position_id[:8]}... (expected at least sequence_number=1)")
+                    # No rebalances yet - this is normal for new positions
+                    pass
             except Exception as e:
                 print(f"⚠️  [REBALANCES] Failed to fetch rebalances for position {position.get('position_id', 'unknown')}: {e}")
                 import traceback
@@ -1476,12 +1809,12 @@ def render_position_expander(
 
         # === HISTORICAL SEGMENTS ===
         # Show all CLOSED segments (all rebalances EXCEPT the last one, which is the current/live segment)
-        if rebalances_list and len(rebalances_list) > 1:
+        if rebalances_list and len(rebalances_list) > 0:
             st.markdown("---")
             st.markdown("#### Historical Segments")
 
-            # Show in reverse order (most recent first), excluding the last one (current segment)
-            for idx in reversed(range(len(rebalances_list) - 1)):
+            # Show in reverse order (most recent first) - all rebalances represent closed segments
+            for idx in reversed(range(len(rebalances_list))):
                 rebalance = rebalances_list[idx]
                 sequence_num = rebalance.get('sequence_number', idx + 1)
 
@@ -1500,6 +1833,6 @@ def render_position_expander(
         # Action buttons (context-aware)
         if context == 'standalone':
             render_position_actions_standalone(position, timestamp_seconds, service)
-        elif context == 'portfolio':
+        elif context == 'portfolio2':
             render_position_actions_portfolio(
                 position, timestamp_seconds, service, portfolio_id)

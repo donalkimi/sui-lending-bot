@@ -1326,6 +1326,27 @@ class PositionService:
             rebalance_notes
         )
 
+        # Send Slack notification
+        try:
+            from alerts.slack_notifier import SlackNotifier
+            notifier = SlackNotifier()
+            notifier.alert_position_rebalanced(
+                position_id=position['position_id'],
+                token1=position['token1'],
+                token2=position['token2'],
+                token3=position['token3'],  # Always exists for recursive_lending
+                protocol_a=position['protocol_a'],
+                protocol_b=position['protocol_b'],
+                liq_dist_2a_before=snapshot.get('liq_dist_2a_before'),
+                liq_dist_2a_after=snapshot['closing_liq_dist_2a'],
+                liq_dist_2b_before=snapshot.get('liq_dist_2b_before'),
+                liq_dist_2b_after=snapshot['closing_liq_dist_2b'],
+                rebalance_timestamp=live_timestamp
+            )
+        except Exception as e:
+            print(f"⚠️ Failed to send Slack notification for rebalance: {e}")
+            # Continue - notification failure should not block rebalance
+
         return rebalance_id
 
     def capture_rebalance_snapshot(
@@ -1454,6 +1475,44 @@ class PositionService:
             borrow_weight=position.get('entry_borrow_weight_3b', 1.0)
         )
 
+        # 6b. Calculate "before" liquidation distances (at opening_timestamp with opening prices)
+        # For Slack notification: show liquidation distances BEFORE rebalance
+        # Use same token amounts but with opening prices
+        opening_collateral_A = entry_token_amount_1a * position['entry_price_1a']
+        opening_loan_A = entry_token_amount_2a * position['entry_price_2a']
+
+        # Leg 2A: Protocol A - Borrow token2 (borrowing side) - BEFORE rebalance
+        opening_liq_result_2a = calc.calculate_liquidation_price(
+            collateral_value=opening_collateral_A,
+            loan_value=opening_loan_A,
+            lending_token_price=position['entry_price_1a'],
+            borrowing_token_price=position['entry_price_2a'],
+            lltv=position.get('entry_liquidation_threshold_1a', position['entry_collateral_ratio_1a']),
+            side='borrowing',
+            borrow_weight=position.get('entry_borrow_weight_2a', 1.0)
+        )
+
+        # Protocol B collateral and loan values with opening prices
+        opening_collateral_B = entry_token_amount_2b * position['entry_price_2b']
+        opening_loan_B = entry_token_amount_3b * position['entry_price_3b']
+
+        # Leg 2B: Protocol B - Lend token2 (lending side) - BEFORE rebalance
+        opening_liq_result_2b = calc.calculate_liquidation_price(
+            collateral_value=opening_collateral_B,
+            loan_value=opening_loan_B,
+            lending_token_price=position['entry_price_2b'],
+            borrowing_token_price=position['entry_price_3b'],
+            lltv=position.get('entry_liquidation_threshold_2b', position['entry_collateral_ratio_2b']),
+            side='lending',
+            borrow_weight=position.get('entry_borrow_weight_3b', 1.0)
+        )
+
+        # Store before/after liquidation distances for Slack notification
+        liq_dist_2a_before = opening_liq_result_2a.get('pct_distance')
+        liq_dist_2a_after = liq_result_2a.get('pct_distance')
+        liq_dist_2b_before = opening_liq_result_2b.get('pct_distance')
+        liq_dist_2b_after = liq_result_2b.get('pct_distance')
+
         # 7. Determine rebalance actions
         entry_action_1a = "Initial deployment"
         entry_action_2a = "Initial deployment"
@@ -1516,11 +1575,14 @@ class PositionService:
             'closing_liq_price_2a': liq_result_2a.get('liq_price'),
             'closing_liq_price_2b': liq_result_2b.get('liq_price'),
             'closing_liq_price_3b': liq_result_3b.get('liq_price'),
-            # Liquidation distances at rebalance time
+            # Liquidation distances at rebalance time (after)
             'closing_liq_dist_1a': liq_result_1a.get('pct_distance'),
             'closing_liq_dist_2a': liq_result_2a.get('pct_distance'),
             'closing_liq_dist_2b': liq_result_2b.get('pct_distance'),
             'closing_liq_dist_3b': liq_result_3b.get('pct_distance'),
+            # Liquidation distances before rebalance (for Slack notification)
+            'liq_dist_2a_before': liq_dist_2a_before,
+            'liq_dist_2b_before': liq_dist_2b_before,
             # Collateral ratios
             'collateral_ratio_1a': position['entry_collateral_ratio_1a'],
             'collateral_ratio_2b': position['entry_collateral_ratio_2b'],
