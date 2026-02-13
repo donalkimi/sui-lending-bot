@@ -126,6 +126,28 @@ def refresh_pipeline(
             tokens_df=tokens_df,
             timestamp=ts,
         )
+
+        # Auto-populate oracle IDs for new tokens
+        if token_summary and token_summary.get('inserted', 0) > 0:
+            new_count = token_summary['inserted']
+            print(f"[ORACLE] {new_count} new token(s) detected")
+            print("[ORACLE] Auto-populating oracle IDs...")
+
+            try:
+                from utils.populate_coingecko_ids import populate_coingecko_ids_auto
+                from utils.populate_pyth_ids import populate_pyth_ids_auto
+
+                cg_matches = populate_coingecko_ids_auto(engine=tracker.engine, dry_run=False, force=False)
+                pyth_matches = populate_pyth_ids_auto(engine=tracker.engine, dry_run=False, force=False)
+
+                print(f"[ORACLE] CoinGecko: {cg_matches} newly matched")
+                print(f"[ORACLE] Pyth: {pyth_matches} newly matched")
+                print("[ORACLE] Oracle ID population complete")
+            except Exception as e:
+                print(f"[ORACLE] Auto-population failed: {e}")
+                print("[ORACLE] Continuing with refresh - oracle IDs can be populated manually")
+                # Continue with refresh - not a critical failure
+
         print("[DB] Snapshot saved successfully")
 
     # Initialize strategy results (always, regardless of save_snapshots)

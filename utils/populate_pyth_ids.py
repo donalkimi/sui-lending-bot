@@ -277,6 +277,63 @@ def verify_updates():
     print("="*100)
 
 
+def populate_pyth_ids_auto(engine=None, dry_run=False, force=False):
+    """
+    Auto-populate pyth_id for tokens in token_registry.
+
+    This is a library function that can be called from other modules (e.g., refresh_pipeline).
+
+    Args:
+        engine: Optional SQLAlchemy engine. If None, will create one via get_db_engine()
+        dry_run: If True, show matches without updating database
+        force: If True, update all tokens (overwrite existing IDs)
+
+    Returns:
+        int: Number of newly matched/updated tokens (0 if error or no matches)
+    """
+    # Use provided engine or create one
+    if engine is None:
+        from dashboard.db_utils import get_db_engine as _get_db_engine
+        engine = _get_db_engine()
+
+    # Store original engine in module globals for update_token_registry to use
+    import dashboard.db_utils as db_utils
+    original_get_engine = db_utils.get_db_engine
+    db_utils.get_db_engine = lambda: engine
+
+    try:
+        # Fetch price feeds from Pyth
+        feeds = fetch_pyth_price_feeds()
+
+        if not feeds:
+            return 0
+
+        # Build mappings
+        contract_mapping, symbol_mapping = build_pyth_id_mappings(feeds)
+
+        if not contract_mapping and not symbol_mapping:
+            return 0
+
+        # Match tokens to Pyth IDs
+        matches = match_tokens_to_pyth_ids(contract_mapping, symbol_mapping)
+
+        if not matches:
+            return 0
+
+        # Update token registry
+        results = update_token_registry(matches, force=force, dry_run=dry_run)
+
+        return results.get('updated', 0) if not dry_run else results.get('matched', 0)
+
+    except Exception as e:
+        print(f"[ERROR] populate_pyth_ids_auto failed: {e}")
+        return 0
+
+    finally:
+        # Restore original get_db_engine function
+        db_utils.get_db_engine = original_get_engine
+
+
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(

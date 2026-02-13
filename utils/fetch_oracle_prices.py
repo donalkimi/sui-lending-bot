@@ -423,7 +423,9 @@ def fetch_all_oracle_prices(dry_run: bool = False) -> dict:
     """
     engine = get_db_engine()
 
-    # Query tokens from token_registry that have oracle IDs
+    # Query tokens from token_registry
+    # Note: DeFi Llama uses contract addresses directly (no ID needed)
+    # CoinGecko/Pyth will only fetch for tokens with their respective IDs
     query = """
     SELECT
         tr.token_contract,
@@ -432,7 +434,6 @@ def fetch_all_oracle_prices(dry_run: bool = False) -> dict:
         tr.pyth_id
     FROM token_registry tr
     WHERE tr.symbol IS NOT NULL
-      AND (tr.coingecko_id IS NOT NULL OR tr.pyth_id IS NOT NULL)
     ORDER BY tr.symbol
     """
 
@@ -496,9 +497,9 @@ def fetch_all_oracle_prices(dry_run: bool = False) -> dict:
             if coingecko_id in coingecko_prices:
                 coingecko_result = coingecko_prices[coingecko_id]
                 price, _ = coingecko_result
-                print(f"  ✓ CoinGecko: ${price:.6f}")
+                print(f"  [OK] CoinGecko: ${price:.6f}")
             else:
-                print(f"  ✗ CoinGecko: No price for {coingecko_id}")
+                print(f"  [SKIP] CoinGecko: No price for {coingecko_id}")
 
         # Get Pyth price from batch results
         pyth_result = None
@@ -506,9 +507,9 @@ def fetch_all_oracle_prices(dry_run: bool = False) -> dict:
             if pyth_id in pyth_prices:
                 pyth_result = pyth_prices[pyth_id]
                 price, _ = pyth_result
-                print(f"  ✓ Pyth: ${price:.6f}")
+                print(f"  [OK] Pyth: ${price:.6f}")
             else:
-                print(f"  ✗ Pyth: No price for {pyth_id[:16]}...")
+                print(f"  [SKIP] Pyth: No price for {pyth_id[:16]}...")
 
         # Get DeFi Llama price from batch results
         defillama_result = None
@@ -516,9 +517,9 @@ def fetch_all_oracle_prices(dry_run: bool = False) -> dict:
             defillama_result = defillama_prices[token_contract]
             dl_price, _, dl_confidence = defillama_result
             conf_str = f" (confidence: {dl_confidence:.2f})" if dl_confidence else ""
-            print(f"  ✓ DeFi Llama: ${dl_price:.6f}{conf_str}")
+            print(f"  [OK] DeFi Llama: ${dl_price:.6f}{conf_str}")
         else:
-            print(f"  ✗ DeFi Llama: No price for {token_contract[:20]}...")
+            print(f"  [SKIP] DeFi Llama: No price for {token_contract[:20]}...")
 
         # Update database
         if coingecko_result or pyth_result or defillama_result:
@@ -544,7 +545,7 @@ def fetch_all_oracle_prices(dry_run: bool = False) -> dict:
             else:
                 failed += 1
         else:
-            print(f"  ✗ No valid prices fetched for {symbol}")
+            print(f"  [SKIP] No valid prices fetched for {symbol}")
             failed += 1
 
     print(f"\n[SUMMARY] Total: {total}, Updated: {updated}, Failed: {failed}")

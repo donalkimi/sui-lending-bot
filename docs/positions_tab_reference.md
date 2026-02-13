@@ -1,11 +1,13 @@
 # Positions Tab - Complete Reference & Handover Document
 
-**Document Version:** February 9, 2026
+**Document Version:** February 11, 2026
 **Purpose:** Complete technical reference for the Positions Tab functionality in the Sui Lending Bot dashboard
 **Audience:** Engineers, handover recipients, README authors
 **Deployment:** Railway (cloud platform) + Supabase PostgreSQL (database) - See [ARCHITECTURE.md](ARCHITECTURE.md) for complete deployment and caching architecture
 
 **Recent Updates:**
+- February 11, 2026: Added entry_token_amount columns to positions table for improved liquidation calculations and fallback rendering
+- February 11, 2026: Created backfill script (Scripts/backfill_position_token_amounts.py) for existing positions
 - February 9, 2026: Updated PnL calculation formulas to use token_amount × price (not deployment × weight). See Design Notes #12
 - February 9, 2026: Added iterative liquidity updates to portfolio allocator. See Design Notes #14
 - February 9, 2026: Added new exposure calculation formulas (Token2 de-leveraged, Stablecoin net lending, Protocol normalized). See allocator_reference.md
@@ -610,8 +612,13 @@ b_b DECIMAL(10,6)                        -- Borrow multiplier Protocol B
 -- Entry State (immutable)
 entry_lend_rate_1a DECIMAL(10,6)        -- All 4 leg rates at entry
 entry_price_1a DECIMAL(20,10)           -- All 4 leg prices at entry
+entry_token_amount_1a DECIMAL(30,10)    -- All 4 leg token amounts at entry
 entry_collateral_ratio_1a DECIMAL(10,6) -- Collateral ratios at entry
 entry_liquidation_threshold_1a DECIMAL(10,6) -- Liq thresholds at entry
+
+-- Token amounts calculated at position creation:
+-- Formula: entry_token_amount = deployment_usd × weight / entry_price
+-- Example: $10,000 × 0.35 / $3.50 = 1,000 tokens
 
 -- Rebalance Tracking (mutable)
 accumulated_realised_pnl DECIMAL(20,10) DEFAULT 0.0
@@ -1662,9 +1669,14 @@ Zero % = At liquidation threshold
 
 **Three Scenarios:**
 
-1. **Entry:** Using entry token amounts + entry prices
-2. **Live:** Using entry token amounts + current prices
-3. **Rebalance:** Using rebalanced token amounts + current prices
+1. **Entry:** Using entry token amounts (from positions table) + entry prices
+2. **Live:** Using entry token amounts (from positions table or last rebalance exit) + current prices
+3. **Rebalance:** Using rebalanced token amounts (from position_rebalances table) + current prices
+
+**Token amount sources:**
+- **Initial segment:** `entry_token_amount_1a/2a/2b/3b` from positions table
+- **After rebalance:** `exit_token_amount_1a/2a/2b/3b` from last rebalance in position_rebalances table
+- **Rebalanced segment:** `entry_token_amount_1a/2a/2b/3b` from position_rebalances table for that segment
 
 ### 10.5 Time Calculations
 

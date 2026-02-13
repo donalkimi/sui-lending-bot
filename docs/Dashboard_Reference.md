@@ -4,7 +4,7 @@
 
 The Sui Lending Bot is a dashboard application for analyzing and executing recursive lending strategies across multiple Sui DeFi protocols (AlphaFi, Navi, Suilend, Pebble). The system tracks rates, calculates optimal position sizes, manages paper trading positions, and provides historical time-travel functionality.
 
-**Document Version**: February 9, 2026
+**Document Version**: February 11, 2026
 **System Status**: Production deployment on Railway with Supabase PostgreSQL
 **Deployment**: Railway (cloud platform) + Supabase PostgreSQL (database)
 **Refresh Schedule**: Hourly, at the top of each hour
@@ -13,7 +13,15 @@ The Sui Lending Bot is a dashboard application for analyzing and executing recur
 
 ## Recent Major Changes (February 2026)
 
-### 1. PnL Calculation Fix: Token Amounts × Price (February 9, 2026)
+### 1. Entry Token Amount Storage in Positions Table (February 11, 2026)
+- **Status**: Complete
+- **Change**: Added `entry_token_amount_1a/2a/2b/3b` columns to positions table
+- **Formula**: `entry_token_amount = deployment_usd × weight / entry_price`
+- **Purpose**: Provides fallback token amounts for positions without rebalances, improves liquidation calculations
+- **Backfill**: Created `Scripts/backfill_position_token_amounts.py` to populate existing positions
+- **Impact**: Fixes "N/A" liquidation prices, enables accurate rendering without rebalance records
+
+### 2. PnL Calculation Fix: Token Amounts × Price (February 9, 2026)
 - **Status**: Complete
 - **Issue**: System was calculating PnL using `deployment × weight`, ignoring price drift between rebalances
 - **Fix**: Now uses `token_amount × current_price` for accurate position valuation
@@ -284,7 +292,8 @@ query = f"SELECT * FROM table WHERE id = {ph}"
 **2. positions** - Active/Historical Positions (Event Sourced)
 - **Primary Key**: `position_id` (UUID)
 - **Status**: `active`, `closed`, `liquidated`
-- **Entry State**: All initial rates, prices, collateral ratios captured at entry
+- **Entry State**: All initial rates, prices, token amounts, collateral ratios captured at entry
+  - `entry_token_amount_1a/2a/2b/3b` calculated at position creation: `deployment_usd × weight / entry_price`
 - **Position Multipliers**: `l_a`, `b_a`, `l_b`, `b_b` (normalized weightings)
 - **Rebalancing**: `accumulated_realised_pnl`, `rebalance_count`, `last_rebalance_timestamp`
 - **Design**: Immutable entry state + mutable current state
@@ -1510,7 +1519,9 @@ class UnifiedDataLoader:
 
 ### Database Maintenance
 - `Scripts/truncate_timestamps.py` - Fix timestamp precision (remove microseconds)
-- `Scripts/backfill_*.py` - Backfill missing data from latest values
+- `Scripts/backfill_position_token_amounts.py` - Backfill entry_token_amount columns for existing positions
+- `Scripts/backfill_initial_rebalance_records.py` - Create sequence_number=1 rebalances for old positions
+- `Scripts/backfill_single_positions.py` - Set portfolio_id='single positions' for standalone positions
 - `Scripts/cleanup_old_cache.py` - Clean old cached data (analysis/chart cache)
 
 ### Migration

@@ -447,11 +447,30 @@ earnings = leg_value * rate * time
   - Passes correct token amounts to `calculate_leg_earnings_split()`
 
 **Token amount sources:**
-- **Position entry:** `entry_token_amount_1a/2a/2b/3b` in positions table
+- **Position entry:** `entry_token_amount_1a/2a/2b/3b` in positions table (stored at creation)
 - **After rebalance:** `exit_token_amount_1a/2a/2b/3b` in position_rebalances table
 - **Rebalanced segment:** `entry_token_amount_1a/2a/2b/3b` in position_rebalances table
 
-**Critical implementation date:** February 9, 2026
+**Token amount calculation at position creation:**
+```python
+# Formula: entry_token_amount = deployment_usd × weight / entry_price
+entry_token_amount_1a = (l_a * deployment_usd) / entry_price_1a if entry_price_1a > 0 else 0
+entry_token_amount_2a = (b_a * deployment_usd) / entry_price_2a if entry_price_2a > 0 else 0
+entry_token_amount_2b = (l_b * deployment_usd) / entry_price_2b if entry_price_2b > 0 else 0
+entry_token_amount_3b = (b_b * deployment_usd) / entry_price_3b if b_b and entry_price_3b > 0 else None
+
+# Example:
+# deployment_usd = $10,000, l_a = 0.35, entry_price_1a = $3.50
+# entry_token_amount_1a = 0.35 × $10,000 / $3.50 = 1,000 tokens
+```
+
+**Backfill script for existing positions:**
+- `Scripts/backfill_position_token_amounts.py` - Populates entry_token_amount columns for positions created before this feature
+- Run from project root: `python -m Scripts.backfill_position_token_amounts`
+
+**Critical implementation dates:**
+- Token amount storage in positions table: February 11, 2026
+- PnL calculations using token amounts: February 9, 2026
 
 **Architecture:**
 ```

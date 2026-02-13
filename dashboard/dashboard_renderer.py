@@ -26,6 +26,7 @@ from dashboard.position_renderers import (
     build_rate_lookup,
     build_oracle_prices,
     render_position_expander,
+    render_positions_batch,
     get_registered_strategy_types
 )
 
@@ -1667,59 +1668,18 @@ def render_positions_table_tab(timestamp_seconds: int):
         st.markdown("---")  # Separator before individual positions
 
         # ========================================================================
-        # PHASE 4: Render positions using SHARED RENDERER
+        # PHASE 4: Render positions using BATCH RENDERER
         # ========================================================================
+        # Design Principle #11: Pure view layer - delegates to batch renderer
 
-        # Build lookups using shared functions (compatible with new renderer)
-        rate_lookup_shared = build_rate_lookup(rates_df)
-        oracle_prices_shared = build_oracle_prices(rates_df)
+        from dashboard.position_renderers import render_positions_batch
 
-        # Render each position using shared renderer
-        for result in position_results:
-            # Extract position from result
-            position = result['position']
-            position_id = position['position_id']
-
-            # Get pre-calculated statistics
-            stats = all_stats.get(position_id)
-
-            # Get rebalance history
-            rebalances = all_rebalances.get(position_id, [])
-
-            # Get strategy_type (no default - must be explicit in DB)
-            strategy_type = position.get('strategy_type')
-
-            try:
-                # Render using shared renderer
-                render_position_expander(
-                    position=position,
-                    stats=stats,
-                    rebalances=rebalances,
-                    rate_lookup=rate_lookup_shared,
-                    oracle_prices=oracle_prices_shared,
-                    service=service,
-                    timestamp_seconds=latest_timestamp,
-                    strategy_type=strategy_type,
-                    context='standalone',
-                    portfolio_id=None,
-                    expanded=False
-                )
-            except ValueError as e:
-                # Handle rendering errors gracefully
-                st.error(f"❌ **Position Rendering Error**")
-                st.code(str(e))
-                st.info(f"Registered strategy types: {', '.join(get_registered_strategy_types())}")
-
-                with st.expander("🔍 Debug: Position Data"):
-                    st.json({
-                        'position_id': position_id,
-                        'strategy_type': strategy_type,
-                        'entry_timestamp': str(position.get('entry_timestamp')),
-                        'token1': position.get('token1'),
-                        'protocol_a': position.get('protocol_a')
-                    })
-
-        # End of position rendering loop
+        # Delegate all rendering to batch wrapper (handles infrastructure internally)
+        render_positions_batch(
+            position_ids=position_ids,
+            timestamp_seconds=latest_timestamp,
+            context='standalone'
+        )
 
         conn.close()
 
@@ -3701,6 +3661,240 @@ def render_portfolio_preview(portfolio_df: pd.DataFrame, portfolio_size: float, 
 
 
 # ============================================================================
+# PORTFOLIO2 TAB (Portfolio View - Positions Grouped by Portfolio)
+# ============================================================================
+
+def get_portfolio_by_id(portfolio_id: str, conn) -> Optional[dict]:
+    """
+    Retrieve portfolio metadata from portfolios table.
+
+    Design Principle #5: Converts timestamps to Unix seconds internally.
+
+    Args:
+        portfolio_id: Portfolio ID to retrieve
+        conn: Database connection
+
+    Returns:
+        dict: Portfolio metadata, or None if not found
+    """
+    # Determine placeholder based on connection type
+    try:
+        import psycopg2
+        if isinstance(conn, psycopg2.extensions.connection):
+            ph = '%s'
+        else:
+            ph = '?'
+    except ImportError:
+        ph = '?'  # Default to SQLite if psycopg2 not available
+
+    query = f"""
+    SELECT *
+    FROM portfolios
+    WHERE portfolio_id = {ph}
+    """
+
+    cursor = conn.cursor()
+    cursor.execute(query, (portfolio_id,))
+    row = cursor.fetchone()
+
+    if row is None:
+        return None
+
+    # Convert row to dict
+    columns = [desc[0] for desc in cursor.description]
+    portfolio = dict(zip(columns, row))
+
+    # Convert timestamps to Unix seconds (Design Principle #5)
+    for ts_field in ['entry_timestamp', 'created_timestamp', 'close_timestamp', 'last_rebalance_timestamp']:
+        if portfolio.get(ts_field):
+            portfolio[ts_field] = to_seconds(portfolio[ts_field])
+
+    return portfolio
+
+
+def render_portfolio_metadata(portfolio: dict):
+    """Display portfolio-level metadata in compact format."""
+
+    cols = st.columns(4)
+
+    with cols[0]:
+        entry_ts = portfolio.get('entry_timestamp')
+        if entry_ts:
+            entry_date = to_datetime_str(entry_ts)[:10]
+            st.metric("Entry Date", entry_date)
+
+    with cols[1]:
+        target_size = portfolio.get('target_portfolio_size', 0)
+        st.metric("Target Size", f"${target_size:,.0f}")
+
+    with cols[2]:
+        utilization = portfolio.get('utilization_pct', 0)
+        st.metric("Utilization", f"{utilization:.1f}%")
+
+    with cols[3]:
+        entry_apr = portfolio.get('entry_weighted_net_apr', 0)
+        st.metric("Entry APR", f"{entry_apr * 100:.2f}%")
+
+
+def render_portfolio_expander(
+    portfolio: dict,
+    portfolio_positions: pd.DataFrame,
+    timestamp_seconds: int
+):
+    """
+    Render a single portfolio as an expandable row.
+
+    Collapsed: Portfolio-level aggregate metrics
+    Expanded: All positions within portfolio (using batch renderer)
+
+    Design Principle #11: Simple aggregations only (view layer)
+
+    Args:
+        portfolio: Portfolio metadata dict
+        portfolio_positions: DataFrame of positions in this portfolio
+        timestamp_seconds: Unix timestamp defining "current time"
+    """
+
+    # ========================================
+    # CALCULATE PORTFOLIO AGGREGATES
+    # ========================================
+
+    portfolio_name = portfolio.get('portfolio_name', 'Unknown Portfolio')
+    num_positions = len(portfolio_positions)
+    total_deployed = portfolio_positions['deployment_usd'].sum()
+
+    # Simple aggregation - no complex calculations
+    # (PnL already pre-calculated in position_statistics)
+
+    # ========================================
+    # BUILD PORTFOLIO TITLE
+    # ========================================
+
+    title = (
+        f"**{portfolio_name}** | "
+        f"Positions: {num_positions} | "
+        f"Total Deployed: ${total_deployed:,.2f}"
+    )
+
+    # ========================================
+    # RENDER EXPANDER
+    # ========================================
+
+    with st.expander(title, expanded=False):
+        st.markdown(f"### Positions in {portfolio_name}")
+
+        # Portfolio metadata (optional)
+        if not portfolio.get('is_virtual'):
+            render_portfolio_metadata(portfolio)
+            st.markdown("---")
+
+        # ========================================
+        # BATCH RENDER ALL POSITIONS IN PORTFOLIO
+        # ========================================
+        # Key design: Delegate to batch renderer
+
+        position_ids = portfolio_positions['position_id'].tolist()
+
+        # Determine context based on portfolio type
+        context = 'portfolio2'
+
+        # Use batch renderer (handles everything)
+        from dashboard.position_renderers import render_positions_batch
+        render_positions_batch(
+            position_ids=position_ids,
+            timestamp_seconds=timestamp_seconds,
+            context=context
+        )
+
+
+def render_portfolio2_tab(timestamp_seconds: int):
+    """
+    Render Portfolio2 tab - positions grouped by portfolio.
+
+    Design Principles:
+    - #1: timestamp_seconds defines "current time"
+    - #5: Uses Unix seconds internally
+    - #11: Pure view layer - delegates to batch renderer
+
+    Args:
+        timestamp_seconds: Unix timestamp defining "current time"
+    """
+
+    st.markdown("## 📂 Portfolio View")
+    st.markdown("Positions grouped by portfolio for portfolio-level analysis")
+
+    # ========================================
+    # LOAD POSITIONS AND GROUP BY PORTFOLIO
+    # ========================================
+
+    from dashboard.dashboard_utils import get_db_connection
+    from analysis.position_service import PositionService
+
+    conn = get_db_connection()
+    service = PositionService(conn)
+
+    # Load all active positions
+    active_positions = service.get_active_positions(live_timestamp=timestamp_seconds)
+
+    if active_positions.empty:
+        st.info("No active positions found.")
+        conn.close()
+        return
+
+    # Group positions by portfolio_id
+    portfolio_ids = active_positions['portfolio_id'].unique()
+
+    # Load portfolio metadata for non-NULL portfolio_ids
+    portfolios_dict = {}
+    for pid in portfolio_ids:
+        if pd.notna(pid):
+            portfolio = get_portfolio_by_id(pid, conn)
+            if portfolio is not None:
+                portfolios_dict[pid] = portfolio
+
+    # Create virtual "Single Positions" portfolio for NULL portfolio_ids
+    standalone_positions = active_positions[active_positions['portfolio_id'].isna()]
+    if not standalone_positions.empty:
+        portfolios_dict['__standalone__'] = {
+            'portfolio_id': '__standalone__',
+            'portfolio_name': 'Single Positions',
+            'status': 'active',
+            'is_virtual': True
+        }
+
+    # ========================================
+    # RENDER EACH PORTFOLIO
+    # ========================================
+
+    # Sort portfolios: real portfolios first (by entry_timestamp desc), then standalone
+    portfolio_items = sorted(
+        portfolios_dict.items(),
+        key=lambda x: (
+            x[0] == '__standalone__',  # Standalone last
+            -to_seconds(x[1].get('entry_timestamp', 0)) if x[0] != '__standalone__' else 0
+        )
+    )
+
+    for portfolio_id, portfolio in portfolio_items:
+        # Get positions for this portfolio
+        if portfolio_id == '__standalone__':
+            portfolio_positions = standalone_positions
+        else:
+            portfolio_positions = active_positions[
+                active_positions['portfolio_id'] == portfolio_id
+            ]
+
+        # Render portfolio expander
+        render_portfolio_expander(
+            portfolio=portfolio,
+            portfolio_positions=portfolio_positions,
+            timestamp_seconds=timestamp_seconds
+        )
+
+    conn.close()
+
+
+# ============================================================================
 # PORTFOLIOS TAB
 # ============================================================================
 
@@ -4249,12 +4443,13 @@ def render_dashboard(data_loader: DataLoader, mode: str):
     tabs_start = time.time()
     print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] Rendering tabs...")
 
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
         "📊 All Strategies",
         "🎯 Allocation",
         "📈 Rate Tables",
         "⚠️ 0 Liquidity",
         "💼 Positions",
+        "📂 Portfolio View",
         "📁 Portfolios",
         "💎 Oracle Prices",
         "🚀 Pending Deployments"
@@ -4314,21 +4509,27 @@ def render_dashboard(data_loader: DataLoader, mode: str):
 
     with tab6:
         tab6_start = time.time()
-        render_portfolios_tab(timestamp_seconds)
+        render_portfolio2_tab(timestamp_seconds)
         tab6_time = (time.time() - tab6_start) * 1000
-        print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] Tab6 (Portfolios) rendered in {tab6_time:.1f}ms")
+        print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] Tab6 (Portfolio View) rendered in {tab6_time:.1f}ms")
 
     with tab7:
         tab7_start = time.time()
-        render_oracle_prices_tab(timestamp_seconds)
+        render_portfolios_tab(timestamp_seconds)
         tab7_time = (time.time() - tab7_start) * 1000
-        print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] Tab7 (Oracle Prices) rendered in {tab7_time:.1f}ms")
+        print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] Tab7 (Portfolios) rendered in {tab7_time:.1f}ms")
 
     with tab8:
         tab8_start = time.time()
-        render_pending_deployments_tab()
+        render_oracle_prices_tab(timestamp_seconds)
         tab8_time = (time.time() - tab8_start) * 1000
-        print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] Tab8 (Pending Deployments) rendered in {tab8_time:.1f}ms")
+        print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] Tab8 (Oracle Prices) rendered in {tab8_time:.1f}ms")
+
+    with tab9:
+        tab9_start = time.time()
+        render_pending_deployments_tab()
+        tab9_time = (time.time() - tab9_start) * 1000
+        print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] Tab9 (Pending Deployments) rendered in {tab9_time:.1f}ms")
 
     total_dashboard_time = (time.time() - dashboard_start) * 1000
     print(f"[{total_dashboard_time:7.1f}ms] [DASHBOARD] ✅ Dashboard render complete (total: {total_dashboard_time:.1f}ms)\n")

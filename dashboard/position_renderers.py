@@ -223,6 +223,141 @@ def create_rate_helpers(
 
 
 # ============================================================================
+# BATCH RENDERING INFRASTRUCTURE
+# ============================================================================
+
+def render_positions_batch(
+    position_ids: List[str],
+    timestamp_seconds: int,
+    context: str = 'standalone'
+) -> None:
+    """
+    Batch render multiple positions with optimized data loading.
+
+    This is the primary entry point for rendering positions across all tabs.
+    Handles all database connections and batch loading internally.
+
+    Args:
+        position_ids: List of position IDs to render
+        timestamp_seconds: Unix timestamp defining "current time"
+        context: Rendering context ('standalone', 'portfolio2', 'portfolio')
+
+    Design Principle #5: Uses Unix seconds for all timestamps
+    Design Principle #11: Dashboard as pure view - handles infrastructure internally
+    """
+
+    # Handle empty case
+    if not position_ids:
+        st.info("No positions to display.")
+        return
+
+    # ========================================
+    # INFRASTRUCTURE SETUP (Internal)
+    # ========================================
+    # Design Principle: Function handles its own infrastructure
+    # based on USE_CLOUD_DB global config
+
+    from dashboard.dashboard_utils import get_db_connection
+    from dashboard.db_utils import get_db_engine
+    from analysis.position_service import PositionService
+
+    conn = get_db_connection()
+    engine = get_db_engine()
+    service = PositionService(conn)
+
+    # ========================================
+    # BATCH DATA LOADING (Performance Optimization)
+    # ========================================
+    # Following ARCHITECTURE.md: Batch loading avoids N+1 queries
+
+    # Import batch loading functions
+    from dashboard.dashboard_renderer import get_all_position_statistics, get_all_rebalance_history
+
+    # Load all position statistics (1 query for N positions)
+    all_stats = get_all_position_statistics(position_ids, timestamp_seconds, engine)
+
+    # Load all rebalance history (1 query for N positions)
+    all_rebalances = get_all_rebalance_history(position_ids, conn)
+
+    # Load rates snapshot (1 query)
+    timestamp_str = to_datetime_str(timestamp_seconds)
+    ph = service._get_placeholder()
+    rates_query = f"""
+    SELECT protocol, token, lend_total_apr, borrow_total_apr, borrow_fee, price_usd
+    FROM rates_snapshot
+    WHERE timestamp = {ph}
+    """
+    rates_df = pd.read_sql_query(rates_query, engine, params=(timestamp_str,))
+
+    # Build shared lookups (O(1) access for all positions)
+    rate_lookup = build_rate_lookup(rates_df)
+    oracle_prices = build_oracle_prices(rates_df)
+
+    # ========================================
+    # RENDER EACH POSITION
+    # ========================================
+    # Design Principle #13: Explicit error handling with debug info
+
+    for position_id in position_ids:
+        try:
+            # Get position data
+            position = service.get_position_by_id(position_id)
+
+            if position is None:
+                st.warning(f"Position {position_id} not found.")
+                continue
+
+            # Retrieve pre-loaded data
+            stats = all_stats.get(position_id)
+            rebalances = all_rebalances.get(position_id, [])
+
+            # Determine strategy type (default to recursive_lending)
+            strategy_type = position.get('strategy_type', 'recursive_lending')
+
+            # Render using existing function
+            render_position_expander(
+                position=position,
+                stats=stats,
+                rebalances=rebalances,
+                rate_lookup=rate_lookup,
+                oracle_prices=oracle_prices,
+                service=service,
+                timestamp_seconds=timestamp_seconds,
+                strategy_type=strategy_type,
+                context=context,
+                portfolio_id=position.get('portfolio_id'),
+                expanded=False
+            )
+
+        except Exception as e:
+            # Design Principle #13: Fail loudly with debug info, continue execution
+            st.error(f"⚠️  Error rendering position {position_id}: {e}")
+            print(f"⚠️  Error rendering position {position_id}: {e}")
+            print(f"    Available position IDs: {position_ids}")
+            # Continue rendering other positions
+            continue
+
+
+def render_position_single(
+    position_id: str,
+    timestamp_seconds: int,
+    context: str = 'standalone'
+) -> None:
+    """
+    Render a single position.
+
+    Convenience wrapper around render_positions_batch for single position.
+    Note: Less efficient than batch rendering - prefer batch when possible.
+
+    Args:
+        position_id: Position ID to render
+        timestamp_seconds: Unix timestamp defining "current time"
+        context: Rendering context ('standalone', 'portfolio2', 'portfolio')
+    """
+    render_positions_batch([position_id], timestamp_seconds, context)
+
+
+# ============================================================================
 # SEGMENT DATA BUILDERS
 # ============================================================================
 

@@ -1223,8 +1223,20 @@ graph TD
 | `entry_price_2A` | DECIMAL(20,10) | Token2 price at entry |
 | `entry_price_2B` | DECIMAL(20,10) | Token2 price at entry (Protocol B) |
 | `entry_price_3B` | DECIMAL(20,10) | Token3 price at entry |
+| `entry_token_amount_1A` | DECIMAL(30,10) | Token1 amount at entry (lend leg) |
+| `entry_token_amount_2A` | DECIMAL(30,10) | Token2 amount at entry (borrow leg A) |
+| `entry_token_amount_2B` | DECIMAL(30,10) | Token2 amount at entry (lend leg B) |
+| `entry_token_amount_3B` | DECIMAL(30,10) | Token3 amount at entry (borrow leg B, nullable) |
 | `entry_collateral_ratio_1A` | DECIMAL(10,6) | Collateral factor at entry (Protocol A) |
 | `entry_collateral_ratio_2B` | DECIMAL(10,6) | Collateral factor at entry (Protocol B) |
+
+**Formula:** `entry_token_amount = deployment_usd × weight / entry_price`
+
+Example:
+- deployment_usd = $10,000
+- l_a (weight) = 0.35
+- entry_price_1a = $3.50
+- entry_token_amount_1a = $10,000 × 0.35 / $3.50 = 1,000 tokens
 
 #### **Entry APRs & Metrics**
 
