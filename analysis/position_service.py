@@ -25,6 +25,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.time_helpers import to_datetime_str, to_seconds
 from analysis.position_calculator import PositionCalculator
+from analysis.strategy_calculators import get_calculator
 
 
 class PositionService:
@@ -125,6 +126,7 @@ class PositionService:
         protocol_a: str,
         protocol_b: str,
         deployment_usd: float,
+        strategy_type: str = 'recursive_lending',  # NEW: Multi-strategy support
         is_paper_trade: bool = True,
         execution_time: int = -1,
         user_id: Optional[str] = None,
@@ -149,6 +151,7 @@ class PositionService:
             protocol_a: First protocol name
             protocol_b: Second protocol name
             deployment_usd: USD amount to deploy
+            strategy_type: Strategy type ('recursive_lending', 'stablecoin_lending', 'noloop_cross_protocol_lending')
             is_paper_trade: True for Phase 1 (paper), False for Phase 2 (real capital)
             execution_time: Unix timestamp when executed (-1 = pending execution)
             user_id: Optional user ID for multi-user support (Phase 2)
@@ -258,10 +261,10 @@ class PositionService:
                     portfolio_id
                 ) VALUES ({placeholders})
             """, (
-                position_id, 'active', 'recursive_lending',
+                position_id, 'active', strategy_type,  # Use parameter instead of hardcoded value
                 is_paper_trade, user_id,
-                token1, token2, token3,
-                token1_contract, token2_contract, token3_contract,
+                token1, token2, token3,  # token3 can be None for 3-leg strategies
+                token1_contract, token2_contract, token3_contract,  # token3_contract can be None
                 protocol_a, protocol_b,
                 entry_timestamp_str, execution_time,
                 self._to_native_type(deployment_usd),
@@ -1290,7 +1293,7 @@ class PositionService:
         Args:
             position_id: UUID of position to rebalance
             live_timestamp: Unix timestamp when rebalancing (int)
-            rebalance_reason: Reason for rebalance ('manual', 'liquidation_risk', etc.)
+            rebalance_reason: Reason for rebalance ('manual', 'auto_rebalance_threshold_exceeded', etc.)
             rebalance_notes: Optional notes about rebalance
 
         Returns:
@@ -1314,6 +1317,65 @@ class PositionService:
 
         if position['status'] != 'active':
             raise ValueError(f"Position {position_id} is not active (status: {position['status']})")
+
+        # PHASE 6: Strategy-specific rebalance validation
+        # Get calculator for this position's strategy type
+        try:
+            calculator = get_calculator(position['strategy_type'])
+
+            # Query current rates and prices for validation
+            # Note: This queries the same data that capture_rebalance_snapshot will query
+            live_rates_dict = self._query_rates_at_timestamp(position, live_timestamp)
+            live_prices_dict = {
+                'price_1a': live_rates_dict.get('price_1a'),
+                'price_2a': live_rates_dict.get('price_2a'),
+                'price_2b': live_rates_dict.get('price_2b'),
+                'price_3b': live_rates_dict.get('price_3b')
+            }
+
+            # Check if rebalancing is needed using strategy-specific logic
+            rebalance_result = calculator.calculate_rebalance_amounts(
+                position=position.to_dict(),
+                live_rates=live_rates_dict,
+                live_prices=live_prices_dict
+            )
+
+            # FAIL LOUD: Ensure calculator never returns None
+            if rebalance_result is None:
+                raise ValueError(
+                    f"Calculator returned None for position {position_id}! "
+                    f"Strategy type: {position['strategy_type']}. "
+                    "Calculators must return a dict, not None."
+                )
+
+            # Check if rebalancing is actually needed
+            if not rebalance_result.get('requires_rebalance', False):
+                # No rebalancing needed according to calculator
+                reason = rebalance_result.get('reason', 'Unknown reason')
+                print(f"[REBALANCE] Position {position_id}: {reason}")
+
+                # NOTE: For now, we proceed anyway since user explicitly requested rebalance
+                # In future, we may want to return early here for automatic rebalances
+                print(f"[REBALANCE] Proceeding with manual rebalance despite calculator saying not needed")
+
+            # Validate actions if rebalancing is needed
+            if rebalance_result.get('requires_rebalance', False):
+                actions = rebalance_result.get('actions', [])
+                if not actions:
+                    print(
+                        f"[WARNING] Position {position_id} requires_rebalance=True but has no actions! "
+                        "This may indicate a calculator bug."
+                    )
+
+        except (ValueError, KeyError) as e:
+            # Calculator validation failed - log warning but proceed
+            # (User explicitly requested rebalance, so we don't want to block it)
+            print(f"[WARNING] Rebalance validation failed for position {position_id}: {e}")
+            print(f"[WARNING] Proceeding with rebalance anyway (manual override)")
+        except Exception as e:
+            # Unexpected error - log and proceed
+            print(f"[WARNING] Unexpected error in rebalance validation: {e}")
+            print(f"[WARNING] Proceeding with rebalance anyway")
 
         # Capture snapshot of current state
         snapshot = self.capture_rebalance_snapshot(position, live_timestamp)

@@ -349,6 +349,7 @@ class RecursiveLendingCalculator(StrategyCalculatorBase):
         Calculate rebalance amounts for 4-leg recursive strategy.
 
         Maintains constant USD values for L_A, B_A, L_B, B_B.
+        Two liquidation thresholds to monitor (legs 2A and 3B).
 
         Args:
             position: Position dict with entry data
@@ -356,12 +357,33 @@ class RecursiveLendingCalculator(StrategyCalculatorBase):
             live_prices: Current prices
 
         Returns:
-            Dict with rebalance instructions
+            Dict with rebalance structure (requires_rebalance, actions, etc.)
 
-        Note:
-            Not yet implemented - placeholder for future development
+        Raises:
+            ValueError: If position data or prices are invalid
+
+        TODO: Full implementation pending - needs tolerance threshold logic
         """
-        # TODO: Implement rebalancing logic for 4 legs
-        # Most complex: maintain all 4 leg USD values
-        # Two liquidation thresholds to monitor (legs 2A and 3B)
-        raise NotImplementedError("Rebalancing logic not yet implemented for recursive_lending")
+        # FAIL LOUD: Validate inputs
+        if not position:
+            raise ValueError("Position dict cannot be None or empty")
+        if live_rates is None:
+            raise ValueError("live_rates cannot be None")
+        if live_prices is None:
+            raise ValueError("live_prices cannot be None")
+
+        # TODO: Implement full rebalancing logic for 4 legs
+        # 1. Calculate target USD values: deployment × L_A, deployment × B_A, deployment × L_B, deployment × B_B
+        # 2. Calculate current USD values using live prices for all 4 legs
+        # 3. Calculate drift percentage for each leg
+        # 4. Check if any leg drift exceeds tolerance threshold (e.g., 5%)
+        # 5. If yes, calculate token amount deltas to restore targets for all legs
+        # 6. Check liquidation distance on both legs 2A and 3B
+
+        # STUB: For now, always return no rebalancing needed
+        # This will be replaced with actual tolerance-check logic
+        return {
+            "requires_rebalance": False,
+            "actions": [],
+            "reason": "All leg weights within acceptable tolerance (stub implementation)"
+        }

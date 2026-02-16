@@ -1844,3 +1844,224 @@ def render_position_expander(
         elif context == 'portfolio2':
             render_position_actions_portfolio(
                 position, timestamp_seconds, service, portfolio_id)
+# Append these renderer classes to the end of dashboard/position_renderers.py
+
+# ============================================================================
+# STABLECOIN LENDING RENDERER (1-LEG)
+# ============================================================================
+
+@register_strategy_renderer('stablecoin_lending')
+class StablecoinLendingRenderer(StrategyRendererBase):
+    """Renderer for 1-leg stablecoin lending strategies."""
+
+    @staticmethod
+    def get_strategy_name() -> str:
+        return "Stablecoin Lending"
+
+    @staticmethod
+    def build_token_flow_string(position: pd.Series) -> str:
+        """Build token flow: just token1 (single token)"""
+        return position['token1']
+
+    @staticmethod
+    def validate_position_data(position: pd.Series) -> bool:
+        """Validate stablecoin lending position has required fields."""
+        required_fields = [
+            'token1', 'protocol_a',
+            'l_a',
+            'entry_lend_rate_1a',
+            'entry_price_1a'
+        ]
+        return all(field in position.index for field in required_fields)
+
+    @staticmethod
+    def get_metrics_layout() -> List[str]:
+        """Standard 5-metric layout for visual consistency across all strategies."""
+        return ['total_pnl', 'total_earnings', 'base_earnings',
+                'reward_earnings', 'total_fees']
+
+    @staticmethod
+    def render_detail_table(
+        position: pd.Series,
+        get_rate: Callable,
+        get_borrow_fee: Callable,
+        get_price_with_fallback: Callable,
+        rebalances: Optional[List] = None,
+        segment_type: str = 'live'
+    ) -> None:
+        """Render 1-leg detail table for stablecoin lending."""
+
+        deployment = position['deployment_usd']
+
+        # Build segment_data from last rebalance (if any)
+        if not rebalances or len(rebalances) == 0:
+            segment_data = build_segment_data_from_position(position)
+        else:
+            segment_data = build_segment_data_from_rebalance(rebalances[-1])
+
+        detail_data = []
+
+        # Single leg: Lend token1 in Protocol A
+        detail_data.append(RecursiveLendingRenderer._build_lend_leg_row(
+            position=position,
+            leg_id='leg_1a',
+            token=position['token1'],
+            protocol=position['protocol_a'],
+            weight=position['l_a'],
+            entry_rate=position['entry_lend_rate_1a'],
+            entry_price=position['entry_price_1a'],
+            get_rate=get_rate,
+            get_price_with_fallback=get_price_with_fallback,
+            deployment=deployment,
+            segment_data=segment_data,
+            segment_type=segment_type,
+            borrow_token=None,  # No borrowing
+            borrow_price_live=None,
+            borrow_price_entry=None,
+            borrow_weight_value=0,
+            liquidation_threshold=0.0,  # No liquidation risk
+            borrow_weight=1.0
+        ))
+
+        # Render table
+        df = pd.DataFrame(detail_data)
+        st.dataframe(df, use_container_width=True, hide_index=True)
+
+
+# ============================================================================
+# NO-LOOP CROSS-PROTOCOL RENDERER (3-LEG)
+# ============================================================================
+
+@register_strategy_renderer('noloop_cross_protocol_lending')
+class NoLoopCrossProtocolRenderer(StrategyRendererBase):
+    """Renderer for 3-leg cross-protocol lending strategies (no loop back)."""
+
+    @staticmethod
+    def get_strategy_name() -> str:
+        return "Cross-Protocol Lending (No Loop)"
+
+    @staticmethod
+    def build_token_flow_string(position: pd.Series) -> str:
+        """Build token flow: token1 → token2 (no loop back)"""
+        token_flow = position['token1']
+
+        token2 = position.get('token2')
+        has_token2 = token2 is not None and pd.notna(token2) and str(token2).strip() != ''
+
+        if has_token2:
+            token_flow += f" → {position['token2']}"
+
+        return token_flow
+
+    @staticmethod
+    def validate_position_data(position: pd.Series) -> bool:
+        """Validate no-loop cross-protocol position has required fields."""
+        required_fields = [
+            'token1', 'token2', 'protocol_a', 'protocol_b',
+            'l_a', 'b_a', 'l_b',
+            'entry_lend_rate_1a', 'entry_borrow_rate_2a', 'entry_lend_rate_2b',
+            'entry_price_1a', 'entry_price_2a', 'entry_price_2b'
+        ]
+        return all(field in position.index for field in required_fields)
+
+    @staticmethod
+    def get_metrics_layout() -> List[str]:
+        """Standard 5-metric layout for visual consistency across all strategies."""
+        return ['total_pnl', 'total_earnings', 'base_earnings',
+                'reward_earnings', 'total_fees']
+
+    @staticmethod
+    def render_detail_table(
+        position: pd.Series,
+        get_rate: Callable,
+        get_borrow_fee: Callable,
+        get_price_with_fallback: Callable,
+        rebalances: Optional[List] = None,
+        segment_type: str = 'live'
+    ) -> None:
+        """Render 3-leg detail table for no-loop cross-protocol lending."""
+
+        deployment = position['deployment_usd']
+
+        # Build segment_data from last rebalance
+        if not rebalances or len(rebalances) == 0:
+            segment_data = build_segment_data_from_position(position)
+        else:
+            segment_data = build_segment_data_from_rebalance(rebalances[-1])
+
+        detail_data = []
+
+        # Get token2 live price
+        if segment_type == 'historical' and segment_data:
+            token2_price_live = float(segment_data.get('closing_price_2a')) if segment_data.get('closing_price_2a') is not None else None
+        else:
+            token2_price_live = get_price_with_fallback(position['token2'], position['protocol_a'])
+
+        # ========== LEG 1: Protocol A - Lend token1 ==========
+        detail_data.append(RecursiveLendingRenderer._build_lend_leg_row(
+            position=position,
+            leg_id='leg_1a',
+            token=position['token1'],
+            protocol=position['protocol_a'],
+            weight=position['l_a'],
+            entry_rate=position['entry_lend_rate_1a'],
+            entry_price=position['entry_price_1a'],
+            get_rate=get_rate,
+            get_price_with_fallback=get_price_with_fallback,
+            deployment=deployment,
+            segment_data=segment_data,
+            segment_type=segment_type,
+            borrow_token=position['token2'],  # Leg 2A borrows token2
+            borrow_price_live=token2_price_live,
+            borrow_price_entry=position['entry_price_2a'],
+            borrow_weight_value=position['b_a'],
+            liquidation_threshold=position.get('entry_liquidation_threshold_1a', 0.0),
+            borrow_weight=position.get('entry_borrow_weight_2a', 1.0)
+        ))
+
+        # ========== LEG 2: Protocol A - Borrow token2 ==========
+        detail_data.append(RecursiveLendingRenderer._build_borrow_leg_row(
+            position=position,
+            leg_id='leg_2a',
+            token=position['token2'],
+            protocol=position['protocol_a'],
+            weight=position['b_a'],
+            entry_rate=position['entry_borrow_rate_2a'],
+            entry_price=position['entry_price_2a'],
+            collateral_ratio=position.get('entry_collateral_ratio_1a', 0.0),
+            liquidation_threshold=position.get('entry_liquidation_threshold_1a', 0.0),
+            get_rate=get_rate,
+            get_borrow_fee=get_borrow_fee,
+            get_price_with_fallback=get_price_with_fallback,
+            deployment=deployment,
+            segment_data=segment_data,
+            segment_type=segment_type,
+            borrow_fee=position.get('entry_borrow_fee_2a'),
+            borrow_weight=position.get('entry_borrow_weight_2a', 1.0)
+        ))
+
+        # ========== LEG 3: Protocol B - Lend token2 ==========
+        detail_data.append(RecursiveLendingRenderer._build_lend_leg_row(
+            position=position,
+            leg_id='leg_2b',
+            token=position['token2'],
+            protocol=position['protocol_b'],
+            weight=position['l_b'],
+            entry_rate=position['entry_lend_rate_2b'],
+            entry_price=position['entry_price_2b'],
+            get_rate=get_rate,
+            get_price_with_fallback=get_price_with_fallback,
+            deployment=deployment,
+            segment_data=segment_data,
+            segment_type=segment_type,
+            borrow_token=None,  # No 4th leg (no loop back)
+            borrow_price_live=None,
+            borrow_price_entry=None,
+            borrow_weight_value=0,
+            liquidation_threshold=0.0,
+            borrow_weight=1.0
+        ))
+
+        # Render table
+        df = pd.DataFrame(detail_data)
+        st.dataframe(df, use_container_width=True, hide_index=True)

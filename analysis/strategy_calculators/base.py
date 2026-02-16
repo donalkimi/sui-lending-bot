@@ -94,12 +94,23 @@ class StrategyCalculatorBase(ABC):
         """
         Calculate token amounts needed to restore target weights.
 
+        FAIL LOUD: Never return None. Always return a dict.
+
         Args:
-            position: Position dict with entry state
+            position: Position dict with entry state (deployment_usd, l_a, b_a, l_b, b_b, etc.)
             live_rates: Current market rates
             live_prices: Current token prices
 
         Returns:
-            Dict with rebalance instructions, or None if no rebalancing needed
+            Dict with structure:
+            {
+                "requires_rebalance": bool,  # True if rebalancing needed (outside tolerance)
+                "actions": List[Dict],       # Empty list if no rebalancing needed
+                "reason": str                # Human-readable explanation
+            }
+
+        Raises:
+            ValueError: If position data is invalid or missing
+            KeyError: If required rates/prices are missing
         """
         pass

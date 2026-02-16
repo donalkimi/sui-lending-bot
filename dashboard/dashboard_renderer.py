@@ -22,6 +22,7 @@ from dashboard.data_loaders import DataLoader
 from data.rate_tracker import RateTracker
 from analysis.position_calculator import PositionCalculator
 from analysis.position_statistics_calculator import calculate_position_statistics
+from analysis.strategy_calculators import get_all_strategy_types
 from dashboard.position_renderers import (
     build_rate_lookup,
     build_oracle_prices,
@@ -123,7 +124,10 @@ def initialize_allocator_settings():
         'stablecoin_only': False,
         'min_net_apr': 0.0,
         'token_filter': [],
-        'protocol_filter': []
+        'protocol_filter': [],
+        'show_stablecoin_lending': True,
+        'show_noloop_lending': True,
+        'show_recursive_lending': True
     }
     print("ℹ️  Using default settings (no last_used found)")
 
@@ -155,8 +159,7 @@ def display_apr_table(strategy_row: Union[pd.Series, Dict[str, Any]], deployment
     token3 = strategy_row['token3']
 
     # Extract levered APR values
-    apr_base = strategy_row['net_apr']
-    apr_net_levered = strategy_row.get('apr_net', apr_base)
+    apr_net_levered = strategy_row['apr_net']
     apr90_levered = strategy_row.get('apr90', apr_base)
     apr30_levered = strategy_row.get('apr30', apr_base)
     apr5_levered = strategy_row.get('apr5', apr_base)
@@ -388,17 +391,41 @@ def display_strategies_table(
 
     # Prepare data for table
     prep_start = time.time()
+
+    # Map strategy types to display names
+    strategy_type_map = {
+        'stablecoin_lending': 'Stablecoin',
+        'noloop_cross_protocol_lending': 'No-Loop',
+        'recursive_lending': 'Recursive'
+    }
+
+    # Debug: Check if strategy_type column exists
+    if 'strategy_type' in all_results.columns:
+        unique_types = all_results['strategy_type'].unique()
+        print(f"[TABLE] Found strategy_type column with values: {unique_types}")
+    else:
+        print(f"[TABLE] WARNING: strategy_type column not found in results. Columns: {list(all_results.columns)}")
+
     table_data = []
     for idx, row in all_results.iterrows():
         # Get token symbols for display (logic uses contracts)
         token_pair = f"{row['token1']}/{row['token2']}/{row['token3']}"
+
+        # Map strategy type to display name
+        if 'strategy_type' in all_results.columns and pd.notna(row['strategy_type']):
+            strategy_type = row['strategy_type']
+            strategy_display = strategy_type_map.get(strategy_type, strategy_type)
+        else:
+            strategy_display = 'Unknown'
+
         #print(row)
         table_data.append({
             '_idx': idx,  # Hidden index for selection
+            'Strategy Type': strategy_display,
             'Token Pair': token_pair,
             'Protocol A': row['protocol_a'],
             'Protocol B': row['protocol_b'],
-            'Net APR': row['net_apr'] * 100,  # Convert decimal to percentage
+            'Net APR': row['apr_net'] * 100,  # Convert decimal to percentage
             'APR 5d': row.get('apr5', 0) * 100,  # APR if exit after 5 days
             'APR 30d': row.get('apr30', 0) * 100,  # 30-day average
             'Days to Breakeven': row.get('days_to_breakeven', 0),  # Days to recover fees
@@ -416,6 +443,11 @@ def display_strategies_table(
         width="stretch",
         hide_index=True,
         column_config={
+            "Strategy Type": st.column_config.TextColumn(
+                "Strategy Type",
+                help="Type of lending strategy (Stablecoin, No-Loop, or Recursive)",
+                width="small"
+            ),
             "Net APR": st.column_config.NumberColumn(
                 "Net APR",
                 format="%.2f%%",
@@ -486,20 +518,20 @@ def calculate_position_returns(strategy: Dict, deployment_usd: float) -> Dict:
     - All rates stored as decimals (DESIGN_NOTES.md #7)
     - Position sizes = multiplier × deployment_usd (DESIGN_NOTES.md #3)
     """
-    net_apr = strategy['net_apr']  # Decimal (0.1185 = 11.85%)
+    net_apr = strategy['apr_net']  # Decimal (0.1185 = 11.85%)
 
     # Position sizes (multiplier × deployment)
     # All strategies are 4-leg levered strategies
-    lend_a_usd = strategy.get('l_a', 0.0) * deployment_usd
-    borrow_a_usd = strategy.get('b_a', 0.0) * deployment_usd
-    lend_b_usd = strategy.get('l_b', 0.0) * deployment_usd
-    borrow_b_usd = strategy.get('b_b', 0.0) * deployment_usd
+    lend_a_usd = strategy['l_a'] * deployment_usd
+    borrow_a_usd = strategy['b_a'] * deployment_usd
+    lend_b_usd = strategy['l_b'] * deployment_usd
+    borrow_b_usd = strategy['b_b'] * deployment_usd
 
     # Percentages (for display)
-    lend_a_pct = strategy.get('l_a', 0.0) * 100
-    borrow_a_pct = strategy.get('b_a', 0.0) * 100
-    lend_b_pct = strategy.get('l_b', 0.0) * 100
-    borrow_b_pct = strategy.get('b_b', 0.0) * 100
+    lend_a_pct = strategy['l_a'] * 100
+    borrow_a_pct = strategy['b_a'] * 100
+    lend_b_pct = strategy['l_b'] * 100
+    borrow_b_pct = strategy['b_b'] * 100
 
     # Expected returns (based on net APR)
     yearly_return_usd = deployment_usd * net_apr
@@ -564,8 +596,8 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
     # ========================================
     # Calculate upfront fees percentage
     upfront_fees_pct = (
-        strategy.get('b_a', 0.0) * strategy.get('borrow_fee_2a', 0.0) +
-        strategy.get('b_b', 0.0) * strategy.get('borrow_fee_3b', 0.0)
+        strategy['b_a'] * strategy['borrow_fee_2a'] +
+        strategy['b_b'] * strategy['borrow_fee_3b']
     )
 
     # Build display strings
@@ -577,12 +609,12 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
         'Time': to_datetime_str(timestamp_seconds),
         'Token Flow': token_flow,
         'Protocols': protocol_pair,
-        'Net APR': f"{strategy['net_apr'] * 100:.2f}%",
-        'APR 5d': f"{strategy.get('apr5', 0) * 100:.2f}%",
-        'APR 30d': f"{strategy.get('apr30', 0) * 100:.2f}%",
+        'Net APR': f"{strategy['apr_net'] * 100:.2f}%",
+        'APR 5d': f"{strategy['apr5'] * 100:.2f}%",
+        'APR 30d': f"{strategy['apr30'] * 100:.2f}%",
         'Liq Dist': f"{strategy['liquidation_distance'] * 100:.2f}%",
         'Upfront Fees (%)': f"{upfront_fees_pct * 100:.2f}%",
-        'Days to Breakeven': f"{strategy.get('days_to_breakeven', 0):.1f}",
+        'Days to Breakeven': f"{strategy['days_to_breakeven']:.1f}",
         'Max Liquidity': f"${strategy['max_size']:,.2f}",
     }]
     summary_df = pd.DataFrame(summary_data)
@@ -633,23 +665,23 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
     # TOKEN-LEVEL DETAILS TABLE
     # ========================================
     # Calculate token amounts (with zero-division protection)
-    entry_token_amount_1A = (strategy.get('l_a', 0.0) * deployment_usd) / strategy['P1_A'] if strategy['P1_A'] > 0 else 0
+    entry_token_amount_1A = (strategy['l_a'] * deployment_usd) / strategy['P1_A'] if strategy['P1_A'] > 0 else 0
     # Token 2: Calculate using Protocol A price (source of borrowed tokens)
     # This ensures the same token quantity is used for both Protocol A and Protocol B
-    entry_token_amount_2 = (strategy.get('b_a', 0.0) * deployment_usd) / strategy['P2_A'] if strategy['P2_A'] > 0 else 0
+    entry_token_amount_2 = (strategy['b_a'] * deployment_usd) / strategy['P2_A'] if strategy['P2_A'] > 0 else 0
     entry_token_amount_2A = entry_token_amount_2  # Borrowed from Protocol A
     entry_token_amount_2B = entry_token_amount_2  # Same tokens lent to Protocol B
-    entry_token_amount_3B = (strategy.get('b_b', 0.0) * deployment_usd) / strategy['P3_B'] if strategy['P3_B'] > 0 else 0
+    entry_token_amount_3B = (strategy['b_b'] * deployment_usd) / strategy['P3_B'] if strategy['P3_B'] > 0 else 0
 
     # Calculate position sizes in USD (weight * deployment_usd)
-    position_size_1A = strategy.get('l_a', 0.0) * deployment_usd
-    position_size_2A = strategy.get('b_a', 0.0) * deployment_usd
-    position_size_2B = strategy.get('l_b', 0.0) * deployment_usd
-    position_size_3B = strategy.get('b_b', 0.0) * deployment_usd
+    position_size_1A = strategy['l_a'] * deployment_usd
+    position_size_2A = strategy['b_a'] * deployment_usd
+    position_size_2B = strategy['l_b'] * deployment_usd
+    position_size_3B = strategy['b_b'] * deployment_usd
 
     # Calculate fee amounts in USD
-    fee_usd_2A = strategy.get('b_a', 0.0) * strategy.get('borrow_fee_2a', 0.0) * deployment_usd
-    fee_usd_3B = strategy.get('b_b', 0.0) * strategy.get('borrow_fee_3b', 0.0) * deployment_usd
+    fee_usd_2A = strategy['b_a'] * strategy['borrow_fee_2a'] * deployment_usd
+    fee_usd_3B = strategy['b_b'] * strategy['borrow_fee_3b'] * deployment_usd
 
     # Calculate dynamic precision
     precision_1A = get_token_precision(strategy['P1_A'])
@@ -666,9 +698,9 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
         loan_value=position_size_2A,
         lending_token_price=strategy['P1_A'],
         borrowing_token_price=strategy['P2_A'],
-        lltv=strategy.get('liquidation_threshold_1a', strategy.get('collateral_ratio_1a', 0.0)),
+        lltv=strategy['liquidation_threshold_1a'],
         side='lending',
-        borrow_weight=strategy.get('borrow_weight_2a', 1.0)
+        borrow_weight=strategy['borrow_weight_2a']
     )
 
     # Calculate liquidation data for Row 2 (borrowing side - Protocol A)
@@ -677,9 +709,9 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
         loan_value=position_size_2A,
         lending_token_price=strategy['P1_A'],
         borrowing_token_price=strategy['P2_A'],
-        lltv=strategy.get('liquidation_threshold_1a', strategy.get('collateral_ratio_1a', 0.0)),
+        lltv=strategy['liquidation_threshold_1a'],
         side='borrowing',
-        borrow_weight=strategy.get('borrow_weight_2a', 1.0)
+        borrow_weight=strategy['borrow_weight_2a']
     )
 
     # Calculate liquidation data for Row 3 (lending side - Protocol B)
@@ -688,9 +720,9 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
         loan_value=position_size_3B,
         lending_token_price=strategy['P2_B'],
         borrowing_token_price=strategy['P3_B'],
-        lltv=strategy.get('liquidation_threshold_2b', strategy.get('collateral_ratio_2b', 0.0)),
+        lltv=strategy['liquidation_threshold_2b'],
         side='lending',
-        borrow_weight=strategy.get('borrow_weight_3b', 1.0)
+        borrow_weight=strategy['borrow_weight_3b']
     )
 
     # Calculate liquidation data for Row 4 (borrowing side - Protocol B)
@@ -699,9 +731,9 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
         loan_value=position_size_3B,
         lending_token_price=strategy['P2_B'],
         borrowing_token_price=strategy['P3_B'],
-        lltv=strategy.get('liquidation_threshold_2b', strategy.get('collateral_ratio_2b', 0.0)),
+        lltv=strategy['liquidation_threshold_2b'],
         side='borrowing',
-        borrow_weight=strategy.get('borrow_weight_3b', 1.0)
+        borrow_weight=strategy['borrow_weight_3b']
     )
 
     # Build detail table
@@ -709,21 +741,21 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
     detail_data = []
 
     # Calculate effective LTV on-the-fly
-    effective_ltv_1A = (strategy.get('b_a', 0.0) / strategy.get('l_a', 1.0)) * strategy.get('borrow_weight_2a', 1.0) if strategy.get('l_a', 0.0) > 0 else 0.0
-    effective_ltv_2B = (strategy.get('b_b', 0.0) / strategy.get('l_b', 1.0)) * strategy.get('borrow_weight_3b', 1.0) if strategy.get('l_b', 0.0) > 0 else 0.0
+    effective_ltv_1A = (strategy['b_a'] / strategy['l_a']) * strategy['borrow_weight_2a'] if strategy['l_a'] > 0 else 0.0
+    effective_ltv_2B = (strategy['b_b'] / strategy['l_b']) * strategy['borrow_weight_3b'] if strategy['l_b'] > 0 else 0.0
 
     # Row 1: Protocol A - Lend token1
-    lltv_1A = strategy.get('liquidation_threshold_1a', 0.0)
+    lltv_1A = strategy['liquidation_threshold_1a']
     detail_data.append({
         'Protocol': strategy['protocol_a'],
         'Token': strategy['token1'],
         'Action': 'Lend',
-        'maxCF': f"{strategy.get('collateral_ratio_1a', 0.0):.2%}",
+        'maxCF': f"{strategy['collateral_ratio_1a']:.2%}",
         'LLTV': f"{lltv_1A:.2%}" if lltv_1A > 0 else "",
         'Effective LTV': f"{effective_ltv_1A:.2%}",
         'Borrow Weight': "-",
-        'Weight': f"{strategy.get('l_a', 0.0):.4f}",
-        'Rate': f"{strategy.get('lend_rate_1a', 0.0) * 100:.2f}%",
+        'Weight': f"{strategy['l_a']:.4f}",
+        'Rate': f"{strategy['lend_rate_1a'] * 100:.2f}%",
         'Token Amount': f"{entry_token_amount_1A:,.{precision_1A}f}",
         'Size ($$$)': f"${position_size_1A:,.2f}",
         'Price': f"${strategy['P1_A']:.4f}",
@@ -742,31 +774,31 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
         'maxCF': "-",
         'LLTV': "-",
         'Effective LTV': "-",
-        'Borrow Weight': f"{strategy.get('borrow_weight_2a', 1.0):.2f}x",
-        'Weight': f"{strategy.get('b_a', 0.0):.4f}",
-        'Rate': f"{strategy.get('borrow_rate_2a', 0.0) * 100:.2f}%",
+        'Borrow Weight': f"{strategy['borrow_weight_2a']:.2f}x",
+        'Weight': f"{strategy['b_a']:.4f}",
+        'Rate': f"{strategy['borrow_rate_2a'] * 100:.2f}%",
         'Token Amount': f"{entry_token_amount_2A:,.{precision_2A}f}",
         'Size ($$$)': f"${position_size_2A:,.2f}",
         'Price': f"${strategy['P2_A']:.4f}",
-        'Fees (%)': f"{strategy.get('borrow_fee_2a', 0.0) * 100:.2f}%" if strategy.get('borrow_fee_2a', 0.0) > 0 else "",
+        'Fees (%)': f"{strategy['borrow_fee_2a'] * 100:.2f}%" if strategy['borrow_fee_2a'] > 0 else "",
         'Fees ($$$)': f"${fee_usd_2A:.2f}" if fee_usd_2A > 0 else "",
         'Liquidation Price': f"${liq_result_2['liq_price']:.4f}" if liq_result_2['liq_price'] != float('inf') and liq_result_2['liq_price'] > 0 else "N/A",
         'Liq Distance': f"{liq_result_2['pct_distance'] * 100:.2f}%" if liq_result_2['liq_price'] != float('inf') and liq_result_2['liq_price'] > 0 else "N/A",
-        'Max Borrow': f"${strategy.get('available_borrow_2a', 0.0):,.2f}" if strategy.get('available_borrow_2a', 0.0) > 0 else "",
+        'Max Borrow': f"${strategy['available_borrow_2a']:,.2f}" if strategy['available_borrow_2a'] > 0 else "",
     })
 
     # Row 3: Protocol B - Lend token2
-    lltv_2B = strategy.get('liquidation_threshold_2b', 0.0)
+    lltv_2B = strategy['liquidation_threshold_2b']
     detail_data.append({
         'Protocol': strategy['protocol_b'],
         'Token': strategy['token2'],
         'Action': 'Lend',
-        'maxCF': f"{strategy.get('collateral_ratio_2b', 0.0):.2%}",
+        'maxCF': f"{strategy['collateral_ratio_2b']:.2%}",
         'LLTV': f"{lltv_2B:.2%}" if lltv_2B > 0 else "",
         'Effective LTV': f"{effective_ltv_2B:.2%}",
         'Borrow Weight': "-",
-        'Weight': f"{strategy.get('l_b', 0.0):.4f}",
-        'Rate': f"{strategy.get('lend_rate_2b', 0.0) * 100:.2f}%",
+        'Weight': f"{strategy['l_b']:.4f}",
+        'Rate': f"{strategy['lend_rate_2b'] * 100:.2f}%",
         'Token Amount': f"{entry_token_amount_2B:,.{precision_2B}f}",
         'Size ($$$)': f"${position_size_2B:,.2f}",
         'Price': f"${strategy['P2_B']:.4f}",
@@ -785,17 +817,17 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
         'maxCF': "-",
         'LLTV': "-",
         'Effective LTV': "-",
-        'Borrow Weight': f"{strategy.get('borrow_weight_3b', 1.0):.2f}x",
-        'Weight': f"{strategy.get('b_b', 0.0):.4f}",
-        'Rate': f"{strategy.get('borrow_rate_3b', 0.0) * 100:.2f}%",
+        'Borrow Weight': f"{strategy['borrow_weight_3b']:.2f}x",
+        'Weight': f"{strategy['b_b']:.4f}",
+        'Rate': f"{strategy['borrow_rate_3b'] * 100:.2f}%",
         'Token Amount': f"{entry_token_amount_3B:,.{precision_3B}f}",
         'Size ($$$)': f"${position_size_3B:,.2f}",
         'Price': f"${strategy['P3_B']:.4f}",
-        'Fees (%)': f"{strategy.get('borrow_fee_3b', 0.0) * 100:.2f}%" if strategy.get('borrow_fee_3b', 0.0) > 0 else "",
+        'Fees (%)': f"{strategy['borrow_fee_3b'] * 100:.2f}%" if strategy['borrow_fee_3b'] > 0 else "",
         'Fees ($$$)': f"${fee_usd_3B:.2f}" if fee_usd_3B > 0 else "",
         'Liquidation Price': f"${liq_result_4['liq_price']:.4f}" if liq_result_4['liq_price'] != float('inf') and liq_result_4['liq_price'] > 0 else "N/A",
         'Liq Distance': f"{liq_result_4['pct_distance'] * 100:.2f}%" if liq_result_4['liq_price'] != float('inf') and liq_result_4['liq_price'] > 0 else "N/A",
-        'Max Borrow': f"${strategy.get('available_borrow_3b', 0.0):,.2f}" if strategy.get('available_borrow_3b', 0.0) > 0 else "",
+        'Max Borrow': f"${strategy['available_borrow_3b']:,.2f}" if strategy['available_borrow_3b'] > 0 else "",
     })
 
     # Display detail table with color formatting
@@ -1939,8 +1971,8 @@ def render_zero_liquidity_tab(zero_liquidity_results: pd.DataFrame, deployment_u
                 max_size_text = " | No Liquidity Data"
 
             token_flow = f"{row['token1']} → {row['token2']} → {row['token3']}"
-            net_apr_value = row.get('apr_net', row['net_apr'])
-            apr5_value = row.get('apr5', row['net_apr'])
+            net_apr_value = row['apr_net']
+            apr5_value = row.get('apr5', row['apr_net'])
 
             net_apr_indicator = "🟢" if net_apr_value >= 0 else "🔴"
             apr5_indicator = "🟢" if apr5_value >= 0 else "🔴"
@@ -2147,7 +2179,9 @@ def render_sidebar_filters(display_results: pd.DataFrame):
         display_results: Current filtered results (for token/protocol options)
 
     Returns:
-        tuple: (liquidation_distance, deployment_usd, force_usdc_start, force_token3_equals_token1, stablecoin_only, min_apr, token_filter, protocol_filter)
+        tuple: (liquidation_distance, deployment_usd, force_usdc_start, force_token3_equals_token1,
+                stablecoin_only, min_apr, token_filter, protocol_filter,
+                show_stablecoin_lending, show_noloop_lending, show_recursive_lending)
     """
     st.header("⚙️ Settings")
 
@@ -2161,7 +2195,10 @@ def render_sidebar_filters(display_results: pd.DataFrame):
             'stablecoin_only': False,
             'min_net_apr': 0.0,
             'token_filter': [],
-            'protocol_filter': []
+            'protocol_filter': [],
+            'show_stablecoin_lending': True,
+            'show_noloop_lending': True,
+            'show_recursive_lending': True
         }
 
     filters = st.session_state.sidebar_filters
@@ -2246,6 +2283,27 @@ def render_sidebar_filters(display_results: pd.DataFrame):
     )
 
     st.markdown("---")
+    st.caption("Strategy Types")
+
+    show_stablecoin_lending = st.toggle(
+        "Show Stablecoin Lending",
+        value=filters.get('show_stablecoin_lending', True),
+        help="Simple single-leg stablecoin lending (no borrowing, no leverage)"
+    )
+
+    show_noloop_lending = st.toggle(
+        "Show No-Loop Cross-Protocol",
+        value=filters.get('show_noloop_lending', True),
+        help="3-leg strategy: Lend → Borrow → Lend (no loop back)"
+    )
+
+    show_recursive_lending = st.toggle(
+        "Show Recursive Lending",
+        value=filters.get('show_recursive_lending', True),
+        help="4-leg strategy with geometric leverage (lend → borrow → lend → borrow → loop)"
+    )
+
+    st.markdown("---")
 
     # Filters section
     st.subheader("🔍 Filters")
@@ -2277,11 +2335,15 @@ def render_sidebar_filters(display_results: pd.DataFrame):
         'stablecoin_only': stablecoin_only,
         'min_net_apr': min_apr,
         'token_filter': token_filter,
-        'protocol_filter': protocol_filter
+        'protocol_filter': protocol_filter,
+        'show_stablecoin_lending': show_stablecoin_lending,
+        'show_noloop_lending': show_noloop_lending,
+        'show_recursive_lending': show_recursive_lending
     })
 
     return (liquidation_distance, deployment_usd, force_usdc_start, force_token3_equals_token1,
-            stablecoin_only, min_apr, token_filter, protocol_filter)
+            stablecoin_only, min_apr, token_filter, protocol_filter,
+            show_stablecoin_lending, show_noloop_lending, show_recursive_lending)
 
 def render_allocation_tab(all_strategies_df: pd.DataFrame):
     """
@@ -2422,7 +2484,6 @@ def render_allocation_tab(all_strategies_df: pd.DataFrame):
                     if col in all_strategies_df.columns:
                         all_tokens.update(all_strategies_df[col].unique())
                 # Filter out stablecoins
-                from config.stablecoins import STABLECOIN_SYMBOLS
                 non_stablecoin_tokens = sorted([t for t in all_tokens if t not in STABLECOIN_SYMBOLS])
             else:
                 non_stablecoin_tokens = ['SUI', 'DEEP', 'CETUS', 'WAL']
@@ -2487,7 +2548,6 @@ def render_allocation_tab(all_strategies_df: pd.DataFrame):
                     if col in all_strategies_df.columns:
                         all_tokens.update(all_strategies_df[col].unique())
                 # Filter to stablecoins only
-                from config.stablecoins import STABLECOIN_SYMBOLS
                 stablecoin_tokens = sorted([t for t in all_tokens if t in STABLECOIN_SYMBOLS])
             else:
                 stablecoin_tokens = list(STABLECOIN_SYMBOLS)
@@ -2716,6 +2776,7 @@ def render_allocation_tab(all_strategies_df: pd.DataFrame):
 
                 # Display table - select columns (check if max_size_usd exists)
                 base_columns = [
+                    'strategy_type',
                     'token1', 'token2', 'token3',
                     'protocol_a', 'protocol_b',
                     'net_apr', 'apr5', 'apr30', 'blended_apr', 'stablecoin_multiplier', 'adjusted_apr'
@@ -2730,6 +2791,14 @@ def render_allocation_tab(all_strategies_df: pd.DataFrame):
                     print(f"    Available columns: {list(strategies.columns)}")
 
                 display_df = strategies[base_columns].copy()
+
+                # Format strategy_type for display
+                strategy_type_map = {
+                    'stablecoin_lending': 'Stablecoin',
+                    'noloop_cross_protocol_lending': 'No-Loop',
+                    'recursive_lending': 'Recursive'
+                }
+                display_df['strategy_type'] = display_df['strategy_type'].map(strategy_type_map)
 
                 # Format for display
                 display_df['net_apr'] = display_df['net_apr'].apply(lambda x: f"{x*100:.2f}%")
@@ -2749,6 +2818,7 @@ def render_allocation_tab(all_strategies_df: pd.DataFrame):
 
                 # Rename columns
                 column_names = [
+                    'Strategy Type',
                     'Token1', 'Token2', 'Token3',
                     'Protocol A', 'Protocol B',
                     'Net APR', 'APR5', 'APR30', 'Blended APR', 'Stable Mult', 'Adjusted APR'
@@ -3358,8 +3428,6 @@ def render_portfolio_preview(portfolio_df: pd.DataFrame, portfolio_size: float, 
             st.dataframe(token_exp_df, width='stretch', hide_index=True)
 
             # Check if any exposure exceeds limit (showing per-token limits)
-            from config.stablecoins import STABLECOIN_SYMBOLS
-
             token2_limit_pct = constraints.get('token2_exposure_limit', constraints.get('token_exposure_limit', 0.7)) * 100
             stablecoin_limit_pct = constraints.get('stablecoin_exposure_limit', -1)
             token_overrides = constraints.get('token_exposure_overrides', {})
@@ -3848,7 +3916,8 @@ def render_dashboard(data_loader: DataLoader, mode: str):
         empty_df = pd.DataFrame()
 
         (liquidation_distance, deployment_usd, force_usdc_start, force_token3_equals_token1,
-         stablecoin_only, min_apr, token_filter, protocol_filter) = render_sidebar_filters(empty_df)
+         stablecoin_only, min_apr, token_filter, protocol_filter,
+         show_stablecoin_lending, show_noloop_lending, show_recursive_lending) = render_sidebar_filters(empty_df)
 
     # === RUN ANALYSIS WITH DATABASE CACHING ===
     analysis_start = time.time()
@@ -3900,7 +3969,8 @@ def render_dashboard(data_loader: DataLoader, mode: str):
             borrow_fees=borrow_fees,
             borrow_weights=borrow_weights,
             timestamp=timestamp_seconds,  # Pass Unix seconds (int)
-            liquidation_distance=liquidation_distance
+            liquidation_distance=liquidation_distance,
+            strategy_types=get_all_strategy_types()  # Generate all strategy types
         )
         analyzer_init_time = (time.time() - analyzer_init_start) * 1000
         print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] RateAnalyzer initialized in {analyzer_init_time:.1f}ms")
@@ -3920,13 +3990,16 @@ def render_dashboard(data_loader: DataLoader, mode: str):
     # Apply filters
     filter_start = time.time()
     filtered_results = all_results.copy()
+    print(f"[FILTER] Starting with {len(filtered_results)} strategies")
 
     if not filtered_results.empty:
         if force_usdc_start:
             filtered_results = filtered_results[filtered_results['token1'] == 'USDC']
+            print(f"[FILTER] After force_usdc_start: {len(filtered_results)} strategies")
 
         if force_token3_equals_token1:
             filtered_results = filtered_results[filtered_results['token3'] == filtered_results['token1']]
+            print(f"[FILTER] After force_token3_equals_token1: {len(filtered_results)} strategies")
 
         if stablecoin_only:
             filtered_results = filtered_results[
@@ -3934,6 +4007,27 @@ def render_dashboard(data_loader: DataLoader, mode: str):
                 (filtered_results['token2'].isin(STABLECOIN_SYMBOLS)) &
                 (filtered_results['token3'].isin(STABLECOIN_SYMBOLS))
             ]
+            print(f"[FILTER] After stablecoin_only: {len(filtered_results)} strategies")
+
+        # Filter by strategy type
+        enabled_strategy_types = []
+        if show_stablecoin_lending:
+            enabled_strategy_types.append('stablecoin_lending')
+        if show_noloop_lending:
+            enabled_strategy_types.append('noloop_cross_protocol_lending')
+        if show_recursive_lending:
+            enabled_strategy_types.append('recursive_lending')
+
+        print(f"[FILTER] Enabled strategy types: {enabled_strategy_types}")
+        if enabled_strategy_types and 'strategy_type' in filtered_results.columns:
+            before_count = len(filtered_results)
+            print(f"[FILTER] Strategy types BEFORE filter: {dict(filtered_results['strategy_type'].value_counts())}")
+            filtered_results = filtered_results[filtered_results['strategy_type'].isin(enabled_strategy_types)]
+            print(f"[FILTER] After strategy_type filter: {len(filtered_results)} strategies (removed {before_count - len(filtered_results)})")
+            if not filtered_results.empty:
+                print(f"[FILTER] Strategy types AFTER filter: {dict(filtered_results['strategy_type'].value_counts())}")
+        else:
+            print(f"[FILTER] Skipping strategy_type filter (enabled_types={enabled_strategy_types}, has_column={'strategy_type' in filtered_results.columns})")
 
         # Filter by deployment size
         if deployment_usd > 0:
@@ -3941,6 +4035,7 @@ def render_dashboard(data_loader: DataLoader, mode: str):
                 (filtered_results['max_size'].notna()) &
                 (filtered_results['max_size'] >= deployment_usd)
             ]
+            print(f"[FILTER] After deployment_usd filter: {len(filtered_results)} strategies")
 
     # Create zero_liquidity_results
     zero_liquidity_results = all_results.copy()
@@ -3956,6 +4051,10 @@ def render_dashboard(data_loader: DataLoader, mode: str):
                 (zero_liquidity_results['token2'].isin(STABLECOIN_SYMBOLS)) &
                 (zero_liquidity_results['token3'].isin(STABLECOIN_SYMBOLS))
             ]
+
+        # Filter zero liquidity results by strategy type
+        if enabled_strategy_types and 'strategy_type' in zero_liquidity_results.columns:
+            zero_liquidity_results = zero_liquidity_results[zero_liquidity_results['strategy_type'].isin(enabled_strategy_types)]
 
         zero_liquidity_results = zero_liquidity_results[
             (zero_liquidity_results['max_size'].isna()) |
@@ -3974,20 +4073,27 @@ def render_dashboard(data_loader: DataLoader, mode: str):
     # Apply additional filters
     if not filtered_results.empty:
         display_results = filtered_results[filtered_results[apr_col] >= min_apr]
+        print(f"[FILTER] After min_apr filter ({min_apr}): {len(display_results)} strategies")
+        if not display_results.empty and 'strategy_type' in display_results.columns:
+            print(f"[FILTER] Strategy types after min_apr: {dict(display_results['strategy_type'].value_counts())}")
     else:
         display_results = filtered_results
 
     if token_filter and not display_results.empty:
+        before_count = len(display_results)
         display_results = display_results[
             display_results['token1'].isin(token_filter) |
             display_results['token2'].isin(token_filter)
         ]
+        print(f"[FILTER] After token_filter: {len(display_results)} strategies (removed {before_count - len(display_results)})")
 
     if protocol_filter and not display_results.empty:
+        before_count = len(display_results)
         display_results = display_results[
             display_results['protocol_a'].isin(protocol_filter) |
             display_results['protocol_b'].isin(protocol_filter)
         ]
+        print(f"[FILTER] After protocol_filter: {len(display_results)} strategies (removed {before_count - len(display_results)})")
 
     filter_time = (time.time() - filter_start) * 1000
     print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] Filtering complete in {filter_time:.1f}ms: {len(display_results)}/{len(all_results)} strategies")
@@ -4038,6 +4144,12 @@ def render_dashboard(data_loader: DataLoader, mode: str):
         tab1_start = time.time()
         st.markdown("### Top Lending Strategies")
         st.markdown("Click column headers to sort. Click checkbox to view details.")
+
+        # Debug: Show what's about to be displayed
+        if not display_results.empty and 'strategy_type' in display_results.columns:
+            print(f"[TAB1] About to display {len(display_results)} strategies with types: {dict(display_results['strategy_type'].value_counts())}")
+        else:
+            print(f"[TAB1] About to display {len(display_results)} strategies (no strategy_type column)")
 
         # Display sortable table
         selected_strategy = display_strategies_table(display_results, mode=mode)

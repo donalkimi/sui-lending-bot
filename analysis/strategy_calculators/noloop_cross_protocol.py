@@ -229,7 +229,23 @@ class NoLoopCrossProtocolCalculator(StrategyCalculatorBase):
         apr90 = net_apr
         days_to_breakeven = 0.0  # Placeholder
 
+        # Extract contracts from kwargs (passed by analyzer)
+        token1_contract = kwargs.get('token1_contract')
+        token2_contract = kwargs.get('token2_contract')
+
         return {
+            # Token and protocol info
+            'token1': token1,
+            'token2': token2,
+            'token3': token2,  # NoLoop doesn't loop back, so token3 = token2
+            'protocol_a': protocol_a,
+            'protocol_b': protocol_b,
+
+            # Contracts (for historical chart queries)
+            'token1_contract': token1_contract,
+            'token2_contract': token2_contract,
+            'token3_contract': token2_contract,  # Same as token2
+
             # Position multipliers
             'l_a': positions['l_a'],
             'b_a': positions['b_a'],
@@ -237,7 +253,7 @@ class NoLoopCrossProtocolCalculator(StrategyCalculatorBase):
             'b_b': positions['b_b'],
 
             # APR metrics
-            'net_apr': net_apr,
+            'apr_net': net_apr,
             'apr5': apr5,
             'apr30': apr30,
             'apr90': apr90,
@@ -246,6 +262,32 @@ class NoLoopCrossProtocolCalculator(StrategyCalculatorBase):
             # Risk metrics
             'liquidation_distance': liquidation_distance,
             'max_size': max_size,
+
+            # Prices (required by dashboard)
+            'P1_A': price_1A,
+            'P2_A': price_2A,
+            'P2_B': price_2B,
+            'P3_B': price_2B,  # Same as P2_B since token3 = token2
+
+            # Rates (required by dashboard)
+            'lend_rate_1a': lend_total_apr_1A,
+            'borrow_rate_2a': borrow_total_apr_2A,
+            'lend_rate_2b': lend_total_apr_2B,
+            'borrow_rate_3b': 0.0,  # No 4th leg
+
+            # Collateral and liquidation (required by dashboard)
+            'collateral_ratio_1a': collateral_ratio_1A,
+            'collateral_ratio_2b': 0.0,  # No borrowing on leg B
+            'liquidation_threshold_1a': liquidation_threshold_1A,
+            'liquidation_threshold_2b': 0.0,  # No borrowing on leg B
+
+            # Fees and liquidity (required by dashboard)
+            'borrow_fee_2a': borrow_fee_2A or 0.0,
+            'borrow_fee_3b': 0.0,  # No 4th leg
+            'available_borrow_2a': available_borrow_2A,
+            'available_borrow_3b': 0.0,  # No 4th leg
+            'borrow_weight_2a': kwargs.get('borrow_weight_2A', 1.0),
+            'borrow_weight_3b': 1.0,  # No 4th leg
 
             # Metadata
             'valid': True,
@@ -260,6 +302,7 @@ class NoLoopCrossProtocolCalculator(StrategyCalculatorBase):
         Calculate rebalance amounts for 3-leg strategy.
 
         Maintains constant USD values for L_A, B_A, L_B (no B_B).
+        Only one liquidation threshold to monitor (leg 2A).
 
         Args:
             position: Position dict with entry data
@@ -267,13 +310,33 @@ class NoLoopCrossProtocolCalculator(StrategyCalculatorBase):
             live_prices: Current prices
 
         Returns:
-            Dict with rebalance token amounts for each leg
+            Dict with rebalance structure (requires_rebalance, actions, etc.)
 
-        Note:
-            Not yet implemented - placeholder for future development
+        Raises:
+            ValueError: If position data or prices are invalid
+
+        TODO: Full implementation pending - needs tolerance threshold logic
         """
-        # TODO: Implement rebalancing logic
-        # Calculate target USD values based on multipliers
-        # Calculate current USD values using live prices
-        # Return token amount deltas to restore targets
-        raise NotImplementedError("Rebalancing logic not yet implemented for noloop_cross_protocol")
+        # FAIL LOUD: Validate inputs
+        if not position:
+            raise ValueError("Position dict cannot be None or empty")
+        if live_rates is None:
+            raise ValueError("live_rates cannot be None")
+        if live_prices is None:
+            raise ValueError("live_prices cannot be None")
+
+        # TODO: Implement full rebalancing logic
+        # 1. Calculate target USD values: deployment × L_A, deployment × B_A, deployment × L_B
+        # 2. Calculate current USD values using live prices
+        # 3. Calculate drift percentage
+        # 4. Check if drift exceeds tolerance threshold (e.g., 5%)
+        # 5. If yes, calculate token amount deltas to restore targets
+        # 6. Check liquidation distance on leg 2A
+
+        # STUB: For now, always return no rebalancing needed
+        # This will be replaced with actual tolerance-check logic
+        return {
+            "requires_rebalance": False,
+            "actions": [],
+            "reason": "Position weights within acceptable tolerance (stub implementation)"
+        }

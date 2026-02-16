@@ -119,7 +119,22 @@ class StablecoinLendingCalculator(StrategyCalculatorBase):
         # Calculate positions (trivial)
         positions = self.calculate_positions()
 
+        # Extract contract from kwargs (passed by analyzer)
+        token1_contract = kwargs.get('token1_contract')
+
         return {
+            # Token and protocol info
+            'token1': token1,
+            'token2': token1,  # Stablecoin lending has no second token
+            'token3': token1,  # Single leg strategy
+            'protocol_a': protocol_a,
+            'protocol_b': protocol_a,  # Single protocol strategy
+
+            # Contracts (for historical chart queries)
+            'token1_contract': token1_contract,
+            'token2_contract': token1_contract,
+            'token3_contract': token1_contract,
+
             # Position multipliers
             'l_a': positions['l_a'],
             'b_a': positions['b_a'],
@@ -127,7 +142,7 @@ class StablecoinLendingCalculator(StrategyCalculatorBase):
             'b_b': positions['b_b'],
 
             # APR metrics (no fees to amortize, so all time horizons are the same)
-            'net_apr': lend_total_apr_1A,
+            'apr_net': lend_total_apr_1A,
             'apr5': lend_total_apr_1A,
             'apr30': lend_total_apr_1A,
             'apr90': lend_total_apr_1A,
@@ -136,6 +151,32 @@ class StablecoinLendingCalculator(StrategyCalculatorBase):
             # Risk metrics
             'liquidation_distance': float('inf'),  # No liquidation risk
             'max_size': float('inf'),  # Not limited by liquidity constraints
+
+            # Prices (required by dashboard) - all same for single-token strategy
+            'P1_A': price_1A,
+            'P2_A': price_1A,
+            'P2_B': price_1A,
+            'P3_B': price_1A,
+
+            # Rates (required by dashboard)
+            'lend_rate_1a': lend_total_apr_1A,
+            'borrow_rate_2a': 0.0,  # No borrowing
+            'lend_rate_2b': 0.0,  # No second lending leg
+            'borrow_rate_3b': 0.0,  # No borrowing
+
+            # Collateral and liquidation (required by dashboard)
+            'collateral_ratio_1a': 0.0,  # Not used as collateral
+            'collateral_ratio_2b': 0.0,  # No second leg
+            'liquidation_threshold_1a': 0.0,  # No liquidation risk
+            'liquidation_threshold_2b': 0.0,  # No second leg
+
+            # Fees and liquidity (required by dashboard)
+            'borrow_fee_2a': 0.0,  # No borrowing
+            'borrow_fee_3b': 0.0,  # No borrowing
+            'available_borrow_2a': 0.0,  # No borrowing
+            'available_borrow_3b': 0.0,  # No borrowing
+            'borrow_weight_2a': 1.0,  # No borrowing
+            'borrow_weight_3b': 1.0,  # No borrowing
 
             # Metadata
             'valid': True,
@@ -150,9 +191,21 @@ class StablecoinLendingCalculator(StrategyCalculatorBase):
                                    live_rates: Dict,
                                    live_prices: Dict) -> Dict:
         """
-        No rebalancing needed for stablecoin lending (no borrowed assets).
+        Stablecoin lending never needs rebalancing (no leverage, no liquidation risk).
+
+        Single-leg strategy with no borrowing means the position cannot drift from
+        target weights - there are no weights to maintain.
+
+        Args:
+            position: Position dict (not used for stablecoin lending)
+            live_rates: Current rates (not used)
+            live_prices: Current prices (not used)
 
         Returns:
-            None (signals no rebalancing required)
+            Dict with requires_rebalance=False (always)
         """
-        return None
+        return {
+            "requires_rebalance": False,
+            "actions": [],
+            "reason": "Single-leg strategy does not require rebalancing"
+        }

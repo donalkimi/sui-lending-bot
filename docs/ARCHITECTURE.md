@@ -80,6 +80,283 @@ graph LR
 
 ---
 
+## Time-Travel Flow: Timestamp Selection → Data Loading → Rendering
+
+This flow shows how users can "time travel" to any historical snapshot by selecting a timestamp. The selected timestamp becomes "now" for all calculations (Design Principle #1).
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ PHASE 1: AVAILABLE TIMESTAMPS (Cache Index)                 │
+└─────────────────────────────────────────────────────────────┘
+   Dashboard loads
+   ├─ get_available_timestamps()
+   │  └─ SELECT DISTINCT timestamp FROM rates_snapshot
+   └─ Returns: [ts1, ts2, ts3, ...] (sorted desc)
+
+                    ↓
+
+┌─────────────────────────────────────────────────────────────┐
+│ PHASE 2: USER SELECTION (Timestamp Picker)                  │
+└─────────────────────────────────────────────────────────────┘
+   User interacts with dropdown
+   │
+   ├─ Default: Latest timestamp (most recent)
+   ├─ Options: All historical snapshots
+   └─ Selects: 2026-02-14 15:00:00
+      └─ Converts to Unix seconds: 1739548800
+
+                    ↓
+
+┌─────────────────────────────────────────────────────────────┐
+│ PHASE 3: DATA LOADING (Cache Lookup)                        │
+└─────────────────────────────────────────────────────────────┘
+   load_historical_snapshot(timestamp_seconds)
+   │
+   ├─ SELECT * FROM rates_snapshot
+   │  WHERE timestamp = 1739548800
+   │
+   ├─ Pivot into 8 DataFrames
+   │  ├─ lend_rates (Token × Protocol matrix)
+   │  ├─ borrow_rates
+   │  ├─ collateral_ratios
+   │  ├─ prices
+   │  ├─ lend_rewards
+   │  ├─ borrow_rewards
+   │  ├─ available_borrow
+   │  └─ borrow_fees
+   │
+   └─ Returns: (df1, df2, ..., df8, timestamp)
+
+                    ↓
+
+┌─────────────────────────────────────────────────────────────┐
+│ PHASE 4: RENDERING (Dashboard Display)                      │
+└─────────────────────────────────────────────────────────────┘
+   Dashboard renders with selected timestamp as "now"
+   │
+   ├─ All strategies use rates from selected timestamp
+   ├─ All positions calculate PnL up to selected timestamp
+   ├─ All APRs based on selected timestamp's rates
+   └─ User can "time travel" to any cached snapshot
+```
+
+**Key Architectural Points:**
+
+| Aspect | Implementation |
+|--------|----------------|
+| **Timestamp as "Now"** | Selected timestamp IS current time (Design Principle #1) |
+| **Query Pattern** | All queries use `WHERE timestamp <= selected_timestamp` |
+| **No API Calls** | Dashboard never calls protocol APIs directly |
+| **Performance** | Time travel is instant (cache lookup only) |
+| **Data Consistency** | All data from same snapshot (no mixing timestamps) |
+
+**Benefits:**
+- **Historical Analysis**: Replay any past market state
+- **Backtesting**: Test strategies with historical data
+- **Debugging**: Investigate issues at exact timestamp
+- **Instant**: No API calls, pure database lookup
+
+---
+
+## Complete Data Flow: Strategy Discovery to Position Deployment
+
+This end-to-end flow shows how the system works from data collection through position deployment:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ PHASE 1: DATA COLLECTION (Hourly on Railway)                │
+└─────────────────────────────────────────────────────────────┘
+   refresh_pipeline()
+   ├─ Fetches rates, prices, fees from all protocols
+   ├─ Saves to rates_snapshot table (immutable)
+   └─ Returns: merged DataFrames
+
+                    ↓
+
+┌─────────────────────────────────────────────────────────────┐
+│ PHASE 2: STRATEGY DISCOVERY (Analysis Layer)                │
+└─────────────────────────────────────────────────────────────┘
+   RateAnalyzer.analyze_all_combinations()
+   │
+   ├─ For each strategy type:
+   │  │
+   │  ├─ _generate_stablecoin_strategies()
+   │  │  └─ Iterate: stablecoin × protocol
+   │  │     └─ Call calculator.analyze_strategy()
+   │  │        └─ Returns: {l_a, b_a, l_b, b_b, net_apr, ...}
+   │  │
+   │  ├─ _generate_noloop_strategies()
+   │  │  └─ Iterate: stablecoin × high-yield × protocol_pair
+   │  │     └─ Call calculator.analyze_strategy()
+   │  │        └─ Returns: {l_a, b_a, l_b, b_b, net_apr, ...}
+   │  │
+   │  └─ _generate_recursive_strategies()
+   │     └─ Iterate: token1 × token2 × token3 × protocol_pair
+   │        └─ Call calculator.analyze_strategy()
+   │           └─ Returns: {l_a, b_a, l_b, b_b, net_apr, ...}
+   │
+   └─ Combine all results into single DataFrame
+      └─ Sort by net_apr descending
+         └─ Returns: DataFrame with 100-500+ strategies
+
+                    ↓
+
+┌─────────────────────────────────────────────────────────────┐
+│ PHASE 3: DISPLAY IN DASHBOARD (View Layer)                  │
+└─────────────────────────────────────────────────────────────┘
+   "All Strategies" Tab
+   │
+   ├─ Shows DataFrame from analyzer.analyze_all_combinations()
+   ├─ User can filter by strategy_type
+   ├─ User can sort by APR, max_size, etc.
+   └─ Each row has "Deploy" button
+
+                    ↓
+
+┌─────────────────────────────────────────────────────────────┐
+│ PHASE 4: USER DEPLOYS POSITION (Writes to database)         │
+└─────────────────────────────────────────────────────────────┘
+   User clicks "Deploy" button on a strategy
+   │
+   └─ position_service.create_position()
+      ├─ Takes strategy data from DataFrame row
+      ├─ Creates position_id (UUID)
+      ├─ INSERT INTO positions table
+      └─ Position now exists in database
+```
+
+**Key Architectural Points:**
+
+| Phase | Layer | Database Writes | Purpose |
+|-------|-------|-----------------|---------|
+| **Phase 1** | Data Collection | rates_snapshot (immutable) | Cache market data |
+| **Phase 2** | Analysis | analysis_cache (optional) | Discover opportunities |
+| **Phase 3** | View | None | Display & explore |
+| **Phase 4** | Action | positions table | Deploy capital |
+
+**Critical Distinctions:**
+- **Discovery ≠ Deployment**: Strategy generation (Phases 2-3) is pure analysis with no position writes
+- **Immutable vs Mutable**: rates_snapshot is append-only; positions table is mutable (status changes)
+- **Cached Analysis**: Phase 2 results can be cached in analysis_cache for fast re-rendering
+- **Explicit User Action**: Only Phase 4 creates positions; Phases 2-3 are read-only exploration
+
+---
+
+## Rebalancing Flow: Detection → Manual Rebalance → Segment Creation
+
+This flow shows how positions are rebalanced when prices drift or liquidation risk increases. Rebalancing is **manual** (user-initiated) based on **automatic** detection signals.
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ PHASE 1: REBALANCE DETECTION (Automatic)                    │
+└─────────────────────────────────────────────────────────────┘
+   Position Expander Renders
+   ├─ Calculates liquidation distance
+   │  └─ distance = (liq_price - live_price) / live_price
+   │
+   ├─ Calculates price drift per token
+   │  └─ drift = (live_price - entry_price) / entry_price
+   │
+   ├─ Checks against threshold (15% default)
+   │  └─ If abs(drift) > threshold → needs rebalance
+   │
+   └─ Displays "Rebal Req'd?" column with drift %
+      └─ Example: "Yes (+6.7%)" (DEEP price increased 6.7%)
+
+                    ↓
+
+┌─────────────────────────────────────────────────────────────┐
+│ PHASE 2: USER DECISION (Manual)                             │
+└─────────────────────────────────────────────────────────────┘
+   User reviews position
+   │
+   ├─ Sees rebalance indicator: "Yes (+6.7%)"
+   ├─ Sees liquidation distance: "17.1%" (getting closer to liq)
+   ├─ Reviews current APR vs entry APR
+   │
+   └─ Clicks "⚖️ Rebalance" button
+      └─ Triggers rebalance confirmation modal
+
+                    ↓
+
+┌─────────────────────────────────────────────────────────────┐
+│ PHASE 3: REBALANCE EXECUTION (Database Write)               │
+└─────────────────────────────────────────────────────────────┘
+   position_service.rebalance_position()
+   │
+   ├─ INSERT INTO position_rebalances
+   │  ├─ position_id = <position_uuid>
+   │  ├─ sequence_number = next in sequence (1, 2, 3, ...)
+   │  ├─ segment_start_timestamp = previous_entry_timestamp
+   │  ├─ segment_end_timestamp = live_timestamp (now)
+   │  │
+   │  ├─ closing_* = rates/prices at rebalance time
+   │  │  ├─ closing_lend_rate_1A
+   │  │  ├─ closing_price_1A
+   │  │  └─ ... (all legs)
+   │  │
+   │  ├─ opening_* = NEW rates/prices after rebalance
+   │  │  ├─ opening_lend_rate_1A
+   │  │  ├─ opening_price_1A
+   │  │  └─ ... (all legs)
+   │  │
+   │  └─ realized_pnl = PnL for closed segment
+   │     └─ Calculated from segment_start → segment_end
+   │
+   └─ UPDATE positions SET
+      ├─ entry_timestamp = live_timestamp (RESET)
+      ├─ entry_lend_rate_1A = NEW rate (RESET)
+      ├─ entry_price_1A = NEW price (RESET)
+      ├─ ... (all entry_* fields RESET)
+      └─ updated_at = now
+
+                    ↓
+
+┌─────────────────────────────────────────────────────────────┐
+│ PHASE 4: SEGMENT CREATION (Historical Tracking)             │
+└─────────────────────────────────────────────────────────────┘
+   Position now has segments
+   │
+   ├─ Segment 1: 2026-01-15 → 2026-01-20 (5.0 days)
+   │  ├─ Status: CLOSED (finalized)
+   │  ├─ Realized PnL: $42.31
+   │  └─ Stored in position_rebalances (sequence_number=1)
+   │
+   ├─ Segment 2: 2026-01-20 → 2026-01-25 (5.0 days)
+   │  ├─ Status: CLOSED (finalized)
+   │  ├─ Realized PnL: $38.12
+   │  └─ Stored in position_rebalances (sequence_number=2)
+   │
+   └─ Live Segment: 2026-01-25 → Now (3.2 days)
+      ├─ Status: ACTIVE (ongoing)
+      ├─ Unrealized PnL: $12.45
+      └─ Uses current entry_* from positions table
+```
+
+**Key Architectural Points:**
+
+| Aspect | Implementation |
+|--------|----------------|
+| **Detection** | Automatic (calculated on every render) |
+| **Execution** | Manual (user must confirm) |
+| **Entry State Reset** | All entry_* fields updated to "new normal" |
+| **Historical Segments** | Each rebalance creates closed segment with realized PnL |
+| **PnL Tracking** | Sum of (closed segments + live segment) = total PnL |
+
+**Why Manual Rebalancing?**
+1. **User Control**: User decides when to incur transaction costs
+2. **Gas Costs**: Rebalancing costs gas (not automated to save costs)
+3. **Market Timing**: User may want to wait for better rates
+4. **Risk Tolerance**: User decides liquidation distance threshold
+
+**What Rebalancing Does:**
+- **Closes Current Segment**: Finalizes PnL for time period
+- **Creates Historical Record**: Stores segment in position_rebalances
+- **Resets Entry State**: Position starts fresh with new rates/prices
+- **Preserves History**: Old segments retained for analysis
+
+---
+
 ## 1. REFRESH PIPELINE DATA FLOW
 
 ### 1.0 Caching Strategy Overview
@@ -309,6 +586,137 @@ Fees:
 
 **Output**: DataFrame with 200+ strategies, sorted by `net_apr` descending
 
+---
+
+## Strategy Calculator Registry: Type → Calculator Class Mapping
+
+The system uses a **registry pattern** to map strategy types to calculator classes. This enables a plugin architecture where new strategy types can be added without modifying existing code.
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ REGISTRY INITIALIZATION (Module Load Time)                   │
+└─────────────────────────────────────────────────────────────┘
+   analysis/strategy_calculators.py
+   │
+   └─ STRATEGY_CALCULATORS = {
+      'stablecoin': StablecoinStrategyCalculator,
+      'noloop': NoLoopStrategyCalculator,
+      'recursive_lending': RecursiveLendingStrategyCalculator,
+      'funding_rate_arb': FundingRateArbCalculator,
+      ...
+   }
+
+                    ↓
+
+┌─────────────────────────────────────────────────────────────┐
+│ USAGE: RateAnalyzer.analyze_all_combinations()              │
+└─────────────────────────────────────────────────────────────┘
+   For each strategy_type:
+   │
+   ├─ Get calculator class from registry:
+   │  calculator_class = STRATEGY_CALCULATORS.get(strategy_type)
+   │  if not calculator_class:
+   │      raise ValueError(f"Unknown strategy type: {strategy_type}")
+   │
+   ├─ Instantiate calculator:
+   │  calculator = calculator_class(merged_data, timestamp)
+   │
+   └─ Call analyze_strategy():
+      result = calculator.analyze_strategy(
+         token1, token2, token3,
+         protocol_A, protocol_B,
+         liquidation_distance
+      )
+
+                    ↓
+
+┌─────────────────────────────────────────────────────────────┐
+│ CALCULATOR INTERFACE (Base Class)                            │
+└─────────────────────────────────────────────────────────────┘
+   class StrategyCalculatorBase(ABC):
+      @abstractmethod
+      def analyze_strategy(self, token1, token2, token3,
+                          protocol_A, protocol_B, liq_dist):
+         """
+         Calculate position sizes, rates, APR, max_size.
+
+         Returns:
+            dict with keys: L_A, B_A, L_B, B_B, net_apr,
+                           apr5, apr30, apr90, max_size, valid
+         """
+         pass
+
+                    ↓
+
+┌─────────────────────────────────────────────────────────────┐
+│ CONCRETE CALCULATORS (Strategy-Specific)                     │
+└─────────────────────────────────────────────────────────────┘
+   RecursiveLendingStrategyCalculator:
+      ├─ analyze_strategy()
+      │  ├─ calculate_positions() [Geometric series]
+      │  │  └─ L_A = 1 / (1 - r_A × r_B)
+      │  ├─ calculate_net_apr() [4-leg APR]
+      │  │  └─ earnings - costs - fees
+      │  └─ calculate_max_size() [Liquidity constraint]
+      │     └─ min(avail_2A / B_A, avail_3B / B_B)
+
+   NoLoopStrategyCalculator:
+      ├─ analyze_strategy()
+      │  ├─ calculate_positions() [3-leg, no recursion]
+      │  │  └─ L_A = 1.0, B_A = r_A, L_B = r_A, B_B = None
+      │  ├─ calculate_net_apr() [3-leg APR]
+      │  └─ calculate_max_size() [Liquidity constraint]
+
+   StablecoinStrategyCalculator:
+      ├─ analyze_strategy()
+      │  ├─ calculate_positions() [1-leg, pure lending]
+      │  │  └─ L_A = 1.0, B_A = 0, L_B = 0, B_B = None
+      │  ├─ calculate_net_apr() [Single lend APR]
+      │  └─ calculate_max_size() [Supply limit]
+
+                    ↓
+
+┌─────────────────────────────────────────────────────────────┐
+│ EXTENSION: ADDING NEW STRATEGY TYPE                          │
+└─────────────────────────────────────────────────────────────┘
+   1. Create new calculator class:
+      class MyNewStrategyCalculator(StrategyCalculatorBase):
+          def analyze_strategy(self, ...):
+              # Custom logic here
+              return {...}
+
+   2. Register in STRATEGY_CALCULATORS:
+      STRATEGY_CALCULATORS['my_new_strategy'] = MyNewStrategyCalculator
+
+   3. Add generation method in RateAnalyzer:
+      def _generate_my_new_strategies(self):
+          for ...:
+              yield self._build_strategy_row('my_new_strategy', ...)
+
+   4. Call in analyze_all_combinations():
+      all_strategies.extend(self._generate_my_new_strategies())
+
+   → NO CHANGES to other parts of codebase
+   → Registry automatically routes to new calculator
+```
+
+**Key Architectural Benefits:**
+
+| Benefit | Implementation |
+|---------|----------------|
+| **Plugin Architecture** | Add new strategy types without modifying existing code |
+| **Common Interface** | All calculators implement StrategyCalculatorBase |
+| **Type Safety** | ValueError if unknown strategy_type |
+| **Extensibility** | 4-step process to add new strategy type |
+| **Maintainability** | Each strategy encapsulated in own class |
+
+**File Reference:**
+- **Base Class**: [analysis/strategy_calculators.py](../analysis/strategy_calculators.py)
+- **Registry**: `STRATEGY_CALCULATORS` dict at module level
+- **Usage**: [analysis/rate_analyzer.py](../analysis/rate_analyzer.py) - `analyze_all_combinations()`
+
+---
+
 ### Phase 5: Portfolio Allocation (February 2026)
 
 **File**: [analysis/portfolio_allocator.py](../analysis/portfolio_allocator.py)
@@ -345,7 +753,126 @@ WAL      150000    200000    100000    50000
 DEEP     75000     100000    50000     25000
 ```
 
-#### Algorithm Flow
+#### Portfolio Allocation Flow: Iterative Liquidity Updates
+
+This detailed flow shows how the portfolio allocator prevents over-borrowing by iteratively updating available liquidity after each allocation.
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ INPUT: Strategies DataFrame + Portfolio Constraints          │
+└─────────────────────────────────────────────────────────────┘
+   Example: 100 strategies, $100k portfolio size
+                    ↓
+
+┌─────────────────────────────────────────────────────────────┐
+│ STEP 1: PREPARE STRATEGIES (Filtering & Ranking)            │
+└─────────────────────────────────────────────────────────────┘
+   Filter strategies
+   ├─ confidence_threshold (e.g., 5+ data points)
+   └─ Remove invalid strategies
+
+   Calculate blended APR
+   ├─ Weights: 40% net_apr, 30% apr5, 20% apr30, 10% apr90
+   └─ Apply stablecoin preference penalties
+
+   Sort by adjusted APR (descending)
+   └─ Best strategies first
+
+                    ↓
+
+┌─────────────────────────────────────────────────────────────┐
+│ STEP 2: INITIALIZE LIQUIDITY MATRIX (Token × Protocol)      │
+└─────────────────────────────────────────────────────────────┘
+   Build available_borrow matrix:
+
+            Navi      Suilend   Pebble    AlphaFi
+   USDC     500000    800000    1000000   300000
+   WAL      150000    200000    100000    50000
+   DEEP     75000     100000    50000     25000
+
+   Source: available_borrow_2a, available_borrow_3b from strategies
+
+                    ↓
+
+┌─────────────────────────────────────────────────────────────┐
+│ STEP 3: GREEDY ALLOCATION LOOP (With Iterative Updates)     │
+└─────────────────────────────────────────────────────────────┘
+   For each strategy in ranked order:
+   │
+   ├─ GET CURRENT MAX SIZE (may have changed)
+   │  ├─ max_size = min(
+   │  │     available_borrow[token2][protocol_a] / b_a,
+   │  │     available_borrow[token3][protocol_b] / b_b
+   │  │   )
+   │  └─ If max_size <= 0: Skip strategy (no liquidity)
+   │
+   ├─ CALCULATE MAX ALLOCATION
+   │  ├─ Remaining capital: capital_left
+   │  ├─ Token exposure limits: max_token2, max_token3
+   │  ├─ Protocol exposure limits: max_protocol_a, max_protocol_b
+   │  └─ allocation = min(capital_left, max_token2, max_token3,
+   │                       max_protocol_a, max_protocol_b, max_size)
+   │
+   ├─ ALLOCATE TO STRATEGY
+   │  ├─ portfolio.append(strategy, allocation)
+   │  ├─ capital_left -= allocation
+   │  ├─ Update token exposures
+   │  └─ Update protocol exposures
+   │
+   ├─ UPDATE LIQUIDITY MATRIX ◄── KEY INNOVATION
+   │  ├─ borrow_2A_usd = allocation × strategy['borrow_weight_2A']
+   │  ├─ borrow_3B_usd = allocation × strategy['borrow_weight_3B']
+   │  │
+   │  ├─ available_borrow[token2][protocol_a] -= borrow_2A_usd
+   │  ├─ available_borrow[token3][protocol_b] -= borrow_3B_usd
+   │  └─ Clamp negatives to 0
+   │
+   └─ RECALCULATE MAX SIZES (for remaining strategies)
+      └─ Only strategies with index > current
+         └─ Avoids redundant recalculation
+
+                    ↓
+
+┌─────────────────────────────────────────────────────────────┐
+│ OUTPUT: Portfolio + Debug Info                              │
+└─────────────────────────────────────────────────────────────┘
+   Returns:
+   ├─ selected_strategies: List of (strategy, allocation) pairs
+   ├─ total_allocated: Sum of allocations
+   ├─ capital_used: Total capital deployed
+   │
+   └─ debug_info:
+      ├─ Initial available_borrow matrix
+      ├─ Final available_borrow matrix
+      ├─ Constraints applied per strategy
+      └─ Allocation reasoning
+
+EXAMPLE IMPACT:
+═══════════════════════════════════════════════════════════════
+Scenario: 3 strategies borrowing WAL from Pebble (available: $100k)
+
+WITHOUT iterative updates:
+- Strategy 1: Allocate $100k (borrows $100k WAL)
+- Strategy 2: Allocate $100k (borrows $100k WAL) ← OVER-BORROW
+- Strategy 3: Allocate $100k (borrows $100k WAL) ← OVER-BORROW
+- Total borrowed: $300k (200k over limit!) ❌
+
+WITH iterative updates:
+- Strategy 1: Allocate $100k (borrows $100k WAL)
+  → available_borrow[WAL][Pebble] = 100k - 100k = $0
+- Strategy 2: max_size = $0 / b_a = $0 → SKIP ✅
+- Strategy 3: max_size = $0 / b_a = $0 → SKIP ✅
+- Total borrowed: $100k (respects limit!) ✅
+```
+
+**Key Points:**
+- **Iterative updates** prevent over-borrowing beyond protocol liquidity
+- **Matrix tracking** monitors liquidity consumption in real-time
+- **Greedy algorithm** allocates to best strategies first
+- **Constraint checking** respects capital, token, and protocol limits
+- **Debug info** helps troubleshoot allocation decisions
+
+#### Algorithm Flow (Text Summary)
 
 ```
 1. Filter strategies by confidence threshold
@@ -1298,6 +1825,8 @@ Example:
 
 ### Database Relationships
 
+Simple text summary:
+
 ```
 rates_snapshot (MANY)
     ↓ references
@@ -1314,6 +1843,163 @@ positions (ONE per strategy)
     ├→ entry_timestamp → rates_snapshot (for historical rate lookups)
     └→ user_id → users table (future Phase 2)
 ```
+
+---
+
+## Database Schema Visual (Entity Relationship Diagram)
+
+This ERD shows all tables, their key columns, and relationships with foreign keys.
+
+```
+┌─────────────────────────────────────────────────────────┐
+│ rates_snapshot (Time-series cache)                      │
+├─────────────────────────────────────────────────────────┤
+│ PK: (timestamp, protocol, token_contract)               │
+│ - timestamp TIMESTAMP                                    │
+│ - protocol VARCHAR(50)                                   │
+│ - token VARCHAR(50)                                      │
+│ - token_contract TEXT ──────┐                           │
+│ - lend_total_apr DECIMAL     │                           │
+│ - borrow_total_apr DECIMAL   │                           │
+│ - price_usd DECIMAL          │                           │
+│ - available_borrow_usd       │                           │
+│ - borrow_fee DECIMAL         │                           │
+│ - ...                        │                           │
+└──────────────────────────────┼───────────────────────────┘
+                               │
+                               │ FK
+                               ▼
+┌─────────────────────────────────────────────────────────┐
+│ token_registry (Metadata cache)                         │
+├─────────────────────────────────────────────────────────┤
+│ PK: token_contract                                       │
+│ - token_contract TEXT                                    │
+│ - symbol TEXT                                            │
+│ - pyth_id TEXT                                           │
+│ - coingecko_id TEXT                                      │
+│ - seen_on_navi BOOLEAN                                   │
+│ - seen_on_alphafi BOOLEAN                                │
+│ - seen_on_suilend BOOLEAN                                │
+│ - first_seen TIMESTAMP                                   │
+│ - last_seen TIMESTAMP                                    │
+└─────────────────────────────────────────────────────────┘
+       ▲
+       │ FK
+       │
+┌──────┴──────────────────────────────────────────────────┐
+│ positions (Position tracking)                           │
+├─────────────────────────────────────────────────────────┤
+│ PK: position_id                                          │
+│ - position_id TEXT (UUID)                                │
+│ - status TEXT ('active'/'closed'/'liquidated')           │
+│ - strategy_type TEXT                                     │
+│ - entry_timestamp TIMESTAMP ────┐                        │
+│ - token1_contract TEXT ──────┐  │                        │
+│ - token2_contract TEXT ───┐  │  │                        │
+│ - token3_contract TEXT ──┐│  │  │                        │
+│ - protocol_A TEXT        ││  │  │                        │
+│ - protocol_B TEXT        ││  │  │                        │
+│ - deployment_usd DECIMAL ││  │  │                        │
+│ - L_A, B_A, L_B, B_B     ││  │  │                        │
+│ - entry_lend_rate_1A     ││  │  │                        │
+│ - entry_price_1A         ││  │  │                        │
+│ - portfolio_id TEXT      ││  │  │                        │
+│ - ...                    ││  │  │                        │
+└──────────────────────────┼┼──┼──┼────────────────────────┘
+                           ││  │  │
+                           ││  │  └─> Used to lookup
+                           ││  │      rates_snapshot at
+                           ││  │      entry_timestamp
+                           ││  │
+                           ││  └───> FK to token_registry
+                           │└──────> FK to token_registry
+                           └───────> FK to token_registry
+       │
+       │ parent
+       ▼
+┌─────────────────────────────────────────────────────────┐
+│ position_rebalances (Segment history)                   │
+├─────────────────────────────────────────────────────────┤
+│ PK: (position_id, sequence_number)                       │
+│ - position_id TEXT ──┘ (FK to positions)                │
+│ - sequence_number INT                                    │
+│ - segment_start_timestamp TIMESTAMP                      │
+│ - segment_end_timestamp TIMESTAMP                        │
+│ - closing_lend_rate_1A DECIMAL                           │
+│ - closing_price_1A DECIMAL                               │
+│ - opening_lend_rate_1A DECIMAL                           │
+│ - opening_price_1A DECIMAL                               │
+│ - realized_pnl DECIMAL                                   │
+│ - ...                                                    │
+└─────────────────────────────────────────────────────────┘
+       │
+       │ FK
+       ▼
+┌─────────────────────────────────────────────────────────┐
+│ portfolios (Portfolio metadata)                         │
+├─────────────────────────────────────────────────────────┤
+│ PK: portfolio_id                                         │
+│ - portfolio_id TEXT (UUID)                               │
+│ - portfolio_name TEXT                                    │
+│ - created_at TIMESTAMP                                   │
+│ - updated_at TIMESTAMP                                   │
+└─────────────────────────────────────────────────────────┘
+       ▲
+       │ FK (portfolio_id)
+       │
+       └─────────────┐
+                     │
+┌────────────────────┴────────────────────────────────────┐
+│ position_statistics (Computed metrics cache)            │
+├─────────────────────────────────────────────────────────┤
+│ PK: (position_id, timestamp_seconds)                     │
+│ - position_id TEXT ──┘ (FK to positions)                │
+│ - timestamp_seconds INT                                  │
+│ - total_pnl DECIMAL                                      │
+│ - total_earnings DECIMAL                                 │
+│ - base_earnings DECIMAL                                  │
+│ - reward_earnings DECIMAL                                │
+│ - total_fees DECIMAL                                     │
+│ - realized_apr DECIMAL                                   │
+│ - current_apr DECIMAL                                    │
+│ - holding_days DECIMAL                                   │
+│ - ...                                                    │
+└─────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────┐
+│ reward_token_prices (Reward token pricing)              │
+├─────────────────────────────────────────────────────────┤
+│ PK: (timestamp, reward_token_contract)                   │
+│ - timestamp TIMESTAMP                                    │
+│ - reward_token VARCHAR(50)                               │
+│ - reward_token_contract TEXT ──┐                         │
+│ - reward_token_price_usd        │                         │
+└─────────────────────────────────┼─────────────────────────┘
+                                  │
+                                  │ FK
+                                  ▼
+                           (token_registry)
+```
+
+**Table Purposes:**
+
+| Table | Cache Type | Purpose |
+|-------|-----------|---------|
+| **rates_snapshot** | Tier 1 Cache | Historical protocol data (rates, prices, liquidity) |
+| **token_registry** | Metadata | Token catalog with price API mappings |
+| **positions** | Event Log | Position entry state (immutable entry data) |
+| **position_rebalances** | Segment History | Rebalance history and segment PnL tracking |
+| **position_statistics** | Computed Cache | Pre-calculated metrics (PnL, APR, earnings) |
+| **portfolios** | Grouping | Portfolio metadata and naming |
+| **reward_token_prices** | Pricing | Standalone pricing for reward tokens |
+
+**Relationship Summary:**
+- `rates_snapshot` → `token_registry`: Each rate references a token
+- `positions` → `token_registry`: Each position uses 1-3 tokens
+- `positions` → `rates_snapshot`: Entry timestamp used for historical lookups
+- `position_rebalances` → `positions`: Many segments per position
+- `position_statistics` → `positions`: Many snapshots per position
+- `portfolios` ← `positions`: Portfolio groups multiple positions
 
 ---
 

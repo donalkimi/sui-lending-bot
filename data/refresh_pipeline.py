@@ -22,6 +22,7 @@ from config import settings
 from config.stablecoins import STABLECOIN_CONTRACTS
 from data.protocol_merger import merge_protocol_data
 from analysis.rate_analyzer import RateAnalyzer
+from analysis.strategy_calculators import get_all_strategy_types
 from data.rate_tracker import RateTracker
 from alerts.slack_notifier import SlackNotifier
 from utils.time_helpers import to_seconds, to_datetime_str
@@ -174,7 +175,8 @@ def refresh_pipeline(
             borrow_fees=borrow_fees,
             borrow_weights=borrow_weights,
             timestamp=current_seconds,  # Pass Unix timestamp in seconds (integer)
-            liquidation_distance=liquidation_distance
+            liquidation_distance=liquidation_distance,
+            strategy_types=get_all_strategy_types()  # Generate all strategy types
         )
 
         protocol_a, protocol_b, all_results = analyzer.find_best_protocol_pair()

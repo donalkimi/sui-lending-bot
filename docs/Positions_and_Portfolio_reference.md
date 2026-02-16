@@ -2,7 +2,74 @@
 
 **Version:** 2.0 (Post-Refactor)
 **Status:** Implementation Plan
-**Last Updated:** February 12, 2026
+**Last Updated:** February 16, 2026
+
+---
+
+## Complete Data Flow: Strategy Discovery to Position Deployment
+
+**Critical Understanding**: The generation methods in RateAnalyzer **discover opportunities**, they do NOT create positions in the database. Position creation only happens when a user explicitly clicks "Deploy".
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ PHASE 1: DATA COLLECTION (Hourly on Railway)                │
+└─────────────────────────────────────────────────────────────┘
+   refresh_pipeline()
+   ├─ Fetches rates, prices, fees from all protocols
+   ├─ Saves to rates_snapshot table (immutable)
+   └─ Returns: merged DataFrames
+
+                    ↓
+
+┌─────────────────────────────────────────────────────────────┐
+│ PHASE 2: STRATEGY DISCOVERY (Analysis Layer)                │
+└─────────────────────────────────────────────────────────────┘
+   RateAnalyzer.analyze_all_combinations()
+   │
+   ├─ For each strategy type:
+   │  ├─ _generate_stablecoin_strategies()
+   │  │  └─ Yields 1-leg strategies (pure analysis, no DB writes)
+   │  ├─ _generate_noloop_strategies()
+   │  │  └─ Yields 3-leg strategies (pure analysis, no DB writes)
+   │  └─ _generate_recursive_strategies()
+   │     └─ Yields 4-leg strategies (pure analysis, no DB writes)
+   │
+   └─ Returns: DataFrame with 100-500+ potential strategies
+      └─ NO DATABASE WRITES TO POSITIONS TABLE
+
+                    ↓
+
+┌─────────────────────────────────────────────────────────────┐
+│ PHASE 3: DASHBOARD DISPLAY ("All Strategies" Tab)           │
+└─────────────────────────────────────────────────────────────┘
+   User browses strategies
+   │
+   ├─ Filters by strategy_type, APR, token
+   ├─ Sorts by net_apr
+   └─ Clicks "Deploy" on ONE strategy
+      └─ STILL NO DATABASE WRITES (just UI interaction)
+
+                    ↓
+
+┌─────────────────────────────────────────────────────────────┐
+│ PHASE 4: POSITION DEPLOYMENT (Creates database record)      │
+└─────────────────────────────────────────────────────────────┘
+   User confirms in deployment modal
+   │
+   └─ position_service.create_position()
+      ├─ Reads strategy data from Phase 2 DataFrame
+      ├─ Creates position_id (UUID)
+      ├─ INSERT INTO positions table ← FIRST DB WRITE
+      └─ Position now tracked in "Positions" tab
+```
+
+**Key Distinction**:
+- **Phases 1-3**: Read-only analysis (discovering what's possible)
+- **Phase 4**: Write operation (committing capital to a specific strategy)
+
+This is analogous to:
+- **Phases 1-3**: Browsing products in an online store
+- **Phase 4**: Clicking "Buy Now" and creating an order
 
 ---
 
@@ -40,6 +107,119 @@ The position rendering system provides a unified, reusable way to display positi
 - **#5**: Unix timestamps (seconds as int) internally
 - **#11**: Dashboard as pure view layer - infrastructure handled internally
 - **#13**: Explicit error handling with debug info
+
+---
+
+## Position Lifecycle: State Machine
+
+This diagram shows all possible states a position can be in and the transitions between them.
+
+```
+                    ┌──────────────────┐
+                    │ STRATEGY         │
+                    │ DISCOVERY        │
+                    │ (Analysis Only)  │
+                    └────────┬─────────┘
+                             │
+                             │ User clicks "Deploy"
+                             ▼
+                    ┌──────────────────┐
+                    │   PENDING        │
+                    │                  │
+                    │ - Deployment     │
+                    │   modal shown    │
+                    │ - User reviews   │
+                    │ - Not in DB yet  │
+                    └────────┬─────────┘
+                             │
+                             │ User confirms
+                             ▼
+                    ┌──────────────────┐
+         ┌──────────┤   ACTIVE         │◄──────────┐
+         │          │                  │           │
+         │          │ - In database    │           │
+         │          │ - Earning yield  │           │
+         │          │ - PnL tracking   │           │
+         │          │ - status='active'│           │
+         │          └────────┬─────────┘           │
+         │                   │                     │
+         │                   │ User clicks         │ User clicks
+         │                   │ "Rebalance"         │ "Cancel Rebalance"
+         │                   ▼                     │
+         │          ┌──────────────────┐           │
+         │          │  REBALANCING     │───────────┘
+         │          │                  │
+         │          │ - Rebalance      │
+         │          │   modal shown    │
+         │          │ - User reviews   │
+         │          │ - Still active   │
+         │          └────────┬─────────┘
+         │                   │
+         │                   │ User confirms rebalance
+         │                   ▼
+         │          ┌──────────────────┐
+         │          │   ACTIVE         │
+         │          │ (Rebalanced)     │
+         │          │                  │
+         │          │ - New segment    │
+         │          │ - Entry state    │
+         │          │   reset          │
+         │          │ - Old segment    │
+         │          │   finalized      │
+         │          └────────┬─────────┘
+         │                   │
+         │                   │ User clicks "Close"
+         │                   ▼
+         │          ┌──────────────────┐
+         └─────────►│  CLOSED          │
+                    │                  │
+                    │ - No longer      │
+                    │   earning        │
+                    │ - Final PnL      │
+                    │   calculated     │
+                    │ - status='closed'│
+                    └────────┬─────────┘
+                             │
+                             │ Liquidation event
+                             │ (monitoring system)
+                             ▼
+                    ┌──────────────────┐
+                    │  LIQUIDATED      │
+                    │                  │
+                    │ - Capital lost   │
+                    │ - status=        │
+                    │   'liquidated'   │
+                    └──────────────────┘
+```
+
+**State Transitions:**
+
+| From State | To State | Trigger | Database Action |
+|------------|----------|---------|-----------------|
+| **PENDING** | ACTIVE | User confirms deployment | `INSERT INTO positions (status='active')` |
+| **ACTIVE** | REBALANCING | User clicks "Rebalance" | None (UI state only) |
+| **REBALANCING** | ACTIVE | User confirms rebalance | `INSERT INTO position_rebalances`<br>`UPDATE positions SET entry_* = new_rates` |
+| **REBALANCING** | ACTIVE | User clicks "Cancel" | None (return to normal rendering) |
+| **ACTIVE** | CLOSED | User clicks "Close" | `UPDATE positions SET status='closed'` |
+| **ACTIVE** | LIQUIDATED | Monitoring system detects | `UPDATE positions SET status='liquidated'` |
+
+**State Characteristics:**
+
+| State | In Database? | Earning? | PnL Status | User Actions |
+|-------|--------------|----------|------------|--------------|
+| **STRATEGY DISCOVERY** | No | N/A | N/A | Browse strategies |
+| **PENDING** | No | No | N/A | Confirm or cancel deployment |
+| **ACTIVE** | Yes | Yes | Unrealized | Rebalance, Close |
+| **REBALANCING** | Yes | Yes | Unrealized | Confirm or cancel rebalance |
+| **CLOSED** | Yes | No | Realized | View history only |
+| **LIQUIDATED** | Yes | No | Realized (loss) | View history only |
+
+**Key Points:**
+- **PENDING** and **REBALANCING** are UI-only states (no database writes until confirmed)
+- **ACTIVE** is the primary earning state
+- **Rebalancing** creates new segment and resets entry state
+- **CLOSED** and **LIQUIDATED** are terminal states (no further transitions)
+- **Status field** in database only has 3 values: 'active', 'closed', 'liquidated'
 
 ---
 
@@ -88,6 +268,170 @@ The position rendering system provides a unified, reusable way to display positi
 │  - build_token_flow_string() - Display format       │
 └─────────────────────────────────────────────────────┘
 ```
+
+---
+
+### Renderer Registry: Strategy Type → Renderer Class Mapping
+
+The system uses a **registry pattern** to map strategy types to renderer classes. This enables different rendering logic for each strategy type (4-leg, 3-leg, 1-leg, etc.) while keeping a common interface.
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ REGISTRY INITIALIZATION (Module Load Time)                   │
+└─────────────────────────────────────────────────────────────┘
+   dashboard/strategy_renderers.py
+   │
+   └─ STRATEGY_RENDERERS = {
+      'recursive_lending': RecursiveLendingRenderer,
+      'noloop': NoLoopRenderer,
+      'stablecoin': StablecoinRenderer,
+      'funding_rate_arb': FundingRateArbRenderer,
+      ...
+   }
+
+                    ↓
+
+┌─────────────────────────────────────────────────────────────┐
+│ USAGE: render_position_expander()                           │
+└─────────────────────────────────────────────────────────────┘
+   Get renderer for strategy type:
+   │
+   ├─ strategy_type = position['strategy_type']  # e.g., 'recursive_lending'
+   │
+   ├─ Get renderer class from registry:
+   │  renderer_class = STRATEGY_RENDERERS.get(strategy_type)
+   │  if not renderer_class:
+   │      renderer_class = RecursiveLendingRenderer  # Fallback
+   │
+   ├─ Instantiate renderer:
+   │  renderer = renderer_class()
+   │
+   └─ Call render methods:
+      ├─ renderer.render_detail_table(position, rebalance, ...)
+      ├─ renderer.get_metrics_layout()
+      └─ renderer.build_token_flow_string(position)
+
+                    ↓
+
+┌─────────────────────────────────────────────────────────────┐
+│ RENDERER INTERFACE (Base Class)                              │
+└─────────────────────────────────────────────────────────────┘
+   class StrategyRendererBase(ABC):
+      @abstractmethod
+      def render_detail_table(self, position, rebalance, ...):
+         """
+         Render strategy-specific detail table (4-leg, 3-leg, etc.)
+
+         Displays: All legs with rates, prices, amounts, etc.
+         """
+         pass
+
+      @abstractmethod
+      def get_metrics_layout(self):
+         """
+         Return list of metric definitions for summary.
+
+         Returns: [(label, key, format), ...]
+         """
+         pass
+
+      @abstractmethod
+      def build_token_flow_string(self, position):
+         """
+         Build human-readable token flow string.
+
+         Returns: "USDC → DEEP → USDC"
+         """
+         pass
+
+                    ↓
+
+┌─────────────────────────────────────────────────────────────┐
+│ CONCRETE RENDERERS (Strategy-Specific)                       │
+└─────────────────────────────────────────────────────────────┘
+   RecursiveLendingRenderer:
+      ├─ render_detail_table()
+      │  ├─ 4 rows: Lend1A, Borrow2A, Lend2B, Borrow3B
+      │  ├─ Shows: rates, prices, amounts, liq prices
+      │  └─ Highlights: rebalance requirements
+      │
+      ├─ get_metrics_layout()
+      │  └─ Returns: [
+      │        ('Total PnL', 'total_pnl', '$'),
+      │        ('Total Earnings', 'total_earnings', '$'),
+      │        ...
+      │     ]
+      │
+      └─ build_token_flow_string()
+         └─ Returns: "USDC → DEEP → USDC"
+
+   NoLoopRenderer:
+      ├─ render_detail_table()
+      │  ├─ 3 rows: Lend1A, Borrow2A, Lend2B
+      │  └─ No B_B leg (token3 is NULL)
+      │
+      ├─ get_metrics_layout()
+      │  └─ Same as recursive (no B_B fees)
+      │
+      └─ build_token_flow_string()
+         └─ Returns: "USDC → DEEP"
+
+   StablecoinRenderer:
+      ├─ render_detail_table()
+      │  ├─ 1 row: Lend1A only
+      │  └─ No borrow legs
+      │
+      ├─ get_metrics_layout()
+      │  └─ Returns: [
+      │        ('Total Earnings', 'total_earnings', '$'),
+      │        ('Base Earnings', 'base_earnings', '$'),
+      │        ('Reward Earnings', 'reward_earnings', '$')
+      │     ]  # No PnL (no costs/fees)
+      │
+      └─ build_token_flow_string()
+         └─ Returns: "USDC (Lend Only)"
+
+                    ↓
+
+┌─────────────────────────────────────────────────────────────┐
+│ EXTENSION: ADDING NEW RENDERER                               │
+└─────────────────────────────────────────────────────────────┘
+   1. Create new renderer class:
+      class MyNewStrategyRenderer(StrategyRendererBase):
+          def render_detail_table(self, position, ...):
+              # Custom table layout
+              ...
+
+          def get_metrics_layout(self):
+              return [('Metric1', 'key1', '$'), ...]
+
+          def build_token_flow_string(self, position):
+              return f"{position['token1']} → ..."
+
+   2. Register in STRATEGY_RENDERERS:
+      STRATEGY_RENDERERS['my_new_strategy'] = MyNewStrategyRenderer
+
+   → NO CHANGES to render_position_expander()
+   → Registry automatically routes to new renderer
+   → All tabs use new renderer automatically
+```
+
+**Key Architectural Benefits:**
+
+| Benefit | Implementation |
+|---------|----------------|
+| **Plugin Architecture** | Add new renderers without modifying existing code |
+| **Strategy-Specific UI** | Each strategy type has custom table layout |
+| **Common Interface** | All renderers implement StrategyRendererBase |
+| **Type Safety** | Fallback to default renderer if unknown type |
+| **Extensibility** | 2-step process to add new renderer |
+
+**File Reference:**
+- **Base Class**: `dashboard/strategy_renderers.py` - `StrategyRendererBase`
+- **Registry**: `STRATEGY_RENDERERS` dict at module level
+- **Usage**: `dashboard/position_renderers.py` - `render_position_expander()`
+
+---
 
 ### Data Flow
 
@@ -200,6 +544,113 @@ def render_positions_batch(position_ids, timestamp_seconds, context):
             portfolio_id, expanded=False
         )
 ```
+
+---
+
+### Batch Rendering Pipeline: 3 Queries for N Positions
+
+This visual flow shows how the batch rendering system loads data for multiple positions efficiently, using only 3 database queries regardless of the number of positions.
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ INPUT: render_positions_batch([id1, id2, ..., idN])         │
+└─────────────────────────────────────────────────────────────┘
+                    ↓
+┌─────────────────────────────────────────────────────────────┐
+│ PHASE 1: INFRASTRUCTURE SETUP (Once)                         │
+└─────────────────────────────────────────────────────────────┘
+   Create database connections
+   ├─ conn = get_db_connection()
+   ├─ engine = get_db_engine()
+   └─ service = PositionService(conn)
+
+                    ↓
+
+┌─────────────────────────────────────────────────────────────┐
+│ PHASE 2: BATCH DATA LOADING (3 Queries Total)               │
+└─────────────────────────────────────────────────────────────┘
+   Query 1: Load ALL position statistics
+   ├─ SELECT * FROM position_statistics
+   │  WHERE position_id IN (id1, id2, ..., idN)
+   │    AND timestamp_seconds = ?
+   └─ Returns: dict[position_id] -> stats_dict
+      └─ Example: {id1: {pnl: 245.32, apr: 0.0842, ...}, ...}
+
+   Query 2: Load ALL rebalance history
+   ├─ SELECT * FROM position_rebalances
+   │  WHERE position_id IN (id1, id2, ..., idN)
+   │  ORDER BY position_id, sequence_number
+   └─ Returns: dict[position_id] -> list[rebalance_dicts]
+      └─ Example: {id1: [{seq: 1, ...}, {seq: 2, ...}], ...}
+
+   Query 3: Load rates snapshot ONCE
+   ├─ SELECT * FROM rates_snapshot
+   │  WHERE timestamp = ?
+   └─ Returns: DataFrame with all rates
+      └─ Used for ALL positions (shared)
+
+                    ↓
+
+┌─────────────────────────────────────────────────────────────┐
+│ PHASE 3: BUILD SHARED LOOKUPS (O(1) Access)                 │
+└─────────────────────────────────────────────────────────────┘
+   Build rate_lookup dict
+   ├─ rate_lookup[(protocol, token)] = {lend, borrow, fee, price}
+   └─ O(1) lookups for all positions
+
+   Build oracle_prices dict
+   ├─ oracle_prices[token] = price_usd
+   └─ O(1) lookups for all positions
+
+                    ↓
+
+┌─────────────────────────────────────────────────────────────┐
+│ PHASE 4: RENDER LOOP (N Iterations)                         │
+└─────────────────────────────────────────────────────────────┘
+   For each position_id in [id1, id2, ..., idN]:
+   │
+   ├─ position = service.get_position_by_id(position_id)
+   ├─ stats = all_stats[position_id]  ← Pre-loaded (O(1))
+   ├─ rebalances = all_rebalances[position_id]  ← Pre-loaded (O(1))
+   │
+   └─ render_position_expander(
+      position, stats, rebalances,
+      rate_lookup, oracle_prices,  ← Shared lookups
+      ...
+   )
+
+                    ↓
+
+┌─────────────────────────────────────────────────────────────┐
+│ OUTPUT: N Position Expanders Rendered in Dashboard          │
+└─────────────────────────────────────────────────────────────┘
+
+PERFORMANCE COMPARISON:
+═══════════════════════════════════════════════════════════════
+┌─────────────────────────────────────────────────────────────┐
+│ Naive Approach (No Batching):                               │
+│ - Queries: 3 × N (3 queries per position)                   │
+│ - 10 positions = 30 queries (~3 seconds)                    │
+│ - 20 positions = 60 queries (~6 seconds)                    │
+└─────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────┐
+│ Batch Approach (This Implementation):                       │
+│ - Queries: 3 total (regardless of N)                        │
+│ - 10 positions = 3 queries (~400ms)                         │
+│ - 20 positions = 3 queries (~600ms)                         │
+│ - Speedup: ~N × faster                                      │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Key Points:**
+- **Batch loading** = 3 queries for N positions (not 3×N)
+- **Shared lookups** = O(1) access to rates/prices (not O(N) DataFrame filtering)
+- **Performance scales** linearly with slight overhead (not quadratically)
+- **Same pattern** used for Positions tab, Portfolio2 tab, future tabs
+- **Memory efficient** = ~200KB total for 20 positions
+
+---
 
 ### Performance Analysis
 
@@ -424,6 +875,156 @@ render_position_expander()
    ├─ context='portfolio2': Rebalance, Close, Remove from Portfolio
    └─ context='portfolio': View Portfolio, Rebalance, Close
 ```
+
+---
+
+## PnL Calculation Flow: Token Amounts × Prices Across Time Periods
+
+This flow shows how position PnL is calculated from historical time-series data, not just entry → live snapshots. Each time period uses actual rates from that timestamp.
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ STEP 1: LOAD POSITION METADATA (Entry State)                │
+└─────────────────────────────────────────────────────────────┘
+   Get position from positions table
+   ├─ entry_timestamp
+   ├─ deployment_usd
+   ├─ L_A, B_A, L_B, B_B (multipliers)
+   ├─ token1, token2, token3
+   └─ protocol_A, protocol_B
+
+                    ↓
+
+┌─────────────────────────────────────────────────────────────┐
+│ STEP 2: LOAD HISTORICAL RATES (Time-series)                 │
+└─────────────────────────────────────────────────────────────┘
+   SELECT DISTINCT timestamp FROM rates_snapshot
+   WHERE timestamp >= entry_timestamp
+     AND timestamp <= live_timestamp
+   ORDER BY timestamp
+   │
+   └─ Returns: [ts1, ts2, ts3, ..., tsN]
+      └─ Defines time periods: [ts1→ts2], [ts2→ts3], ..., [tsN-1→tsN]
+
+                    ↓
+
+┌─────────────────────────────────────────────────────────────┐
+│ STEP 3: CALCULATE EARNINGS PER PERIOD (Lend legs)           │
+└─────────────────────────────────────────────────────────────┘
+   For each time period [T, T+1):
+   │
+   ├─ period_years = (T+1 - T) / seconds_per_year
+   │
+   ├─ Get rates at timestamp T:
+   │  ├─ lend_rate_1A = rates_snapshot[T, protocol_A, token1]
+   │  └─ lend_rate_2B = rates_snapshot[T, protocol_B, token2]
+   │
+   └─ Calculate earnings:
+      ├─ lend_earnings_1A = deployment × L_A × lend_rate_1A × period_years
+      ├─ lend_earnings_2B = deployment × L_B × lend_rate_2B × period_years
+      └─ period_lend_earnings = lend_earnings_1A + lend_earnings_2B
+
+                    ↓
+
+┌─────────────────────────────────────────────────────────────┐
+│ STEP 4: CALCULATE COSTS PER PERIOD (Borrow legs)            │
+└─────────────────────────────────────────────────────────────┘
+   For each time period [T, T+1):
+   │
+   ├─ Get rates at timestamp T:
+   │  ├─ borrow_rate_2A = rates_snapshot[T, protocol_A, token2]
+   │  └─ borrow_rate_3B = rates_snapshot[T, protocol_B, token3]
+   │
+   └─ Calculate costs:
+      ├─ borrow_costs_2A = deployment × B_A × borrow_rate_2A × period_years
+      ├─ borrow_costs_3B = deployment × B_B × borrow_rate_3B × period_years
+      └─ period_borrow_costs = borrow_costs_2A + borrow_costs_3B
+
+                    ↓
+
+┌─────────────────────────────────────────────────────────────┐
+│ STEP 5: CALCULATE ONE-TIME FEES (Entry only)                │
+└─────────────────────────────────────────────────────────────┘
+   Get fees at entry_timestamp:
+   ├─ borrow_fee_2A = rates_snapshot[entry_timestamp, protocol_A, token2]
+   ├─ borrow_fee_3B = rates_snapshot[entry_timestamp, protocol_B, token3]
+   │
+   └─ Calculate one-time fees:
+      ├─ fee_2A = deployment × B_A × borrow_fee_2A
+      ├─ fee_3B = deployment × B_B × borrow_fee_3B
+      └─ total_fees = fee_2A + fee_3B
+
+                    ↓
+
+┌─────────────────────────────────────────────────────────────┐
+│ STEP 6: SUM ACROSS ALL PERIODS (Net PnL)                    │
+└─────────────────────────────────────────────────────────────┘
+   Aggregate all periods:
+   ├─ total_lend_earnings = sum(period_lend_earnings for all periods)
+   ├─ total_borrow_costs = sum(period_borrow_costs for all periods)
+   │
+   └─ Calculate net PnL:
+      ├─ net_earnings = total_lend_earnings - total_borrow_costs - total_fees
+      ├─ current_value = deployment_usd + net_earnings
+      └─ total_pnl = current_value - deployment_usd
+         └─ (Same as net_earnings)
+
+                    ↓
+
+┌─────────────────────────────────────────────────────────────┐
+│ STEP 7: CALCULATE REALIZED APR (Annualized)                 │
+└─────────────────────────────────────────────────────────────┘
+   Annualize the earnings:
+   ├─ holding_days = (live_timestamp - entry_timestamp) / 86400
+   ├─ annual_net_earnings = net_earnings × (365 / holding_days)
+   │
+   └─ realized_apr = annual_net_earnings / deployment_usd
+      └─ Example: $102.34 over 30 days → 12.45% APR
+```
+
+**Example Calculation:**
+
+```
+Position Details:
+- Deployment: $10,000
+- Entry: 2026-02-01 00:00:00
+- Live: 2026-02-11 00:00:00 (10 days)
+- L_A = 1.5, B_A = 1.0, L_B = 1.0, B_B = 0.7
+
+Time Periods (hourly snapshots):
+- Period 1: 2026-02-01 00:00 → 01:00 (1 hour)
+  - lend_rate_1A = 3.0%, lend_rate_2B = 12.0%
+  - borrow_rate_2A = 8.5%, borrow_rate_3B = 5.5%
+  - Earnings: $10k × (1.5×0.03 + 1.0×0.12) × (1/8760) = $0.194
+  - Costs: $10k × (1.0×0.085 + 0.7×0.055) × (1/8760) = $0.141
+  - Net: $0.053
+
+- Period 2: 2026-02-01 01:00 → 02:00 (1 hour)
+  - [Similar calculation with updated rates]
+  ...
+
+Total over 240 periods (10 days):
+- Total Earnings: $312.45
+- Total Costs: $245.12
+- Total Fees: $67.13 (one-time at entry)
+- Net PnL: $312.45 - $245.12 - $67.13 = $0.20
+
+Realized APR:
+- Annual earnings = $0.20 × (365 / 10) = $7.30
+- APR = $7.30 / $10,000 = 0.073%
+```
+
+**Key Points:**
+- **Time-series calculation**: Uses all historical snapshots, not just entry and live
+- **Period-accurate rates**: Each period uses actual rates from that timestamp
+- **One-time fees**: Charged only at entry (not recurring)
+- **Annualized APR**: Actual performance extrapolated to annual rate
+- **Cached results**: Pre-calculated and stored in `position_statistics` table
+
+**File Reference:**
+- **Calculation Logic**: `analysis/position_service.py` - `calculate_position_value()`
+- **Statistics Storage**: `position_statistics` table (cached metrics)
+- **Query Pattern**: Load all timestamps between entry and live
 
 ---
 

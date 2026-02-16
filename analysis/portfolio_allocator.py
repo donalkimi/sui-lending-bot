@@ -410,7 +410,8 @@ class PortfolioAllocator:
         self,
         portfolio_size: float,
         constraints: Dict = None,
-        enable_iterative_updates: bool = True
+        enable_iterative_updates: bool = True,
+        allowed_strategy_types: Optional[List[str]] = None  # NEW: Multi-strategy support
     ) -> Tuple[pd.DataFrame, List[Dict]]:
         """
         Select optimal portfolio using greedy algorithm with constraints.
@@ -425,6 +426,8 @@ class PortfolioAllocator:
         Args:
             portfolio_size: Total USD to allocate
             constraints: Constraint settings (uses defaults if None)
+            enable_iterative_updates: Whether to use iterative liquidity updates
+            allowed_strategy_types: Optional list of strategy types to include (default: all types)
 
         Returns:
             Tuple of (portfolio_df, debug_info)
@@ -440,6 +443,14 @@ class PortfolioAllocator:
         """
         if constraints is None:
             constraints = DEFAULT_ALLOCATION_CONSTRAINTS.copy()
+
+        # NEW: Filter by strategy type if specified
+        if allowed_strategy_types is not None:
+            if 'strategy_type' in self.strategies.columns:
+                self.strategies = self.strategies[
+                    self.strategies['strategy_type'].isin(allowed_strategy_types)
+                ]
+                print(f"[ALLOCATOR] Filtered to strategy types: {allowed_strategy_types}")
 
         # Filter by confidence
         if 'confidence' not in self.strategies.columns:

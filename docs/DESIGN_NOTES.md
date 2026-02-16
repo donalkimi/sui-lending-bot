@@ -751,3 +751,96 @@ display_value = f"{correct_value:.2f}" if safe_value(correct_value) else "N/A"
 **Verification status:**
 - ✅ position_renderers.py: Removed entry_price fallback for segment calculations
 - ⚠️ Codebase audit needed: Check for other inappropriate fallback patterns
+
+### 16. Never Use .get() with Defaults Without Permission
+
+**Core Principle:** NEVER use `.get(key, default)` on dictionaries or DataFrames without explicit permission. Always use direct key access `dict[key]` to fail loudly with KeyError when fields are missing.
+
+**Why:**
+- **Hidden bugs:** `.get()` with defaults masks missing data instead of exposing it
+- **Silent failures:** Code appears to work but produces incorrect results
+- **Data integrity:** Default values (especially 0.0) hide data quality problems
+- **False confidence:** Users see numbers that look correct but are wrong
+
+**The Problem (Silent Defaults):**
+```python
+# ❌ WRONG: Hides missing fields with silent defaults
+upfront_fees_pct = (
+    strategy.get('b_a', 0.0) * strategy.get('borrow_fee_2a', 0.0) +
+    strategy.get('b_b', 0.0) * strategy.get('borrow_fee_3b', 0.0)
+)
+# Result: If borrow_fee_2a is missing, returns 0.0 instead of failing
+# Calculation appears successful but is WRONG
+```
+
+**The Solution (Fail Loud):**
+```python
+# ✅ CORRECT: Fails immediately with KeyError if fields are missing
+upfront_fees_pct = (
+    strategy['b_a'] * strategy['borrow_fee_2a'] +
+    strategy['b_b'] * strategy['borrow_fee_3b']
+)
+# Result: If borrow_fee_2a is missing, raises KeyError immediately
+# Error message shows exactly what's missing: "KeyError: 'borrow_fee_2a'"
+```
+
+**Real Examples (Fixed February 16, 2026):**
+
+**Dashboard modal calculations (dashboard_renderer.py lines 599-601):**
+- Before: `strategy.get('b_a', 0.0)` - silently defaulted to 0.0
+- After: `strategy['b_a']` - fails with KeyError if missing
+
+**Position multipliers (dashboard_renderer.py lines 525-534):**
+- Before: `strategy.get('l_a', 0.0)` - silently defaulted to 0.0
+- After: `strategy['l_a']` - fails with KeyError if missing
+
+**Position details table (dashboard_renderer.py lines 744-830):**
+- Before: `strategy.get('liquidation_threshold_1a', 0.0)` - silently defaulted to 0.0
+- After: `strategy['liquidation_threshold_1a']` - fails with KeyError if missing
+
+**When .get() IS acceptable (with explicit permission):**
+- Optional UI features that can be omitted without affecting correctness
+- User preferences with documented defaults
+- Backwards compatibility with explicit comment explaining why
+- Must get explicit approval before adding any `.get()` with default
+
+**Pattern requirements:**
+1. **Direct access:** Always use `dict[key]` not `dict.get(key, default)`
+2. **Required fields:** All calculator output fields are required - no defaults
+3. **Fail fast:** Let KeyError propagate immediately
+4. **Clear errors:** Error message shows exactly which field is missing
+5. **Permission required:** If you think you need a default, ask first
+
+**Common anti-patterns to avoid:**
+```python
+# ❌ WRONG: Silent defaults everywhere
+l_a = strategy.get('l_a', 0.0)
+b_a = strategy.get('b_a', 0.0)
+price = strategy.get('P1_A', 1.0)
+fee = strategy.get('borrow_fee_2a', 0.0)
+
+# ✅ CORRECT: Direct access, fail loud
+l_a = strategy['l_a']
+b_a = strategy['b_a']
+price = strategy['P1_A']
+fee = strategy['borrow_fee_2a']
+```
+
+**Effect:**
+- Missing fields cause immediate, obvious failures
+- Error messages pinpoint exactly what's wrong
+- Data quality problems get fixed instead of hidden
+- Calculations are trustworthy - never based on guessed defaults
+
+**Fixed locations (February 16, 2026):**
+- ✅ dashboard_renderer.py: Upfront fees calculation (line 599-601)
+- ✅ dashboard_renderer.py: Position calculations (lines 525-534)
+- ✅ dashboard_renderer.py: Token amounts and sizes (lines 668-684)
+- ✅ dashboard_renderer.py: Position details table (lines 744-830)
+- ✅ dashboard_renderer.py: Liquidation calculations (lines 701-736)
+- ✅ dashboard_renderer.py: APR summary table (lines 613-617)
+
+**Verification status:**
+- ✅ All critical dashboard display code uses direct key access
+- ✅ All strategy dict fields are required (no defaults in calculators)
+- ⚠️ Remaining `.get()` calls in non-critical display code to be audited
