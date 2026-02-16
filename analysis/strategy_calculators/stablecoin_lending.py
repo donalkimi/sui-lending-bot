@@ -84,6 +84,22 @@ class StablecoinLendingCalculator(StrategyCalculatorBase):
 
         return lend_total_apr
 
+    def calculate_gross_apr(self,
+                           positions: Dict[str, float],
+                           rates: Dict[str, float]) -> float:
+        """
+        Calculate gross APR for stablecoin lending strategy.
+
+        Formula:
+            gross_apr = L_A × lend_total_apr_1A
+
+        Note: No borrowing, so gross_apr = net_apr for stablecoin strategies.
+        """
+        l_a = positions['l_a']
+        lend_total_1A = rates['lend_total_apr_1A']
+
+        return l_a * lend_total_1A
+
     def analyze_strategy(self,
                         token1: str,
                         protocol_a: str,
@@ -119,6 +135,22 @@ class StablecoinLendingCalculator(StrategyCalculatorBase):
         # Calculate positions (trivial)
         positions = self.calculate_positions()
 
+        # Calculate ALL fee-adjusted APRs using base class methods
+        rates = {'lend_total_apr_1A': lend_total_apr_1A}
+        fees = {
+            'borrow_fee_2A': 0.0,
+            'borrow_fee_3B': 0.0
+        }
+        fee_adjusted_aprs = self.calculate_fee_adjusted_aprs(positions, rates, fees)
+
+        # Extract all APR values from single source of truth
+        apr_gross = fee_adjusted_aprs['apr_gross']
+        apr_net = fee_adjusted_aprs['apr_net']
+        apr5 = fee_adjusted_aprs['apr5']
+        apr30 = fee_adjusted_aprs['apr30']
+        apr90 = fee_adjusted_aprs['apr90']
+        days_to_breakeven = fee_adjusted_aprs['days_to_breakeven']  # Will be 0.0 (no fees)
+
         # Extract contract from kwargs (passed by analyzer)
         token1_contract = kwargs.get('token1_contract')
 
@@ -141,12 +173,12 @@ class StablecoinLendingCalculator(StrategyCalculatorBase):
             'l_b': positions['l_b'],
             'b_b': positions['b_b'],
 
-            # APR metrics (no fees to amortize, so all time horizons are the same)
-            'apr_net': lend_total_apr_1A,
-            'apr5': lend_total_apr_1A,
-            'apr30': lend_total_apr_1A,
-            'apr90': lend_total_apr_1A,
-            'days_to_breakeven': 0.0,  # No upfront fees
+            # APR metrics (all equal for stablecoin since no fees)
+            'apr_net': apr_net,
+            'apr5': apr5,
+            'apr30': apr30,
+            'apr90': apr90,
+            'days_to_breakeven': days_to_breakeven,
 
             # Risk metrics
             'liquidation_distance': float('inf'),  # No liquidation risk

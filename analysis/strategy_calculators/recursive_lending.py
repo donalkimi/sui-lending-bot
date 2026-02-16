@@ -219,6 +219,39 @@ class RecursiveLendingCalculator(StrategyCalculatorBase):
         # Net APR (after fees)
         return gross_apr - fee_cost
 
+    def calculate_gross_apr(self,
+                           positions: Dict[str, float],
+                           rates: Dict[str, float]) -> float:
+        """
+        Calculate gross APR for recursive lending strategy.
+
+        Formula:
+            gross_apr = (L_A × lend_total_apr_1A) + (L_B × lend_total_apr_2B)
+                        - (B_A × borrow_total_apr_2A) - (B_B × borrow_total_apr_3B)
+
+        Note: Excludes upfront fees (borrow_fee_2A, borrow_fee_3B).
+        """
+        l_a = positions['l_a']
+        b_a = positions['b_a']
+        l_b = positions['l_b']
+        b_b = positions['b_b']
+
+        # Extract and validate rates
+        lend_total_1A = rates['lend_total_apr_1A']
+        lend_total_2B = rates['lend_total_apr_2B']
+        borrow_total_2A = rates['borrow_total_apr_2A']
+        borrow_total_3B = rates['borrow_total_apr_3B']
+
+        # Earnings from lending
+        earn_A = l_a * lend_total_1A
+        earn_B = l_b * lend_total_2B
+
+        # Costs from borrowing
+        cost_A = b_a * borrow_total_2A
+        cost_B = b_b * borrow_total_3B
+
+        return earn_A + earn_B - cost_A - cost_B
+
     def analyze_strategy(self,
                         token1: str,
                         token2: str,

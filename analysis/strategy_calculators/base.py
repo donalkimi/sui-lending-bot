@@ -114,3 +114,167 @@ class StrategyCalculatorBase(ABC):
             KeyError: If required rates/prices are missing
         """
         pass
+
+    # ========== Fee-Adjusted APR Calculation Methods ==========
+
+    @abstractmethod
+    def calculate_gross_apr(self,
+                           positions: Dict[str, float],
+                           rates: Dict[str, float]) -> float:
+        """
+        Calculate gross APR (earnings - borrowing costs, before fees).
+
+        This is the annualized yield from lending minus borrowing costs,
+        excluding upfront fees. Fees are subtracted separately in calculate_net_apr().
+
+        Formula:
+            gross_apr = sum(lending_earnings) - sum(borrowing_costs)
+
+        Args:
+            positions: Dict with l_a, b_a, l_b, b_b multipliers
+            rates: Dict with lend_total_apr_1A, lend_total_apr_2B (if applicable),
+                   borrow_total_apr_2A, borrow_total_apr_3B (if applicable)
+
+        Returns:
+            Gross APR as decimal (e.g., 0.0524 = 5.24%)
+
+        Note:
+            This method must be implemented by each calculator since the
+            lending/borrowing structure differs:
+            - Stablecoin: Only l_a lending, no borrowing
+            - NoLoop: l_a + l_b lending, b_a borrowing
+            - Recursive: l_a + l_b lending, b_a + b_b borrowing
+        """
+        raise NotImplementedError("Subclasses must implement calculate_gross_apr()")
+
+    def calculate_apr_for_days(self,
+                               gross_apr: float,
+                               b_a: float,
+                               b_b: float,
+                               borrow_fee_2A: float,
+                               borrow_fee_3B: float,
+                               days: int) -> float:
+        """
+        Calculate time-adjusted APR for a specific time horizon.
+
+        When upfront fees exist, short-term APRs are lower because fees
+        are amortized over fewer days.
+
+        Formula:
+            APR(X days) = gross_apr - (total_fee_cost × 365 / X)
+
+            Where total_fee_cost = b_a × fee_2A + b_b × fee_3B
+
+        Args:
+            gross_apr: Gross APR (before fees) as decimal
+            b_a: Borrow multiplier for leg 2A
+            b_b: Borrow multiplier for leg 3B (0.0 for stablecoin/noloop)
+            borrow_fee_2A: Upfront fee for borrowing token2 (0.0 if None)
+            borrow_fee_3B: Upfront fee for borrowing token3 (0.0 if None)
+            days: Time horizon (5, 30, 90, etc.)
+
+        Returns:
+            Time-adjusted APR as decimal
+
+        Example:
+            gross_apr = 0.11 (11%), fees = 0.002 (0.2%), days = 5
+            → APR(5d) = 0.11 - (0.002 × 365 / 5) = 0.11 - 0.146 = -0.036 (-3.6%)
+            (Negative because fees are too high for 5-day horizon)
+        """
+        total_fee_cost = b_a * borrow_fee_2A + b_b * borrow_fee_3B
+        fee_impact = total_fee_cost * 365.0 / days
+        return gross_apr - fee_impact
+
+    def calculate_days_to_breakeven(self,
+                                    gross_apr: float,
+                                    b_a: float,
+                                    b_b: float,
+                                    borrow_fee_2A: float,
+                                    borrow_fee_3B: float) -> float:
+        """
+        Calculate days until upfront fees are recovered.
+
+        Formula:
+            days_to_breakeven = (total_fee_cost × 365) / gross_apr
+
+        Args:
+            gross_apr: Gross APR (before fees) as decimal
+            b_a: Borrow multiplier for leg 2A
+            b_b: Borrow multiplier for leg 3B (0.0 for stablecoin/noloop)
+            borrow_fee_2A: Upfront fee for borrowing token2 (0.0 if None)
+            borrow_fee_3B: Upfront fee for borrowing token3 (0.0 if None)
+
+        Returns:
+            Days to breakeven (0.0 if no fees or gross_apr <= 0)
+
+        Example:
+            gross_apr = 0.11 (11%), total_fees = 0.002 (0.2%)
+            → days = (0.002 × 365) / 0.11 = 6.6 days
+        """
+        if gross_apr <= 0:
+            return 0.0
+
+        total_fee_cost = b_a * borrow_fee_2A + b_b * borrow_fee_3B
+        if total_fee_cost == 0:
+            return 0.0
+
+        return (total_fee_cost * 365.0) / gross_apr
+
+    def calculate_fee_adjusted_aprs(self,
+                                    positions: Dict[str, float],
+                                    rates: Dict[str, float],
+                                    fees: Dict[str, float]) -> Dict[str, float]:
+        """
+        Calculate all fee-adjusted APR metrics.
+
+        Returns net APR (365-day), time-adjusted APRs (5/30/90 day),
+        and days to breakeven.
+
+        Args:
+            positions: Dict with l_a, b_a, l_b, b_b multipliers
+            rates: Dict with lending/borrowing APRs
+            fees: Dict with borrow_fee_2A, borrow_fee_3B (nullable)
+
+        Returns:
+            Dict with:
+                - apr_gross: Earnings - borrowing costs (before fees)
+                - apr_net: Net APR (365-day, after fees)
+                - apr5: 5-day time-adjusted APR
+                - apr30: 30-day time-adjusted APR
+                - apr90: 90-day time-adjusted APR
+                - days_to_breakeven: Days to recover upfront fees
+
+        Note:
+            Calls calculate_gross_apr() which must be implemented by subclass.
+        """
+        # Calculate gross APR (subclass-specific implementation)
+        gross_apr = self.calculate_gross_apr(positions, rates)
+
+        # Extract position multipliers and fees
+        b_a = positions['b_a']
+        b_b = positions['b_b']
+        borrow_fee_2A = fees.get('borrow_fee_2A') or 0.0
+        borrow_fee_3B = fees.get('borrow_fee_3B') or 0.0
+
+        # Calculate annualized fee cost (for 365-day net APR)
+        total_fee_cost = b_a * borrow_fee_2A + b_b * borrow_fee_3B
+        apr_net = gross_apr - total_fee_cost
+
+        # Calculate time-adjusted APRs
+        apr5 = self.calculate_apr_for_days(gross_apr, b_a, b_b, borrow_fee_2A, borrow_fee_3B, 5)
+        apr30 = self.calculate_apr_for_days(gross_apr, b_a, b_b, borrow_fee_2A, borrow_fee_3B, 30)
+        apr90 = self.calculate_apr_for_days(gross_apr, b_a, b_b, borrow_fee_2A, borrow_fee_3B, 90)
+
+        # Calculate breakeven
+        days_to_breakeven = self.calculate_days_to_breakeven(
+            gross_apr, b_a, b_b, borrow_fee_2A, borrow_fee_3B
+        )
+
+        return {
+            'apr_gross': gross_apr,
+            'apr_net': apr_net,
+            'apr5': apr5,
+            'apr30': apr30,
+            'apr90': apr90,
+            'days_to_breakeven': days_to_breakeven
+        }

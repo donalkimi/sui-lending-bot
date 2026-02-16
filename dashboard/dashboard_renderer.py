@@ -160,10 +160,10 @@ def display_apr_table(strategy_row: Union[pd.Series, Dict[str, Any]], deployment
 
     # Extract levered APR values
     apr_net_levered = strategy_row['apr_net']
-    apr90_levered = strategy_row.get('apr90', apr_base)
-    apr30_levered = strategy_row.get('apr30', apr_base)
-    apr5_levered = strategy_row.get('apr5', apr_base)
-    days_to_breakeven_levered = strategy_row.get('days_to_breakeven', float('inf'))
+    apr90_levered = strategy_row['apr90']
+    apr30_levered = strategy_row['apr30']
+    apr5_levered = strategy_row['apr5']
+    days_to_breakeven_levered = strategy_row['days_to_breakeven']
 
     # Build single-row table
     apr_table_data = {
@@ -273,7 +273,10 @@ def display_strategy_details(strategy_row: Union[pd.Series, Dict[str, Any]], dep
     max_size = strategy_row.get('max_size')
     max_size_message = None
     if max_size is not None and not pd.isna(max_size):
-        max_size_message = f"📊 **Max Deployable Size:** ${max_size:,.2f}"
+        if max_size == float('inf'):
+            max_size_message = "📊 **Max Deployable Size:** N/A (unlimited)"
+        else:
+            max_size_message = f"📊 **Max Deployable Size:** ${max_size:,.2f}"
 
     # Prepare liquidity constraints message (detailed view)
     available_borrow_2A = strategy_row.get('available_borrow_2a')
@@ -615,7 +618,7 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
         'Liq Dist': f"{strategy['liquidation_distance'] * 100:.2f}%",
         'Upfront Fees (%)': f"{upfront_fees_pct * 100:.2f}%",
         'Days to Breakeven': f"{strategy['days_to_breakeven']:.1f}",
-        'Max Liquidity': f"${strategy['max_size']:,.2f}",
+        'Max Liquidity': "N/A" if strategy['max_size'] == float('inf') else f"${strategy['max_size']:,.2f}",
     }]
     summary_df = pd.DataFrame(summary_data)
 
@@ -647,13 +650,17 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
     max_size = float(strategy.get('max_size', 1000000))
     default_deployment = min(10000.0, max_size)
 
+    # Cap max_value for number_input (Streamlit doesn't accept inf)
+    # Use 1 billion USD as a practical maximum
+    max_value_capped = min(max_size, 1e9) if max_size != float('inf') else 1e9
+
     # Use column to constrain width of input
     col1, col2 = st.columns([1, 2])
     with col1:
         deployment_usd = st.number_input(
             "Deployment Amount (USD)",
             min_value=100.0,
-            max_value=max_size,
+            max_value=max_value_capped,
             value=default_deployment,
             step=100.0,
             help="USD amount to deploy in this strategy"
@@ -1966,7 +1973,10 @@ def render_zero_liquidity_tab(zero_liquidity_results: pd.DataFrame, deployment_u
         for _enum_idx, (idx, row) in enumerate(zero_liquidity_results.iterrows()):
             max_size = row.get('max_size')
             if max_size is not None and not pd.isna(max_size):
-                max_size_text = f" | Max Size ${max_size:,.2f}"
+                if max_size == float('inf'):
+                    max_size_text = " | Max Size: N/A"
+                else:
+                    max_size_text = f" | Max Size ${max_size:,.2f}"
             else:
                 max_size_text = " | No Liquidity Data"
 

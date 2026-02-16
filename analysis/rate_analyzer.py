@@ -895,9 +895,7 @@ class RateAnalyzer:
             
             # Add strategy_type column for multi-strategy support
             df_results['strategy_type'] = 'recursive_lending'
-            print(f"[ANALYZER] Added strategy_type column to {len(df_results)} recursive strategies")
-            print(f"[ANALYZER] Columns after adding strategy_type: {list(df_results.columns)}")
-
+            
             # Sort by apr_net (descending), then by stablecoin-only (True first) as tiebreaker
             df_results = df_results.sort_values(
                 by=['apr_net', 'is_stablecoin_only'],
