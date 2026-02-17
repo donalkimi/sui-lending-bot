@@ -1,31 +1,35 @@
-# Phase 2: Onchain Transaction Execution - Implementation Plan
+# Phase 2: Onchain Transaction Execution - Backend API Specification
 
 ## Context
 
-This plan outlines the implementation of an **onchain transaction execution system** for Sui blockchain lending operations.
+This document specifies the **Backend API** that Sui-Yield-Bot will use to execute yield strategies onchain.
+
+**Architecture:**
+```
+Sui-Yield-Bot → Backend API → Blockchain
+```
 
 **Current State:**
-- Read-only SDK integrations with lending protocols (Suilend, AlphaFi, Navi, Scallop, Bluefin)
-- No onchain execution capability
+- Sui-Yield-Bot generates signals and analyzes opportunities (Phase 1)
+- No execution capability
 
 **Goal:**
-Build an execution engine that processes instructions from Sui-Yield-Bot to execute yield strategies onchain. The system should:
-1. **Accept instruction specifications** - Bot provides token, amount, protocol, direction, tolerances, and any other required parameters
-2. **Validate onchain conditions** - Check for discrepancies between bot expectations (prices, rates) and actual onchain state; abort if differences exceed tolerances
-3. **Generate and execute transactions** - Convert specifications to actual blockchain transactions
-4. **Monitor execution** - Track transaction status and on-chain state
-5. **Handle failures gracefully** - Retry, rollback, or alert on errors
+The implementation team will build a Backend API that:
+1. **Receives instructions** from Sui-Yield-Bot via API calls
+2. **Validates onchain conditions** - Checks if prices/rates match bot expectations within tolerances
+3. **Executes transactions** - Handles all blockchain interaction details
+4. **Returns results** - Confirms execution or explains why it failed
 
 **Intended Outcome:**
-A robust, safe execution engine that takes bot-generated instruction specifications and reliably executes them onchain with comprehensive validation, monitoring, error handling, and risk management.
+Sui-Yield-Bot can execute strategies by making simple API calls, without needing to know blockchain transaction details.
 
 ---
 
-## Sui-Yield-Bot Instruction Model
+## API Request Format
 
-### Input Specification
+### What the Bot Sends
 
-The Sui-Yield-Bot generates instruction specifications for the execution engine. The bot can provide any parameters needed - the fields below are examples of what might be included:
+The bot makes HTTP POST requests with instruction specifications. The bot can include any parameters needed - fields below are examples:
 
 ```python
 # Example instruction specification (bot can provide additional fields as needed)
@@ -53,13 +57,15 @@ ExecutionSpec = {
 }
 ```
 
-**Note for Implementation Team:** If you need additional parameters from the bot (e.g., health factor thresholds, liquidation buffers, rebalance triggers, etc.), request them. The bot can generate any information the execution system requires.
+**Note for Implementation Team:** If you need additional parameters from the bot (e.g., health factor thresholds, liquidation buffers, rebalance triggers, etc.), request them. The bot can provide any information needed.
 
 ### Example: Single Lend Operation
 
 ```python
-# Bot generates instruction to lend 1000 USDC on Suilend
-spec = {
+# Bot makes API request to lend 1000 USDC on Suilend
+import requests
+
+response = requests.post("http://api-url/execute", json={
     "wallet_address": "0xabc123...",
     "protocol": "suilend",
     "action": "lend",
@@ -70,50 +76,95 @@ spec = {
     "expected_rate": 0.031,  # 3.1%
     "price_tolerance": 0.005,
     "rate_tolerance": 0.03
-}
+})
 
-# System generates transaction, validates, executes, monitors
-result = execute_instruction(spec)
+result = response.json()
+# result contains execution status, transaction hash, or error details
 ```
 
 ### Example: Multi-Leg Operation
 
 ```python
-# Bot generates instruction to execute a 2-leg strategy
-specs = [
-    {
-        "action": "lend",
-        "protocol": "suilend",
-        "token_name": "USDC",
-        "token_contract": "0x...",
-        "amount": 10000.0,
-        "expected_rate": 0.03,
-        # ... other params
-    },
-    {
-        "action": "borrow",
-        "protocol": "suilend",
-        "token_name": "SUI",
-        "token_contract": "0x2::sui::SUI",
-        "amount": 2500.0,
-        "expected_rate": 0.08,
-        # ... other params
-    }
-]
+# Bot makes API request to execute 2-leg strategy
+response = requests.post("http://api-url/execute-batch", json={
+    "operations": [
+        {
+            "action": "lend",
+            "protocol": "suilend",
+            "token_name": "USDC",
+            "token_contract": "0x...",
+            "amount": 10000.0,
+            "expected_rate": 0.03,
+            # ... other params
+        },
+        {
+            "action": "borrow",
+            "protocol": "suilend",
+            "token_name": "SUI",
+            "token_contract": "0x2::sui::SUI",
+            "amount": 2500.0,
+            "expected_rate": 0.08,
+            # ... other params
+        }
+    ]
+})
 
-# System generates transaction batch, validates all legs, executes in order
-result = execute_instruction_batch(specs)
+result = response.json()
+# result contains execution status for all operations
 ```
-
-**Key Point:** The system does NOT decide what to execute. The bot specifies everything explicitly. The system's job is to safely execute those instructions.
 
 ---
 
-## Required Capabilities
+## API Response Format
 
-### Progressive Complexity
+### What the Bot Receives Back
 
-The execution system should be built progressively, starting simple and adding complexity:
+The API should return clear success/failure responses:
+
+**Success Response:**
+```json
+{
+    "success": true,
+    "transaction_hash": "0xabc123...",
+    "actual_price": 1.00009,
+    "actual_rate": 0.0309,
+    "gas_used": 0.045,
+    "timestamp": 1707332400
+}
+```
+
+**Failure Response:**
+```json
+{
+    "success": false,
+    "error_code": "RATE_DRIFT",
+    "error_message": "Current rate 0.025 outside tolerance (expected 0.031 ± 3%)",
+    "current_price": 1.00012,
+    "current_rate": 0.025
+}
+```
+
+**Multi-Leg Response:**
+```json
+{
+    "success": true,
+    "operations": [
+        {"action": "lend", "status": "success", "transaction_hash": "0x123..."},
+        {"action": "borrow", "status": "success", "transaction_hash": "0x456..."}
+    ],
+    "total_gas_used": 0.089
+}
+```
+
+**Key Point:** The bot specifies what to execute, the API handles all blockchain details and returns results.
+
+---
+
+## API Capabilities
+
+### Progressive Implementation
+
+The Backend API should be built progressively, starting simple and adding complexity:
 
 **Phase 2A: Single-Leg Operations (MVP)**
 - Lend single token to single protocol
@@ -147,11 +198,18 @@ The execution system should be built progressively, starting simple and adding c
 - Perp position operations
 - Example: Short 10x SUI-PERP on Bluefin
 
+**Phase 2F: Spot vs Perp Spread Execution**
+- Simultaneous spot and perp execution to capture basis/spread
+- Opposite positions on spot DEX and perpetual futures
+- Example: Sell 100 BTC on Cetus spot at $68,000 + Long 100 BTC-USDC-PERP on Bluefin at $68,125 (capture $125 spread)
+- Execution: Sequential with price tolerance checks (atomic execution ideal but not required)
+- Bot can specify execution order and acceptable price ranges to manage legging risk
+
 ---
 
 ## Safety Requirements
 
-The execution system must validate conditions before executing transactions:
+The Backend API must validate conditions before executing transactions:
 
 ### Pre-Execution Validation
 
@@ -215,25 +273,25 @@ The execution system must validate conditions before executing transactions:
 
 ## Key Architectural Principles
 
-These principles should guide the implementation:
+These principles should guide the API implementation:
 
-1. **Instruction-Driven**: Bot specifies ALL parameters explicitly. No automatic decision-making by the execution system.
+1. **Instruction-Driven**: Bot specifies ALL parameters explicitly via API requests. No automatic decision-making by the API.
 
-2. **Works with Any Protocol**: The bot can send instructions for any protocol (Suilend, Navi, AlphaFi, Scallop, etc.) without the core system needing to change. Adding support for a new protocol shouldn't require rewriting existing code.
+2. **Protocol Support**: The API should support multiple protocols (Suilend, Navi, AlphaFi, Scallop, etc.). The bot just specifies which protocol in the request.
 
-3. **Fail-Safe Design**: Multiple validation layers, pre-flight checks, simulation before real execution.
+3. **Fail-Safe Design**: API validates all conditions before executing. Returns clear error if validation fails.
 
-4. **Event Sourcing**: All transactions logged immutably for audit trail and debugging.
+4. **Transaction Logging**: All API requests and blockchain transactions logged for audit trail and debugging.
 
-5. **Idempotent Operations**: Retrying failed operations is safe - system detects and handles duplicates.
+5. **Idempotent**: Retrying the same API request is safe - API detects duplicates.
 
-6. **Observable**: Comprehensive logging, monitoring, and state tracking for debugging and auditing.
+6. **Clear Responses**: API always returns success/failure status with details. Bot can log and alert based on response.
 
 ---
 
 ## Success Metrics
 
-The execution system should achieve:
+The Backend API should achieve:
 
 **Reliability**
 - Zero critical safety violations
@@ -251,19 +309,20 @@ The execution system should achieve:
 
 ## Document Status
 
-**Version:** 2.0
-**Status:** Requirements Document
+**Version:** 3.0
+**Status:** API Specification
 **Created:** 2026-02-17
 **Updated:** 2026-02-17
 
-**Changes from v1.0:**
-- Refactored to focus on bot-specified instructions
-- Removed prescriptive implementation details
-- Changed from detailed architecture to requirements document
-- Focus on WHAT needs to be built, not HOW to build it
-ß
+**Changes from v2.0:**
+- Refactored to reflect Backend API architecture
+- Bot interacts via HTTP API, not direct blockchain integration
+- Clear separation: Bot → API → Blockchain
+- Focused on API request/response format
+- Implementation team builds the API backend
+
 **Next Steps:**
-1. Implementation team reviews requirements
-2. Team designs architecture and approach
-3. Team raises any questions about bot instruction format
-4. Begin implementation with Phase 2A (single-leg operations)
+1. Implementation team reviews API specification
+2. Team provides feedback on request/response format
+3. Team shares API endpoint URLs and authentication method
+4. Bot can start making API calls once endpoints are ready
