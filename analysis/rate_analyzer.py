@@ -392,6 +392,10 @@ class RateAnalyzer:
         df = pd.DataFrame(results)
         if not df.empty:
             df['strategy_type'] = calculator.get_strategy_type()
+            # Add timestamp column - when this data was captured
+            # Explicitly cast to int to prevent pandas from converting to float64
+            df['timestamp'] = self.timestamp
+            df['timestamp'] = df['timestamp'].astype(int)
 
         return df
 
@@ -541,6 +545,10 @@ class RateAnalyzer:
         df = pd.DataFrame(results)
         if not df.empty:
             df['strategy_type'] = calculator.get_strategy_type()
+            # Add timestamp column - when this data was captured
+            # Explicitly cast to int to prevent pandas from converting to float64
+            df['timestamp'] = self.timestamp
+            df['timestamp'] = df['timestamp'].astype(int)
         return df
 
     def _generate_recursive_strategies(
@@ -885,7 +893,9 @@ class RateAnalyzer:
             df_results = pd.DataFrame(results)
 
             # Add timestamp column - when this data was captured
+            # Explicitly cast to int to prevent pandas from converting to float64
             df_results['timestamp'] = self.timestamp
+            df_results['timestamp'] = df_results['timestamp'].astype(int)
 
             # Add flag for stablecoin-only strategies (both tokens are stablecoins)
             df_results['is_stablecoin_only'] = df_results.apply(

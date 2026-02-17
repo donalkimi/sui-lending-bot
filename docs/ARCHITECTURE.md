@@ -1108,6 +1108,155 @@ main.py:main()
 
 ---
 
+## Strategy History System: Historical APR Data Pipeline
+
+The **Strategy History System** provides historical APR timeseries for strategies, enabling users to analyze past performance and make data-driven decisions. It uses a **Registry Pattern** parallel to the Strategy Calculator Registry.
+
+### Architecture: Registry + Handler Pattern
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ PARALLEL ARCHITECTURE                                        │
+└─────────────────────────────────────────────────────────────┘
+
+analysis/strategy_calculators/     analysis/strategy_history/
+├── __init__.py (Registry)         ├── __init__.py (Registry)
+├── base.py                         ├── base.py
+├── stablecoin_lending.py           ├── stablecoin_lending.py
+├── noloop_cross_protocol.py        ├── noloop_cross_protocol.py
+└── recursive_lending.py            └── recursive_lending.py
+
+Calculators: Compute APR          Handlers: Fetch & Transform Data
+```
+
+### Data Flow: Strategy History Retrieval
+
+```
+User: get_strategy_history(strategy_dict, start_ts, end_ts)
+│
+├─ 1. Get Handler from Registry
+│  handler = get_handler(strategy_dict['strategy_type'])
+│
+├─ 2. Validate Strategy Dict
+│  is_valid = handler.validate_strategy_dict(strategy_dict)
+│
+├─ 3. Get Required Token/Protocol Pairs
+│  tokens = handler.get_required_tokens(strategy_dict)
+│  # Example: [(token1, protocol_a), (token2, protocol_a), (token2, protocol_b)]
+│
+├─ 4. Fetch Raw Rates from Database
+│  raw_df = fetch_rates_from_database(tokens, start_ts, end_ts)
+│  # Query: SELECT * FROM rates_snapshot WHERE use_for_pnl = TRUE
+│  #         AND (token/protocol pairs) AND (timestamp range)
+│
+├─ 5. Calculate APR Timeseries
+│  For each timestamp in raw_df:
+│    │
+│    ├─ 5a. Transform to Market Data
+│    │  market_data = handler.build_market_data_dict(group, strategy_dict)
+│    │  # Transforms DB rows → calculator input format
+│    │  # Returns None if incomplete data (skip timestamp)
+│    │
+│    ├─ 5b. Calculate APR using Existing Calculator
+│    │  calculator = get_calculator(strategy_type)
+│    │  result = calculator.analyze_strategy(**market_data)
+│    │  # Single source of truth - no duplicate APR logic
+│    │
+│    ├─ 5c. Extract Token2 Price (for position charts)
+│    │  token2_price = group[token2_contract]['price_usd']
+│    │
+│    └─ 5d. Append Result
+│       results.append({
+│         'timestamp': ts,
+│         'net_apr': result['net_apr'],
+│         'gross_apr': result['gross_apr'],
+│         'token2_price': token2_price
+│       })
+│
+└─ 6. Return DataFrame
+   return pd.DataFrame(results).set_index('timestamp')
+```
+
+### Handler Responsibilities
+
+Each strategy handler implements:
+
+1. **`get_required_tokens(strategy)`**
+   - Returns list of (token_contract, protocol) tuples to query
+   - Example for 4-leg recursive: `[(t1, pA), (t2, pA), (t2, pB), (t3, pB)]`
+
+2. **`build_market_data_dict(row_group, strategy)`**
+   - Transforms raw database rows → calculator input format
+   - Matches rows to legs (1A, 2A, 2B, 3B)
+   - Returns `None` if incomplete (skips timestamp gracefully)
+
+3. **`validate_strategy_dict(strategy)`**
+   - Checks required fields present (tokens, protocols, etc.)
+   - Returns `(is_valid, error_message)`
+
+### Dashboard Integration
+
+Charts are integrated into three tabs using on-demand generation:
+
+**All Strategies Tab** (`dashboard/dashboard_renderer.py`)
+- "📊 Show Chart" button in strategy modal
+- APR-only chart (no price tracking)
+- Time range: 7d, 30d, 90d, All Time (defaults to All Time)
+
+**Positions/Portfolio Tabs** (`dashboard/position_renderers.py`)
+- "📊 Show Chart" button in position expander
+- Dual-axis chart: APR + token2 price
+- Time range: 7d, 30d, Since Position Open (defaults to Since Position Open)
+- Limited to position's lifetime (starts from `opening_timestamp`)
+
+### Chart Generation (`chart_utils.py`)
+
+```python
+create_history_chart(
+    history_df,
+    title="Strategy APR History",
+    include_price=True,  # Show token2 price on left y-axis
+    price_column='token2_price',
+    height=400
+)
+```
+
+**Features**:
+- Plotly interactive dual-axis chart
+- APR (%) on right y-axis, Price (USD) on left y-axis
+- Hover tooltips with formatted values
+- Responsive width using `width="stretch"` (DESIGN_NOTES.md #6 compliant)
+
+**Design Decision**: On-demand generation (no caching)
+- Charts generated on button click, not pre-cached
+- Always shows latest data, no stale cache issues
+- Fast generation (1-2 seconds per chart)
+
+### Key Design Principles
+
+1. **Registry Pattern**: Zero if/else chains, extensible architecture
+2. **Single Source of Truth**: Handlers transform data, Calculators compute APR
+3. **Fail Loudly**: Returns `None` for incomplete data, skips timestamps gracefully
+4. **DESIGN_NOTES.md Compliance**:
+   - Principle #5: Unix timestamps internally, datetime strings for SQL
+   - Principle #6: `width="stretch"` not deprecated `use_container_width`
+   - Principle #7: Decimals internally (0.05), percentages for display (5.00%)
+   - Principle #10: Always fetch collateral_ratio AND liquidation_threshold together
+   - Principle #16: No `.get()` with defaults for required fields
+
+### Files
+
+- `analysis/strategy_history/__init__.py` - Registry (`get_handler()`)
+- `analysis/strategy_history/base.py` - `HistoryHandlerBase` abstract class
+- `analysis/strategy_history/data_fetcher.py` - Database queries
+- `analysis/strategy_history/strategy_history.py` - Orchestration (`get_strategy_history()`)
+- `analysis/strategy_history/chart_utils.py` - Chart generation
+- `analysis/strategy_history/{strategy}_lending.py` - Strategy-specific handlers (3 files)
+
+**Reference**: See [`docs/Historical_Data_Reference.md`](Historical_Data_Reference.md) for complete API documentation.
+
+---
+
 ## 2. DASHBOARD DATA FLOW (Read from Cache)
 
 ### 2.0 Cache-First Architecture

@@ -1141,6 +1141,484 @@ class RateTracker:
             # Return None to fall back to recalculation
             return None
 
+    # ========================================================================
+    # PERPETUAL FUNDING RATES (added 2026-02-17)
+    # ========================================================================
+
+    def save_perp_rates(self, perp_rates_df: pd.DataFrame) -> int:
+        """
+        Save perpetual funding rates to perp_margin_rates table.
+
+        Uses ON CONFLICT DO UPDATE to overwrite existing rates.
+        This allows Bluefin to revise historical rates.
+
+        Args:
+            perp_rates_df: DataFrame with columns:
+                - timestamp: Funding rate timestamp (datetime)
+                - protocol: 'Bluefin'
+                - market: Market symbol (e.g., 'BTC-PERP')
+                - market_address: Contract address from Bluefin
+                - token_contract: Proxy format ("0xBTC-USDC-PERP_bluefin")
+                - base_token: Base token symbol (e.g., 'BTC')
+                - quote_token: Quote token symbol (e.g., 'USDC')
+                - funding_rate_hourly: Raw hourly rate (decimal)
+                - funding_rate_annual: Annualized rate (decimal)
+                - next_funding_time: Next funding update timestamp (optional)
+
+        Returns:
+            Number of rows inserted/updated
+        """
+        if perp_rates_df.empty:
+            print("[PERP] No rates to save")
+            return 0
+
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            rows_saved = 0
+
+            # Adjust placeholder based on database type
+            ph = '%s' if self.use_cloud else '?'
+
+            for _, row in perp_rates_df.iterrows():
+                try:
+                    # Round timestamp to minute
+                    ts = row['timestamp']
+                    if isinstance(ts, pd.Timestamp):
+                        ts = ts.to_pydatetime()
+                    timestamp_rounded = ts.replace(second=0, microsecond=0)
+
+                    # Prepare values - fail loudly if required fields missing
+                    # market_address is optional (may not be in all API responses)
+                    market_address = row['market_address'] if 'market_address' in row and pd.notna(row['market_address']) else ''
+
+                    # funding_rate_hourly is optional (for reference only)
+                    funding_rate_hourly = None
+                    if 'funding_rate_hourly' in row and pd.notna(row['funding_rate_hourly']):
+                        funding_rate_hourly = float(row['funding_rate_hourly'])
+
+                    # next_funding_time is optional
+                    next_funding_time = None
+                    if 'next_funding_time' in row and pd.notna(row['next_funding_time']):
+                        next_funding_time = row['next_funding_time']
+
+                    values = (
+                        timestamp_rounded,
+                        row['protocol'],
+                        row['market'],
+                        market_address,
+                        row['token_contract'],
+                        row['base_token'],
+                        row['quote_token'],
+                        funding_rate_hourly,
+                        float(row['funding_rate_annual']),
+                        next_funding_time
+                    )
+
+                except KeyError as e:
+                    print(f"[PERP] KeyError processing row: {e}")
+                    print(f"[PERP] Available columns: {list(row.index)}")
+                    continue
+                except Exception as e:
+                    print(f"[PERP] Error processing row: {e}")
+                    continue
+
+                if self.use_cloud:
+                    # PostgreSQL: ON CONFLICT DO UPDATE
+                    cursor.execute(f"""
+                        INSERT INTO perp_margin_rates (
+                            timestamp, protocol, market, market_address, token_contract,
+                            base_token, quote_token, funding_rate_hourly, funding_rate_annual,
+                            next_funding_time
+                        ) VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
+                        ON CONFLICT (timestamp, protocol, token_contract)
+                        DO UPDATE SET
+                            market = EXCLUDED.market,
+                            market_address = EXCLUDED.market_address,
+                            base_token = EXCLUDED.base_token,
+                            quote_token = EXCLUDED.quote_token,
+                            funding_rate_hourly = EXCLUDED.funding_rate_hourly,
+                            funding_rate_annual = EXCLUDED.funding_rate_annual,
+                            next_funding_time = EXCLUDED.next_funding_time
+                    """, values)
+                else:
+                    # SQLite: INSERT OR REPLACE
+                    cursor.execute(f"""
+                        INSERT OR REPLACE INTO perp_margin_rates (
+                            timestamp, protocol, market, market_address, token_contract,
+                            base_token, quote_token, funding_rate_hourly, funding_rate_annual,
+                            next_funding_time
+                        ) VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
+                    """, values)
+
+                rows_saved += 1
+
+            conn.commit()
+            print(f"[PERP] Saved/updated {rows_saved} perp rates")
+            return rows_saved
+
+        except Exception as e:
+            conn.rollback()
+            print(f"[PERP] Error saving perp rates: {e}")
+            raise
+        finally:
+            conn.close()
+
+    def register_perp_tokens(self, perp_rates_df: pd.DataFrame) -> int:
+        """
+        Register proxy perp tokens in token_registry table.
+
+        Creates entries with token_symbol like "BTC-USDC-PERP"
+        and token_contract like "0xBTC-USDC-PERP_bluefin".
+
+        Args:
+            perp_rates_df: DataFrame with token_contract and base_token columns
+
+        Returns:
+            Number of tokens registered
+        """
+        if perp_rates_df.empty:
+            return 0
+
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            tokens_registered = 0
+
+            # Get unique token contracts
+            unique_tokens = perp_rates_df[['token_contract', 'base_token', 'quote_token']].drop_duplicates()
+
+            # Adjust placeholder based on database type
+            ph = '%s' if self.use_cloud else '?'
+
+            for _, row in unique_tokens.iterrows():
+                token_contract = row['token_contract']
+                symbol = f"{row['base_token']}-{row['quote_token']}-PERP"
+
+                try:
+                    if self.use_cloud:
+                        # PostgreSQL: ON CONFLICT DO NOTHING
+                        cursor.execute(f"""
+                            INSERT INTO token_registry (
+                                token_contract, symbol, first_seen, last_seen
+                            ) VALUES ({ph}, {ph}, NOW(), NOW())
+                            ON CONFLICT (token_contract) DO UPDATE SET
+                                last_seen = NOW()
+                        """, (token_contract, symbol))
+                    else:
+                        # SQLite: INSERT OR IGNORE
+                        cursor.execute(f"""
+                            INSERT OR IGNORE INTO token_registry (
+                                token_contract, symbol, first_seen, last_seen
+                            ) VALUES ({ph}, {ph}, datetime('now'), datetime('now'))
+                        """, (token_contract, symbol))
+
+                        # Update last_seen if already exists
+                        cursor.execute(f"""
+                            UPDATE token_registry
+                            SET last_seen = datetime('now')
+                            WHERE token_contract = {ph}
+                        """, (token_contract,))
+
+                    tokens_registered += 1
+
+                except Exception as e:
+                    print(f"[PERP] Warning: Failed to register token {symbol}: {e}")
+                    continue
+
+            conn.commit()
+            if tokens_registered > 0:
+                print(f"[PERP] Registered {tokens_registered} perp tokens in token_registry")
+            return tokens_registered
+
+        except Exception as e:
+            conn.rollback()
+            print(f"[PERP] Error registering perp tokens: {e}")
+            return 0
+        finally:
+            conn.close()
+
+    def _get_most_recent_perp_rate(
+        self,
+        conn,
+        token_contract: str,
+        snapshot_timestamp: datetime
+    ) -> Optional[float]:
+        """
+        Get most recent perp rate <= snapshot_timestamp.
+
+        Uses indexed query for efficiency.
+        Implements "most recent seen" interpolation strategy.
+
+        Args:
+            conn: Database connection
+            token_contract: Proxy token contract (e.g., "0xBTC-USDC-PERP_bluefin")
+            snapshot_timestamp: Target timestamp (rates_snapshot timestamp)
+
+        Returns:
+            funding_rate_annual or None if no historic rate found
+        """
+        cursor = conn.cursor()
+
+        # Adjust placeholder based on database type
+        ph = '%s' if self.use_cloud else '?'
+
+        cursor.execute(f"""
+            SELECT funding_rate_annual
+            FROM perp_margin_rates
+            WHERE token_contract = {ph}
+              AND timestamp <= {ph}
+            ORDER BY timestamp DESC
+            LIMIT 1
+        """, (token_contract, snapshot_timestamp))
+
+        row = cursor.fetchone()
+        return float(row[0]) if row and row[0] is not None else None
+
+    def interpolate_perp_rates_to_snapshot(
+        self,
+        timestamp: datetime,
+        strategy: str = "most_recent",
+        backfill_existing: bool = False
+    ) -> int:
+        """
+        Populate rates_snapshot.perp_margin_rate via interpolation.
+
+        Uses "most recent rate seen before snapshot time" logic.
+        Does NOT use future rates.
+
+        Args:
+            timestamp: Target snapshot timestamp (if None, use latest)
+            strategy: Interpolation strategy ('most_recent' initially)
+            backfill_existing: If True, update existing rows; if False, only new NULL rows
+
+        Returns:
+            Number of rows updated
+
+        Algorithm:
+            1. Get all (token, protocol, timestamp) from rates_snapshot at timestamp
+            2. For each unique token_contract in perp_margin_rates:
+                a. Query perp_margin_rates for most recent rate <= timestamp
+                b. UPDATE rates_snapshot SET perp_margin_rate = ?
+                   WHERE token_contract matches (via base_token)
+        """
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            rows_updated = 0
+
+            # Adjust placeholder based on database type
+            ph = '%s' if self.use_cloud else '?'
+
+            # Get all unique perp token contracts with data at this timestamp
+            cursor.execute(f"""
+                SELECT DISTINCT token_contract, base_token
+                FROM perp_margin_rates
+                WHERE timestamp <= {ph}
+            """, (timestamp,))
+
+            perp_tokens = cursor.fetchall()
+
+            if not perp_tokens:
+                print(f"[PERP INTERP] No perp rates found before {timestamp}")
+                return 0
+
+            print(f"[PERP INTERP] Interpolating for {len(perp_tokens)} perp tokens at {timestamp}")
+
+            for token_contract, base_token in perp_tokens:
+                # Get most recent perp rate for this token
+                perp_rate = self._get_most_recent_perp_rate(conn, token_contract, timestamp)
+
+                if perp_rate is None:
+                    continue
+
+                # Update rates_snapshot rows where token matches base_token
+                # This assumes lending tokens have same symbol as perp base token
+                if backfill_existing:
+                    # Update all rows (including non-NULL)
+                    cursor.execute(f"""
+                        UPDATE rates_snapshot
+                        SET perp_margin_rate = {ph}
+                        WHERE timestamp = {ph}
+                          AND token = {ph}
+                    """, (perp_rate, timestamp, base_token))
+                else:
+                    # Only update NULL rows
+                    cursor.execute(f"""
+                        UPDATE rates_snapshot
+                        SET perp_margin_rate = {ph}
+                        WHERE timestamp = {ph}
+                          AND token = {ph}
+                          AND perp_margin_rate IS NULL
+                    """, (perp_rate, timestamp, base_token))
+
+                rows_updated += cursor.rowcount
+
+            conn.commit()
+            print(f"[PERP INTERP] Updated {rows_updated} rates_snapshot rows")
+            return rows_updated
+
+        except Exception as e:
+            conn.rollback()
+            print(f"[PERP INTERP] Error interpolating perp rates: {e}")
+            return 0
+        finally:
+            conn.close()
+
+    def backfill_perp_rates_to_snapshot(
+        self,
+        start_date: Optional[datetime] = None,
+        end_date: datetime = None
+    ) -> int:
+        """
+        Backfill perp_margin_rate column for existing rates_snapshot rows.
+
+        Used when new perp markets are added or historical data is seeded.
+
+        Args:
+            start_date: Start of date range (if None, backfill all)
+            end_date: End of date range (REQUIRED - caller must pass explicitly)
+
+        Returns:
+            Number of rows updated
+
+        Raises:
+            ValueError: If end_date is not provided
+        """
+        if end_date is None:
+            raise ValueError(
+                "end_date is required for backfill_perp_rates_to_snapshot(). "
+                "Pass datetime.now() explicitly at the call site to make time-dependent behavior visible."
+            )
+
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+
+            # Adjust placeholder based on database type
+            ph = '%s' if self.use_cloud else '?'
+
+            # Get all unique timestamps in range with NULL perp_margin_rate
+            if start_date is not None:
+                cursor.execute(f"""
+                    SELECT DISTINCT timestamp
+                    FROM rates_snapshot
+                    WHERE timestamp >= {ph}
+                      AND timestamp <= {ph}
+                      AND perp_margin_rate IS NULL
+                    ORDER BY timestamp
+                """, (start_date, end_date))
+            else:
+                cursor.execute(f"""
+                    SELECT DISTINCT timestamp
+                    FROM rates_snapshot
+                    WHERE timestamp <= {ph}
+                      AND perp_margin_rate IS NULL
+                    ORDER BY timestamp
+                """, (end_date,))
+
+            timestamps = [row[0] for row in cursor.fetchall()]
+
+            if not timestamps:
+                print("[PERP BACKFILL] No timestamps to backfill")
+                return 0
+
+            print(f"[PERP BACKFILL] Backfilling {len(timestamps)} timestamps...")
+
+            total_updated = 0
+            for i, ts in enumerate(timestamps):
+                rows_updated = self.interpolate_perp_rates_to_snapshot(
+                    timestamp=ts,
+                    backfill_existing=False  # Only NULL values
+                )
+                total_updated += rows_updated
+
+                if (i + 1) % 100 == 0:
+                    print(f"  Progress: {i + 1}/{len(timestamps)} timestamps")
+
+            print(f"[PERP BACKFILL] Backfilled {total_updated} total rows")
+            return total_updated
+
+        except Exception as e:
+            print(f"[PERP BACKFILL] Error: {e}")
+            return 0
+        finally:
+            conn.close()
+
+    def detect_new_perp_markets(self, perp_rates_df: pd.DataFrame) -> List[str]:
+        """
+        Detect if any new perp markets were added that weren't in previous data.
+
+        Args:
+            perp_rates_df: Latest perp rates DataFrame
+
+        Returns:
+            List of new market symbols (e.g., ["BTC-PERP", "ETH-PERP"])
+        """
+        if perp_rates_df.empty:
+            return []
+
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+
+            # Get all existing token_contracts in perp_margin_rates
+            cursor.execute("""
+                SELECT DISTINCT token_contract
+                FROM perp_margin_rates
+            """)
+
+            existing_contracts = {row[0] for row in cursor.fetchall()}
+
+            # Check which contracts in new data are not in existing
+            new_contracts = set(perp_rates_df['token_contract'].unique())
+            newly_added = new_contracts - existing_contracts
+
+            if newly_added:
+                # Convert token_contracts back to market symbols
+                new_markets = []
+                for contract in newly_added:
+                    # Extract base token from contract (e.g., "0xBTC-USDC-PERP_bluefin" → "BTC-PERP")
+                    if "-PERP_" in contract:
+                        base = contract.split("-")[0].replace("0x", "")
+                        new_markets.append(f"{base}-PERP")
+
+                return new_markets
+
+            return []
+
+        except Exception as e:
+            print(f"[PERP] Error detecting new markets: {e}")
+            return []
+        finally:
+            conn.close()
+
+    def get_latest_snapshot_timestamp(self) -> Optional[datetime]:
+        """
+        Get the most recent timestamp from rates_snapshot table.
+
+        Returns:
+            Latest timestamp or None if table is empty
+        """
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT MAX(timestamp)
+                FROM rates_snapshot
+            """)
+            row = cursor.fetchone()
+            return row[0] if row and row[0] is not None else None
+        except Exception as e:
+            print(f"[PERP] Error getting latest snapshot timestamp: {e}")
+            return None
+        finally:
+            conn.close()
+
+    # ========================================================================
+    # END PERPETUAL FUNDING RATES
+    # ========================================================================
+
     @staticmethod
     def compute_strategy_hash(strategy: dict) -> str:
         """

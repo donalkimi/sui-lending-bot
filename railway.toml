@@ -2,7 +2,14 @@
 # Cron schedule configuration
 # Build is handled by Dockerfile
 
+# Main lending rate refresh (hourly at top of hour)
 [[cron]]
 schedule = "0 * * * *"  # Every hour
 # Ensure we're in the right directory and have Node.js in PATH
 command = "cd /app && export NODE_PATH=/app/data/alphalend/node_modules:/app/data/suilend/node_modules:/app/data/scallop_shared/node_modules:/app/data/navi/node_modules:/app/data/pebble/node_modules:/app/node_modules && python main.py"
+
+# Perp margin rate refresh (5 minutes after each hour)
+# Runs separately to avoid blocking main refresh if Bluefin API is delayed
+[[cron]]
+schedule = "5 * * * *"  # Every hour at 5 minutes past
+command = "cd /app && python main_perp_refresh.py"

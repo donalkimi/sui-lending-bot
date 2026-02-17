@@ -877,6 +877,94 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
     st.markdown("")  # Tighter spacing instead of divider
 
     # ========================================
+    # HISTORICAL PERFORMANCE CHART
+    # ========================================
+    st.markdown("### 📈 Historical Performance")
+
+    col1, col2, col3 = st.columns([1, 2, 2])
+
+    # Generate unique key for this strategy
+    strategy_key = f"{strategy.get('token1')}_{strategy.get('token2')}_{strategy.get('protocol_a')}_{strategy.get('protocol_b')}"
+    chart_key = f"chart_strategy_{strategy_key}"
+
+    with col1:
+        # Chart button
+        if st.button("📊 Show Chart", key=chart_key):
+            st.session_state[f'show_{chart_key}'] = True
+            st.rerun()
+
+    with col2:
+        # Time range selector
+        time_range = st.selectbox(
+            "Time Range",
+            options=['7d', '30d', '90d', 'all'],
+            index=3,  # Default to 'all' (All Time)
+            format_func=lambda x: {
+                '7d': 'Last 7 Days',
+                '30d': 'Last 30 Days',
+                '90d': 'Last 90 Days',
+                'all': 'All Time'
+            }[x],
+            key=f"range_{chart_key}"
+        )
+
+    with col3:
+        st.caption("View APR history for this strategy over time")
+
+    # Generate and display chart if button clicked
+    if st.session_state.get(f'show_{chart_key}', False):
+        try:
+            # Build strategy dict for get_strategy_history()
+            strategy_dict = {
+                'strategy_type': strategy.get('strategy_type', 'recursive_lending'),
+                'token1': strategy.get('token1'),  # Symbol (e.g., 'USDC')
+                'token2': strategy.get('token2'),  # Symbol (e.g., 'SUI')
+                'token3': strategy.get('token3'),  # Symbol (e.g., 'USDC')
+                'token1_contract': strategy['token1_contract'],
+                'token2_contract': strategy.get('token2_contract'),
+                'token3_contract': strategy.get('token3_contract'),
+                'protocol_a': strategy['protocol_a'],
+                'protocol_b': strategy.get('protocol_b'),
+                'liquidation_distance': strategy.get('liquidation_distance', 0.20)
+            }
+
+            # Calculate time range
+            from analysis.strategy_history.chart_utils import get_chart_time_range
+            start_ts, end_ts = get_chart_time_range(time_range, timestamp_seconds)
+
+            # Fetch history
+            from analysis.strategy_history.strategy_history import get_strategy_history
+            history_df = get_strategy_history(strategy_dict, start_ts, end_ts)
+
+            if history_df.empty:
+                st.warning("⚠️ No historical data available for this strategy.")
+            else:
+                # Generate chart
+                from analysis.strategy_history.chart_utils import create_history_chart, format_history_table
+
+                chart_title = f"{strategy['token1']}/{strategy['token2']}/{strategy['token3']} - {strategy['protocol_a']}/{strategy['protocol_b']}"
+                chart = create_history_chart(
+                    history_df,
+                    title=chart_title,
+                    include_price=False,  # Strategies don't track price
+                    height=400
+                )
+
+                st.plotly_chart(chart, width="stretch")
+
+                # Summary statistics table
+                with st.expander("📊 Summary Statistics", expanded=False):
+                    stats_df = format_history_table(history_df)
+                    st.dataframe(stats_df, hide_index=True, width="stretch")
+
+        except Exception as e:
+            st.error(f"❌ Failed to load chart: {e}")
+            import logging
+            logging.exception("Chart generation error")
+
+    st.markdown("")  # Spacing
+
+    # ========================================
     # ACTION BUTTON
     # ========================================
     if st.button("🚀 Deploy Position", type="primary", width='stretch'):
@@ -3943,6 +4031,18 @@ def render_dashboard(data_loader: DataLoader, mode: str):
     print(f"[CACHE] Checking: timestamp={timestamp_seconds}, liq_dist={liquidation_distance}")
     cached_results = tracker.load_analysis_cache(timestamp_seconds, liquidation_distance)
     #print(cached_results)
+
+    # Validate cached results have timestamp column (reject old cache without timestamps)
+    if cached_results is not None and 'timestamp' not in cached_results.columns:
+        print("[CACHE] Cached results missing 'timestamp' column - invalidating cache")
+        cached_results = None
+
+    # Validate that timestamp values are not NaN (reject corrupted cache)
+    if cached_results is not None and 'timestamp' in cached_results.columns:
+        if cached_results['timestamp'].isna().any():
+            print(f"[CACHE] Cached results have NaN timestamps - invalidating cache")
+            cached_results = None
+
     if cached_results is not None:
         # Use cached analysis from database (returns DataFrame only)
         all_results = cached_results
@@ -4005,11 +4105,9 @@ def render_dashboard(data_loader: DataLoader, mode: str):
     if not filtered_results.empty:
         if force_usdc_start:
             filtered_results = filtered_results[filtered_results['token1'] == 'USDC']
-            print(f"[FILTER] After force_usdc_start: {len(filtered_results)} strategies")
 
         if force_token3_equals_token1:
             filtered_results = filtered_results[filtered_results['token3'] == filtered_results['token1']]
-            print(f"[FILTER] After force_token3_equals_token1: {len(filtered_results)} strategies")
 
         if stablecoin_only:
             filtered_results = filtered_results[
@@ -4017,7 +4115,6 @@ def render_dashboard(data_loader: DataLoader, mode: str):
                 (filtered_results['token2'].isin(STABLECOIN_SYMBOLS)) &
                 (filtered_results['token3'].isin(STABLECOIN_SYMBOLS))
             ]
-            print(f"[FILTER] After stablecoin_only: {len(filtered_results)} strategies")
 
         # Filter by strategy type
         enabled_strategy_types = []
@@ -4028,24 +4125,16 @@ def render_dashboard(data_loader: DataLoader, mode: str):
         if show_recursive_lending:
             enabled_strategy_types.append('recursive_lending')
 
-        print(f"[FILTER] Enabled strategy types: {enabled_strategy_types}")
         if enabled_strategy_types and 'strategy_type' in filtered_results.columns:
             before_count = len(filtered_results)
-            print(f"[FILTER] Strategy types BEFORE filter: {dict(filtered_results['strategy_type'].value_counts())}")
             filtered_results = filtered_results[filtered_results['strategy_type'].isin(enabled_strategy_types)]
-            print(f"[FILTER] After strategy_type filter: {len(filtered_results)} strategies (removed {before_count - len(filtered_results)})")
-            if not filtered_results.empty:
-                print(f"[FILTER] Strategy types AFTER filter: {dict(filtered_results['strategy_type'].value_counts())}")
-        else:
-            print(f"[FILTER] Skipping strategy_type filter (enabled_types={enabled_strategy_types}, has_column={'strategy_type' in filtered_results.columns})")
-
+        
         # Filter by deployment size
         if deployment_usd > 0:
             filtered_results = filtered_results[
                 (filtered_results['max_size'].notna()) &
                 (filtered_results['max_size'] >= deployment_usd)
             ]
-            print(f"[FILTER] After deployment_usd filter: {len(filtered_results)} strategies")
 
     # Create zero_liquidity_results
     zero_liquidity_results = all_results.copy()
@@ -4083,9 +4172,6 @@ def render_dashboard(data_loader: DataLoader, mode: str):
     # Apply additional filters
     if not filtered_results.empty:
         display_results = filtered_results[filtered_results[apr_col] >= min_apr]
-        print(f"[FILTER] After min_apr filter ({min_apr}): {len(display_results)} strategies")
-        if not display_results.empty and 'strategy_type' in display_results.columns:
-            print(f"[FILTER] Strategy types after min_apr: {dict(display_results['strategy_type'].value_counts())}")
     else:
         display_results = filtered_results
 
@@ -4095,7 +4181,6 @@ def render_dashboard(data_loader: DataLoader, mode: str):
             display_results['token1'].isin(token_filter) |
             display_results['token2'].isin(token_filter)
         ]
-        print(f"[FILTER] After token_filter: {len(display_results)} strategies (removed {before_count - len(display_results)})")
 
     if protocol_filter and not display_results.empty:
         before_count = len(display_results)
@@ -4103,7 +4188,8 @@ def render_dashboard(data_loader: DataLoader, mode: str):
             display_results['protocol_a'].isin(protocol_filter) |
             display_results['protocol_b'].isin(protocol_filter)
         ]
-        print(f"[FILTER] After protocol_filter: {len(display_results)} strategies (removed {before_count - len(display_results)})")
+        
+    print(f"[FILTER] Ending with {len(display_results)} strategies")
 
     filter_time = (time.time() - filter_start) * 1000
     print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] Filtering complete in {filter_time:.1f}ms: {len(display_results)}/{len(all_results)} strategies")
@@ -4155,25 +4241,17 @@ def render_dashboard(data_loader: DataLoader, mode: str):
         st.markdown("### Top Lending Strategies")
         st.markdown("Click column headers to sort. Click checkbox to view details.")
 
-        # Debug: Show what's about to be displayed
-        if not display_results.empty and 'strategy_type' in display_results.columns:
-            print(f"[TAB1] About to display {len(display_results)} strategies with types: {dict(display_results['strategy_type'].value_counts())}")
-        else:
-            print(f"[TAB1] About to display {len(display_results)} strategies (no strategy_type column)")
-
         # Display sortable table
         selected_strategy = display_strategies_table(display_results, mode=mode)
 
         # Check if we should skip reopening modal after deployment
         skip_reopen = st.session_state.get('skip_modal_reopen', False)
         if skip_reopen:
-            print("[TAB1] Skipping modal reopen after deployment")
             st.session_state.skip_modal_reopen = False
             selected_strategy = None  # Clear selection
 
         # If user clicked a row, show strategy modal
         if selected_strategy:
-            print(f"[TAB1] Opening strategy modal for selected strategy")
             show_strategy_modal(selected_strategy, timestamp_seconds)
 
         tab1_time = (time.time() - tab1_start) * 1000

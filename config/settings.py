@@ -63,6 +63,22 @@ REBALANCE_THRESHOLD = float(os.getenv('REBALANCE_THRESHOLD', '0.05'))
 SAVE_SNAPSHOTS = get_bool_env('SAVE_SNAPSHOTS', default=True)
 
 # ==============================================================================
+# BLUEFIN PERPETUAL MARKETS (added 2026-02-17)
+# ==============================================================================
+
+# Whitelisted Bluefin perpetual markets to track
+# All markets are <BASE>-PERP format, priced in USDC
+# Rates are stored as annualized decimals per DESIGN_NOTES.md #7
+BLUEFIN_PERP_MARKETS = [
+    "BTC",   # Bitcoin perpetual
+    "ETH",   # Ethereum perpetual
+    "SOL",   # Solana perpetual
+    "SUI",   # Sui perpetual
+    "WAL",   # Walrus perpetual
+    "DEEP",  # DeepBook perpetual
+]
+
+# ==============================================================================
 # PORTFOLIO ALLOCATION SETTINGS
 # ==============================================================================
 

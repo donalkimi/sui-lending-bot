@@ -11,13 +11,13 @@ from datetime import datetime
 from typing import Union
 
 
-def to_seconds(ts: Union[str, datetime, int]) -> int:
+def to_seconds(ts: Union[str, datetime, int, float]) -> int:
     """
     Convert any timestamp format to Unix seconds.
     FAILS LOUDLY if input is not recognized.
 
     Args:
-        ts: datetime string, datetime object, or already Unix timestamp
+        ts: datetime string, datetime object, Unix timestamp (int), or numeric timestamp (float)
 
     Returns:
         Unix timestamp in seconds (integer)
@@ -35,6 +35,18 @@ def to_seconds(ts: Union[str, datetime, int]) -> int:
         if ts < 946684800 or ts > 4102444800:
             raise ValueError(f"Integer {ts} doesn't look like a valid Unix timestamp (seconds since epoch)")
         return ts
+
+    # Float (pandas/numpy often converts int timestamps to float64)
+    # Convert to int, preserving the original seconds value
+    if isinstance(ts, float):
+        # Check for NaN (pandas missing value indicator)
+        if ts != ts:  # NaN != NaN is True
+            raise ValueError("Cannot convert NaN to seconds - timestamp is missing")
+        ts_int = int(ts)
+        # Sanity check: should be reasonable Unix timestamp
+        if ts_int < 946684800 or ts_int > 4102444800:
+            raise ValueError(f"Float {ts} doesn't look like a valid Unix timestamp (seconds since epoch)")
+        return ts_int
 
     # String format: "2026-01-16 12:00:00" or "2026-01-16T12:00:00"
     elif isinstance(ts, str):

@@ -168,16 +168,14 @@ class PositionService:
             ValueError: If timestamp is missing
             TypeError: If timestamp is not int
         """
-        # Validate timestamp
-        entry_timestamp = strategy_row.get('timestamp')
-        if entry_timestamp is None:
+        # Validate timestamp - use to_seconds() to convert at boundary (pandas Series -> int)
+        # This follows DESIGN_NOTES.md principle #5: convert at boundaries
+        entry_timestamp_raw = strategy_row.get('timestamp')
+        if entry_timestamp_raw is None:
             raise ValueError("strategy_row must contain 'timestamp' - cannot default to datetime.now()")
 
-        if not isinstance(entry_timestamp, int):
-            raise TypeError(
-                f"entry_timestamp must be Unix seconds (int), got {type(entry_timestamp).__name__}. "
-                f"Use to_seconds() to convert."
-            )
+        # Convert to int (handles int, float, str, datetime)
+        entry_timestamp = to_seconds(entry_timestamp_raw)
 
         # Generate position ID
         position_id = str(uuid.uuid4())

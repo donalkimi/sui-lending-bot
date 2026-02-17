@@ -50,6 +50,11 @@ CREATE TABLE IF NOT EXISTS rates_snapshot (
     -- Marks snapshots to use for PnL calculations (one per hour, closest to top of hour)
     use_for_pnl BOOLEAN NOT NULL DEFAULT FALSE,
 
+    -- Perpetual Funding Rates (added 2026-02-17)
+    -- Interpolated perp funding rate (annualized) from perp_margin_rates table
+    -- Nullable: only populated for tokens with perp markets (e.g., BTC, ETH)
+    perp_margin_rate DECIMAL(10,6) DEFAULT NULL,
+
     -- Composite primary key for PostgreSQL ON CONFLICT support
     PRIMARY KEY (timestamp, protocol, token_contract)
 );
@@ -63,6 +68,10 @@ CREATE INDEX IF NOT EXISTS idx_rates_protocol_contract ON rates_snapshot(protoco
 -- Partial indexes only include rows where use_for_pnl = TRUE for efficiency
 CREATE INDEX IF NOT EXISTS idx_rates_pnl_flag ON rates_snapshot(use_for_pnl, timestamp) WHERE use_for_pnl = TRUE;
 CREATE INDEX IF NOT EXISTS idx_rates_pnl_lookup ON rates_snapshot(token_contract, protocol, timestamp) WHERE use_for_pnl = TRUE;
+
+-- Perp margin rate index (added 2026-02-17)
+-- Partial index only includes rows with perp rates
+CREATE INDEX IF NOT EXISTS idx_rates_perp_margin ON rates_snapshot(perp_margin_rate) WHERE perp_margin_rate IS NOT NULL;
 
 
 -- Table 2: token_registry
@@ -132,7 +141,53 @@ CREATE INDEX IF NOT EXISTS idx_oracle_prices_pyth_time ON oracle_prices(pyth_tim
 CREATE INDEX IF NOT EXISTS idx_oracle_prices_defillama_time ON oracle_prices(defillama_time);
 
 
--- Table 4: reward_token_prices
+-- Table 4: perp_margin_rates (added 2026-02-17)
+-- Stores historical perpetual funding rates from Bluefin
+-- Rates are annualized for consistency with lending rates (DESIGN_NOTES.md #7)
+CREATE TABLE IF NOT EXISTS perp_margin_rates (
+    timestamp TIMESTAMP NOT NULL,
+    protocol VARCHAR(50) NOT NULL,               -- 'Bluefin'
+    market VARCHAR(100) NOT NULL,                -- 'BTC-PERP', 'SUI-PERP', 'ETH-PERP'
+    market_address TEXT NOT NULL,                -- Unique contract identifier from Bluefin
+
+    -- Proxy token contract (generated, not from chain)
+    -- Format: "0x<base>-<quote>-PERP_<protocol>"
+    -- Example: "0xBTC-USDC-PERP_bluefin"
+    token_contract TEXT NOT NULL,
+
+    base_token VARCHAR(50) NOT NULL,             -- Base token symbol (e.g., 'BTC')
+    quote_token VARCHAR(50) NOT NULL,            -- Quote token symbol (e.g., 'USDC')
+
+    -- Funding rates (annualized decimals: 0.0876 = 8.76% APR)
+    -- Stored as decimals per DESIGN_NOTES.md #7
+    funding_rate_hourly DECIMAL(10,6),          -- Raw hourly rate (for reference)
+    funding_rate_annual DECIMAL(10,6) NOT NULL,  -- Annualized: hourly × 24 × 365
+
+    -- Market metadata
+    next_funding_time TIMESTAMP,                 -- Next funding update
+
+    PRIMARY KEY (timestamp, protocol, token_contract)
+);
+
+-- Indexes for perp_margin_rates
+CREATE INDEX IF NOT EXISTS idx_perp_rates_time ON perp_margin_rates(timestamp);
+CREATE INDEX IF NOT EXISTS idx_perp_rates_market ON perp_margin_rates(market_address);
+CREATE INDEX IF NOT EXISTS idx_perp_rates_token ON perp_margin_rates(token_contract);
+CREATE INDEX IF NOT EXISTS idx_perp_rates_base_token ON perp_margin_rates(base_token);
+
+-- RLS Policies for perp_margin_rates
+ALTER TABLE perp_margin_rates ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Service role has full access to perp_margin_rates"
+ON perp_margin_rates FOR ALL TO service_role
+USING (true) WITH CHECK (true);
+
+CREATE POLICY "Authenticated users can read perp_margin_rates"
+ON perp_margin_rates FOR SELECT TO authenticated
+USING (true);
+
+
+-- Table 5: reward_token_prices
 -- Stores prices for reward tokens (no protocol - last write wins)
 CREATE TABLE IF NOT EXISTS reward_token_prices (
     timestamp TIMESTAMP NOT NULL,
@@ -172,7 +227,7 @@ SELECT
 FROM reward_token_prices;
 
 
--- Table 5: positions
+-- Table 6: positions
 -- Stores paper trading position records (Phase 1) with support for real capital (Phase 2)
 CREATE TABLE IF NOT EXISTS positions (
     -- Position Identification
@@ -291,7 +346,7 @@ CREATE INDEX IF NOT EXISTS idx_positions_is_paper ON positions(is_paper_trade);
 CREATE INDEX IF NOT EXISTS idx_positions_portfolio ON positions(portfolio_id);
 
 
--- Table 6: position_rebalances
+-- Table 7: position_rebalances
 -- Stores historical position segments created through rebalancing
 -- Follows event sourcing pattern: records are immutable historical truth
 CREATE TABLE IF NOT EXISTS position_rebalances (
@@ -390,7 +445,7 @@ CREATE INDEX IF NOT EXISTS idx_rebalances_sequence ON position_rebalances(positi
 CREATE INDEX IF NOT EXISTS idx_rebalances_timestamps ON position_rebalances(opening_timestamp, closing_timestamp);
 
 
--- Table 7: position_statistics
+-- Table 8: position_statistics
 -- Pre-calculated position summary statistics for fast dashboard loading
 -- Follows event sourcing pattern: immutable snapshots of position state at each timestamp
 CREATE TABLE IF NOT EXISTS position_statistics (
@@ -448,7 +503,7 @@ TO authenticated
 USING (true);
 
 -- =============================================================================
--- Table 8: analysis_cache
+-- Table 9: analysis_cache
 -- Cache for strategy calculation results (for faster dashboard loading)
 -- =============================================================================
 CREATE TABLE IF NOT EXISTS analysis_cache (
@@ -483,7 +538,7 @@ TO authenticated
 USING (true);
 
 -- =============================================================================
--- Table 9: chart_cache
+-- Table 10: chart_cache
 -- Cache for rendered chart visualizations (for faster dashboard loading)
 -- =============================================================================
 CREATE TABLE IF NOT EXISTS chart_cache (
@@ -517,7 +572,7 @@ TO authenticated
 USING (true);
 
 -- =============================================================================
--- Table 10: portfolios
+-- Table 11: portfolios
 -- Tracks portfolio-level metadata (collections of positions)
 -- =============================================================================
 CREATE TABLE IF NOT EXISTS portfolios (
@@ -592,7 +647,7 @@ ADD CONSTRAINT IF NOT EXISTS fk_positions_portfolio
 FOREIGN KEY (portfolio_id) REFERENCES portfolios(portfolio_id) ON DELETE SET NULL;
 
 -- =============================================================================
--- Table 11: allocator_settings
+-- Table 12: allocator_settings
 -- Stores allocator constraint settings and sidebar filter presets
 -- Supports both "last_used" (auto-saved) and named presets
 -- =============================================================================

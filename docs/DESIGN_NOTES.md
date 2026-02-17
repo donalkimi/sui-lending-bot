@@ -1,5 +1,9 @@
 # Sui Lending Bot - Design Notes
 
+## Meta-Rule: Claude and Design Notes
+
+**CRITICAL:** Claude (AI assistant) should NEVER suggest entries for DESIGN_NOTES.md. This document is maintained exclusively by the developer. Claude can READ and FOLLOW these principles, but must never propose additions or modifications.
+
 ## Critical Principles
 
 ### 1. Timestamp as "Current Time"

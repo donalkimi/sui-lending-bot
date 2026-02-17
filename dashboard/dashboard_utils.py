@@ -612,6 +612,11 @@ def get_strategy_history(strategy_row: Dict[str, Any], liquidation_distance: flo
         if strategy_timestamp_raw is None:
             raise ValueError("strategy_row must contain 'timestamp'")
 
+        # Check for NaN (pandas missing value indicator)
+        import math
+        if isinstance(strategy_timestamp_raw, float) and math.isnan(strategy_timestamp_raw):
+            raise ValueError("strategy_row has NaN timestamp - timestamp is missing or corrupt")
+
         # Convert to seconds (handles any input type)
         strategy_seconds = to_seconds(strategy_timestamp_raw)
 

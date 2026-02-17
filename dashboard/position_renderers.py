@@ -1011,6 +1011,110 @@ def render_position_actions_portfolio(
             st.rerun()
 
 
+def render_position_history_chart(
+    position: pd.Series,
+    timestamp_seconds: int,
+    context: str = 'position'
+) -> None:
+    """
+    Render APR history chart for a position.
+
+    Matches All Strategies tab implementation - shows APR history only.
+
+    Args:
+        position: Position data series
+        timestamp_seconds: Current timestamp
+        context: Context string to make keys unique ('position' or 'portfolio')
+    """
+    st.markdown("### 📈 Historical Performance")
+
+    col1, col2, col3 = st.columns([1, 2, 2])
+
+    position_id = position['position_id']
+    chart_key = f"chart_{context}_{position_id}"
+
+    with col1:
+        if st.button("📊 Show Chart", key=chart_key):
+            st.session_state[f'show_{chart_key}'] = True
+            st.rerun()
+
+    with col2:
+        time_range = st.selectbox(
+            "Time Range",
+            options=['7d', '30d', '90d', 'all'],
+            index=3,  # Default to 'all' (All Time)
+            format_func=lambda x: {
+                '7d': 'Last 7 Days',
+                '30d': 'Last 30 Days',
+                '90d': 'Last 90 Days',
+                'all': 'All Time'
+            }[x],
+            key=f"range_{chart_key}"
+        )
+
+    with col3:
+        st.caption("View APR history for this strategy over time")
+
+    # Generate and display chart if button clicked
+    if st.session_state.get(f'show_{chart_key}', False):
+        try:
+            # Build strategy dict from position data
+            strategy_dict = {
+                'strategy_type': position['strategy_type'],
+                'token1': position.get('token1'),
+                'token2': position.get('token2'),
+                'token3': position.get('token3'),
+                'token1_contract': position['token1_contract'],
+                'token2_contract': position.get('token2_contract'),
+                'token3_contract': position.get('token3_contract'),
+                'protocol_a': position['protocol_a'],
+                'protocol_b': position.get('protocol_b'),
+                'liquidation_distance': position.get('liquidation_distance', 0.20)
+            }
+
+            # Calculate time range
+            from analysis.strategy_history.chart_utils import get_chart_time_range
+            start_ts, end_ts = get_chart_time_range(time_range, timestamp_seconds)
+
+            # Fetch history
+            from analysis.strategy_history.strategy_history import get_strategy_history
+            history_df = get_strategy_history(strategy_dict, start_ts, end_ts)
+
+            if history_df.empty:
+                st.warning("⚠️ No historical data available for this strategy.")
+            else:
+                # Generate chart
+                from analysis.strategy_history.chart_utils import create_history_chart, format_history_table
+
+                # Build chart title from position details
+                token_flow = f"{position.get('token1')}/{position.get('token2')}"
+                if position.get('token3'):
+                    token_flow += f"/{position.get('token3')}"
+                protocol_pair = f"{position['protocol_a']}/{position.get('protocol_b', '')}"
+                chart_title = f"{token_flow} - {protocol_pair}"
+
+                chart = create_history_chart(
+                    history_df,
+                    title=chart_title,
+                    include_price=False,  # APR only, like All Strategies tab
+                    height=400
+                )
+
+                st.plotly_chart(chart, width="stretch")
+
+                # Summary statistics table
+                with st.expander("📊 Summary Statistics", expanded=False):
+                    stats_df = format_history_table(history_df)
+                    st.dataframe(stats_df, hide_index=True, width="stretch")
+
+        except Exception as e:
+            st.error(f"❌ Failed to load chart: {e}")
+            import logging
+            logging.exception("Chart generation error")
+
+    st.markdown("")  # Spacing
+
+
 # ============================================================================
 # RECURSIVE LENDING RENDERER (Current Implementation)
 # ============================================================================
@@ -1291,7 +1395,7 @@ class RecursiveLendingRenderer(StrategyRendererBase):
 
         # Pandas-safe checks (avoid truth value ambiguity)
         def safe_value(val):
-            """Check if value is valid (not None, not NaN)."""
+            """Check if value is valid (not None, not NaN). Allows zero values."""
             if val is None:
                 return False
             if isinstance(val, (pd.Series, pd.DataFrame)):
@@ -1301,7 +1405,8 @@ class RecursiveLendingRenderer(StrategyRendererBase):
             if not pd.notna(val):
                 return False
             try:
-                return float(val) != 0
+                float(val)  # Check if convertible to float
+                return True  # Valid value (including zero)
             except (TypeError, ValueError):
                 return False
 
@@ -1509,7 +1614,7 @@ class RecursiveLendingRenderer(StrategyRendererBase):
 
         # Pandas-safe checks (avoid truth value ambiguity)
         def safe_value(val):
-            """Check if value is valid (not None, not NaN)."""
+            """Check if value is valid (not None, not NaN). Allows zero values."""
             if val is None:
                 return False
             if isinstance(val, (pd.Series, pd.DataFrame)):
@@ -1519,7 +1624,8 @@ class RecursiveLendingRenderer(StrategyRendererBase):
             if not pd.notna(val):
                 return False
             try:
-                return float(val) != 0
+                float(val)  # Check if convertible to float
+                return True  # Valid value (including zero)
             except (TypeError, ValueError):
                 return False
 
@@ -1835,6 +1941,11 @@ def render_position_expander(
                     get_price_with_fallback=get_price_with_fallback,
                     strategy_type=strategy_type
                 )
+
+        st.markdown("---")
+
+        # Historical performance chart
+        render_position_history_chart(position, timestamp_seconds, context=context)
 
         st.markdown("---")
 
