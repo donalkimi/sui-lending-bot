@@ -142,7 +142,8 @@ def refresh_pipeline(
     notifier = SlackNotifier()
     print("[FETCH] Starting protocol data fetch...")
     lend_rates, borrow_rates, collateral_ratios, prices, lend_rewards, borrow_rewards, available_borrow, borrow_fees, borrow_weights, liquidation_thresholds = merge_protocol_data(
-        stablecoin_contracts=stablecoin_contracts
+        stablecoin_contracts=stablecoin_contracts,
+        timestamp=current_seconds  # NEW: Pass timestamp for perp rate fetching (DESIGN_NOTES.md #1, #2)
     )
     print("[FETCH] Protocol data fetch complete")
 

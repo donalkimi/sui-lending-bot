@@ -127,7 +127,8 @@ def initialize_allocator_settings():
         'protocol_filter': [],
         'show_stablecoin_lending': True,
         'show_noloop_lending': True,
-        'show_recursive_lending': True
+        'show_recursive_lending': True,
+        'show_perp_lending': True
     }
     print("ℹ️  Using default settings (no last_used found)")
 
@@ -399,7 +400,8 @@ def display_strategies_table(
     strategy_type_map = {
         'stablecoin_lending': 'Stablecoin',
         'noloop_cross_protocol_lending': 'No-Loop',
-        'recursive_lending': 'Recursive'
+        'recursive_lending': 'Recursive',
+        'perp_lending': 'Perp'
     }
 
     # Debug: Check if strategy_type column exists
@@ -448,7 +450,7 @@ def display_strategies_table(
         column_config={
             "Strategy Type": st.column_config.TextColumn(
                 "Strategy Type",
-                help="Type of lending strategy (Stablecoin, No-Loop, or Recursive)",
+                help="Type of lending strategy (Stablecoin, No-Loop, Recursive, or Perp)",
                 width="small"
             ),
             "Net APR": st.column_config.NumberColumn(
@@ -2279,7 +2281,7 @@ def render_sidebar_filters(display_results: pd.DataFrame):
     Returns:
         tuple: (liquidation_distance, deployment_usd, force_usdc_start, force_token3_equals_token1,
                 stablecoin_only, min_apr, token_filter, protocol_filter,
-                show_stablecoin_lending, show_noloop_lending, show_recursive_lending)
+                show_stablecoin_lending, show_noloop_lending, show_recursive_lending, show_perp_lending)
     """
     st.header("⚙️ Settings")
 
@@ -2296,7 +2298,8 @@ def render_sidebar_filters(display_results: pd.DataFrame):
             'protocol_filter': [],
             'show_stablecoin_lending': True,
             'show_noloop_lending': True,
-            'show_recursive_lending': True
+            'show_recursive_lending': True,
+            'show_perp_lending': True
         }
 
     filters = st.session_state.sidebar_filters
@@ -2401,6 +2404,12 @@ def render_sidebar_filters(display_results: pd.DataFrame):
         help="4-leg strategy with geometric leverage (lend → borrow → lend → borrow → loop)"
     )
 
+    show_perp_lending = st.toggle(
+        "Show Perp Lending",
+        value=filters.get('show_perp_lending', True),
+        help="Market-neutral strategy: long spot + short perp (earn lending + funding rates)"
+    )
+
     st.markdown("---")
 
     # Filters section
@@ -2436,12 +2445,13 @@ def render_sidebar_filters(display_results: pd.DataFrame):
         'protocol_filter': protocol_filter,
         'show_stablecoin_lending': show_stablecoin_lending,
         'show_noloop_lending': show_noloop_lending,
-        'show_recursive_lending': show_recursive_lending
+        'show_recursive_lending': show_recursive_lending,
+        'show_perp_lending': show_perp_lending
     })
 
     return (liquidation_distance, deployment_usd, force_usdc_start, force_token3_equals_token1,
             stablecoin_only, min_apr, token_filter, protocol_filter,
-            show_stablecoin_lending, show_noloop_lending, show_recursive_lending)
+            show_stablecoin_lending, show_noloop_lending, show_recursive_lending, show_perp_lending)
 
 def render_allocation_tab(all_strategies_df: pd.DataFrame):
     """
@@ -2894,7 +2904,8 @@ def render_allocation_tab(all_strategies_df: pd.DataFrame):
                 strategy_type_map = {
                     'stablecoin_lending': 'Stablecoin',
                     'noloop_cross_protocol_lending': 'No-Loop',
-                    'recursive_lending': 'Recursive'
+                    'recursive_lending': 'Recursive',
+                    'perp_lending': 'Perp'
                 }
                 display_df['strategy_type'] = display_df['strategy_type'].map(strategy_type_map)
 
@@ -4015,7 +4026,7 @@ def render_dashboard(data_loader: DataLoader, mode: str):
 
         (liquidation_distance, deployment_usd, force_usdc_start, force_token3_equals_token1,
          stablecoin_only, min_apr, token_filter, protocol_filter,
-         show_stablecoin_lending, show_noloop_lending, show_recursive_lending) = render_sidebar_filters(empty_df)
+         show_stablecoin_lending, show_noloop_lending, show_recursive_lending, show_perp_lending) = render_sidebar_filters(empty_df)
 
     # === RUN ANALYSIS WITH DATABASE CACHING ===
     analysis_start = time.time()
@@ -4080,7 +4091,8 @@ def render_dashboard(data_loader: DataLoader, mode: str):
             borrow_weights=borrow_weights,
             timestamp=timestamp_seconds,  # Pass Unix seconds (int)
             liquidation_distance=liquidation_distance,
-            strategy_types=get_all_strategy_types()  # Generate all strategy types
+            strategy_types=get_all_strategy_types(),  # Generate all strategy types
+            rate_tracker=tracker  # NEW: Pass RateTracker for perp lending strategies
         )
         analyzer_init_time = (time.time() - analyzer_init_start) * 1000
         print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] RateAnalyzer initialized in {analyzer_init_time:.1f}ms")
@@ -4124,6 +4136,8 @@ def render_dashboard(data_loader: DataLoader, mode: str):
             enabled_strategy_types.append('noloop_cross_protocol_lending')
         if show_recursive_lending:
             enabled_strategy_types.append('recursive_lending')
+        if show_perp_lending:
+            enabled_strategy_types.append('perp_lending')
 
         if enabled_strategy_types and 'strategy_type' in filtered_results.columns:
             before_count = len(filtered_results)

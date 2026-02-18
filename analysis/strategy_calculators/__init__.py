@@ -10,6 +10,7 @@ from .base import StrategyCalculatorBase
 from .stablecoin_lending import StablecoinLendingCalculator
 from .noloop_cross_protocol import NoLoopCrossProtocolCalculator
 from .recursive_lending import RecursiveLendingCalculator
+from .perp_lending import PerpLendingCalculator
 
 # Global calculator registry
 _CALCULATORS: Dict[str, StrategyCalculatorBase] = {}
@@ -96,6 +97,7 @@ def get_all_calculators() -> Dict[str, StrategyCalculatorBase]:
 register_calculator(StablecoinLendingCalculator)
 register_calculator(NoLoopCrossProtocolCalculator)
 register_calculator(RecursiveLendingCalculator)
+register_calculator(PerpLendingCalculator)
 
 # Export public API
 __all__ = [
@@ -106,6 +108,7 @@ __all__ = [
     'StablecoinLendingCalculator',
     'NoLoopCrossProtocolCalculator',
     'RecursiveLendingCalculator',
+    'PerpLendingCalculator',
 
     # Registry functions
     'register_calculator',
