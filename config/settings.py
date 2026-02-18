@@ -79,6 +79,62 @@ BLUEFIN_PERP_MARKETS = [
 ]
 
 # ==============================================================================
+# BLUEFIN PERPETUAL FEES (added 2026-02-18)
+# ==============================================================================
+
+# Bluefin trading fees (as decimals, not basis points)
+# Maker fee: paid when providing liquidity (limit orders that rest in book)
+# Taker fee: paid when taking liquidity (market orders or immediate fills)
+BLUEFIN_MAKER_FEE = 0.0001   # 0.01% = 1 basis point
+BLUEFIN_TAKER_FEE = 0.00035  # 0.035% = 3.5 basis points
+
+# Conservative assumption: Pay taker fee on both entry and exit
+# Actual fees may be lower if using maker orders
+# Total upfront cost = 2 × BLUEFIN_TAKER_FEE = 0.07% of position size
+
+# ==============================================================================
+# BLUEFIN PERP TO LENDING TOKEN MAPPING (added 2026-02-18)
+# ==============================================================================
+
+# Maps Bluefin perpetual markets to compatible spot lending tokens
+# Format: {perp_proxy_contract: [spot_token_contract1, spot_token_contract2, ...]}
+# Only includes tokens with pyth_id OR coingecko_id in token_registry
+# Generated from token_registry table - regenerate when new tokens are added
+
+BLUEFIN_TO_LENDINGS = {
+    '0xBTC-USDC-PERP_bluefin': [
+        '0x3e8e9423d80e1774a7ca128fccd8bf5f1f7753be658c5e645929037f7c819040::lbtc::LBTC',
+        '0x41f9f9344cac094454cd574e333c4fdb132d7bcc9379bcd4aab485b2a63942::wbtc::WBTC',
+        '0x876a4b7bce8aeaef60464c11f4026903e9afacab79b9b142686158aa86560b50::xbtc::XBTC',
+        '0xaafb102dd0902f5055cadecd687fb5b71ca82ef0e0285d90afde828ec58ca96b::btc::BTC',
+    ],
+    '0xDEEP-USDC-PERP_bluefin': [
+        '0xdeeb7a4662eec9f2f3def03fb937a663dddaa2e215b8078a284d026b7946c270::deep::DEEP',
+    ],
+    '0xETH-USDC-PERP_bluefin': [
+        '0xaf8cd5edc19c4512f4259f0bee101a40d41ebed738ade5874359610ef8eeced5::coin::COIN',
+        '0xd0e89b2af5e4910726fbcd8b8dd37bb79b29e5f83f7491bca830e94f7f226d29::eth::ETH',
+    ],
+    '0xSOL-USDC-PERP_bluefin': [
+        '0xb7844e289a8410e50fb3ca48d69eb9cf29e27d223ef90353fe1bd8e27ff8f3f8::coin::COIN',
+    ],
+    '0xSUI-USDC-PERP_bluefin': [
+        '0x0000000000000000000000000000000000000000000000000000000000000002::sui::SUI',
+        '0x2::sui::SUI',
+        '0x549e8b69270defbfafd4f94e17ec44cdbdd99820b33bda2278dea3b9a32d3f55::cert::CERT',
+        '0x83556891f4a0f233ce7b05cfe7f957d4020492a34f5405b2cb9377d060bef4bf::spring_sui::SPRING_SUI',
+        '0xbde4ba4c2e274a60ce15c1cfff9e5c42e41654ac8b6d906a57efa4bd3c29f47d::hasui::HASUI',
+        '0xd1b72982e40348d069bb1ff701e634c117bb5f741f44dff91e472d3b01461e55::stsui::STSUI',
+        '0xf325ce1300e8dac124071d3152c5c5ee6174914f8bc2161e88329cf579246efc::afsui::AFSUI',
+    ],
+    '0xWAL-USDC-PERP_bluefin': [
+        '0x356a26eb9e012a68958082340d4c4116e7f55615cf27affcff209cf0ae544f59::wal::WAL',
+        '0x8b4d553839b219c3fd47608a0cc3d5fcc572cb25d41b7df3833208586a8d2470::hawal::HAWAL',
+        '0xb1b0650a8862e30e3f604fd6c5838bc25464b8d3d827fbd58af7cb9685b832bf::wwal::WWAL',
+    ],
+}
+
+# ==============================================================================
 # PORTFOLIO ALLOCATION SETTINGS
 # ==============================================================================
 
