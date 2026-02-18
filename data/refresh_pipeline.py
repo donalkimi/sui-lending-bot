@@ -85,6 +85,59 @@ def refresh_pipeline(
     # Convert to seconds (Unix timestamp) - this is what we use internally
     current_seconds = int(ts.timestamp())
 
+    # Create tracker instance early (needed for perp check)
+    tracker = RateTracker(
+        use_cloud=getattr(settings, "USE_CLOUD_DB", False),
+        db_path=getattr(settings, "SQLITE_PATH", "data/lending_rates.db"),
+        connection_url=getattr(settings, "SUPABASE_URL", None),
+    )
+
+    # STEP 1: Ensure perp funding rates exist for this hour
+    from data.bluefin.bluefin_reader import BluefinReader
+
+    # Round timestamp to nearest hour (for perp data matching)
+    rates_ts_hour = ts.replace(minute=0, second=0, microsecond=0)
+    rates_ts_hour_str = to_datetime_str(int(rates_ts_hour.timestamp()))
+
+    print(f"[PERP CHECK] Checking perp data for hour: {rates_ts_hour_str}")
+
+    # Check if perp data exists for this hour
+    conn = tracker._get_connection()
+    cursor = conn.cursor()
+
+    if tracker.use_cloud:
+        cursor.execute(
+            "SELECT COUNT(*) FROM perp_margin_rates WHERE timestamp = %s",
+            (rates_ts_hour_str,)
+        )
+    else:
+        cursor.execute(
+            "SELECT COUNT(*) FROM perp_margin_rates WHERE timestamp = ?",
+            (rates_ts_hour_str,)
+        )
+
+    count = cursor.fetchone()[0]
+    conn.close()
+
+    if count == 0:
+        print(f"[PERP CHECK] No perp data found for {rates_ts_hour_str}")
+        print("[PERP FETCH] Fetching from Bluefin...")
+
+        # Fetch from Bluefin API
+        bluefin_reader = BluefinReader()
+        perp_rates_df = bluefin_reader.get_recent_funding_rates(limit=1)  # Just need latest
+
+        if not perp_rates_df.empty:
+            # Save to perp_margin_rates
+            rows_saved = tracker.save_perp_rates(perp_rates_df)
+            print(f"[PERP FETCH] Saved {rows_saved} perp rates")
+
+            # Register proxy tokens
+            tracker.register_perp_tokens(perp_rates_df)
+        else:
+            print("[PERP FETCH] WARNING: No perp rates fetched from Bluefin")
+    else:
+        print(f"[PERP CHECK] ✓ Perp data exists ({count} markets)")
 
     notifier = SlackNotifier()
     print("[FETCH] Starting protocol data fetch...")
@@ -95,13 +148,6 @@ def refresh_pipeline(
 
     # Persist snapshot early, so even if analysis fails you still capture the raw state.
     token_summary = {"seen": 0, "inserted": 0, "updated": 0, "total": 0}  # Default if not saving
-
-    # Create tracker instance (always needed for analysis cache)
-    tracker = RateTracker(
-        use_cloud=getattr(settings, "USE_CLOUD_DB", False),
-        db_path=getattr(settings, "SQLITE_PATH", "data/lending_rates.db"),
-        connection_url=getattr(settings, "SUPABASE_URL", None),
-    )
 
     if save_snapshots:
         print("[DB] Saving snapshot to database...")
@@ -148,6 +194,106 @@ def refresh_pipeline(
                 print(f"[ORACLE] Auto-population failed: {e}")
                 print("[ORACLE] Continuing with refresh - oracle IDs can be populated manually")
                 # Continue with refresh - not a critical failure
+
+        # STEP 2: Insert perp market rows into rates_snapshot
+        print("[PERP SNAPSHOT] Inserting perp market rows...")
+
+        from psycopg2.extras import execute_values
+
+        # Fetch all perp rates in one query (EXACT match on timestamp)
+        token_contracts = [f"0x{base_token}-USDC-PERP_bluefin" for base_token in settings.BLUEFIN_PERP_MARKETS]
+
+        conn_perp = tracker._get_connection()
+        cursor_perp = conn_perp.cursor()
+
+        if tracker.use_cloud:
+            # PostgreSQL - use %s placeholders
+            placeholders = ','.join(['%s'] * len(token_contracts))
+            cursor_perp.execute(
+                f"""
+                SELECT token_contract, funding_rate_annual
+                FROM perp_margin_rates
+                WHERE token_contract IN ({placeholders})
+                  AND timestamp = %s
+                """,
+                token_contracts + [rates_ts_hour_str]
+            )
+        else:
+            # SQLite - use ? placeholders
+            placeholders = ','.join(['?'] * len(token_contracts))
+            cursor_perp.execute(
+                f"""
+                SELECT token_contract, funding_rate_annual
+                FROM perp_margin_rates
+                WHERE token_contract IN ({placeholders})
+                  AND timestamp = ?
+                """,
+                token_contracts + [rates_ts_hour_str]
+            )
+
+        perp_rates = cursor_perp.fetchall()
+        conn_perp.close()
+
+        # Build dictionary for quick lookup
+        rates_dict = {token_contract: rate for token_contract, rate in perp_rates}
+
+        # Verify all markets have data (fail loudly if missing)
+        missing_markets = []
+        for token_contract in token_contracts:
+            if token_contract not in rates_dict:
+                missing_markets.append(token_contract)
+
+        if missing_markets:
+            raise ValueError(
+                f"PERP DATA ERROR: No funding rates found for {len(missing_markets)} market(s) "
+                f"at {rates_ts_hour_str}: {missing_markets}. This should never happen - perp data "
+                f"should have been populated in STEP 1."
+            )
+
+        # Build rows for all 6 perp markets
+        perp_rows = []
+        for base_token in settings.BLUEFIN_PERP_MARKETS:
+            token_contract = f"0x{base_token}-USDC-PERP_bluefin"
+            funding_rate = rates_dict[token_contract]
+
+            perp_rows.append((
+                to_datetime_str(current_seconds),  # timestamp (original rates_ts)
+                'Bluefin',                         # protocol
+                f'{base_token}-USDC-PERP',         # token
+                token_contract,                    # token_contract
+                f'{base_token}-PERP',              # market
+                funding_rate                       # perp_margin_rate
+            ))
+
+        # Bulk insert perp rows
+        conn_insert = tracker._get_connection()
+        cursor_insert = conn_insert.cursor()
+
+        if tracker.use_cloud:
+            execute_values(
+                cursor_insert,
+                """
+                INSERT INTO rates_snapshot (
+                    timestamp, protocol, token, token_contract, market, perp_margin_rate
+                ) VALUES %s
+                ON CONFLICT (timestamp, protocol, token_contract) DO NOTHING
+                """,
+                perp_rows
+            )
+        else:
+            cursor_insert.executemany(
+                """
+                INSERT OR IGNORE INTO rates_snapshot (
+                    timestamp, protocol, token, token_contract, market, perp_margin_rate
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                perp_rows
+            )
+
+        conn_insert.commit()
+        conn_insert.close()
+
+        print(f"[PERP SNAPSHOT] ✓ Inserted {len(perp_rows)} perp market rows")
 
         print("[DB] Snapshot saved successfully")
 

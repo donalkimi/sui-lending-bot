@@ -2152,6 +2152,399 @@ This ERD shows all tables, their key columns, and relationships with foreign key
 
 ---
 
+## 3.4 PERPETUAL FUNDING RATES SYSTEM
+
+### Overview
+
+The system tracks perpetual futures funding rates from Bluefin Protocol to calculate margin costs for perp positions. Funding rates are fetched hourly, validated, and stored in two tables with different purposes.
+
+**Key Design**: Perp markets appear as first-class rows in `rates_snapshot` alongside lending markets, enabling unified querying and historical analysis.
+
+### Database Schema
+
+#### perp_margin_rates Table (Raw History)
+
+**Purpose**: Store complete hourly funding rate history from Bluefin API
+
+```sql
+CREATE TABLE perp_margin_rates (
+    timestamp TIMESTAMP NOT NULL,
+    protocol VARCHAR(50) NOT NULL,           -- 'Bluefin'
+    market VARCHAR(100) NOT NULL,            -- 'BTC-PERP', 'ETH-PERP', etc.
+    market_address TEXT NOT NULL,            -- Unique contract from Bluefin
+    token_contract TEXT NOT NULL,            -- Proxy: "0xBTC-USDC-PERP_bluefin"
+    base_token VARCHAR(50) NOT NULL,         -- Base token: 'BTC', 'ETH', etc.
+    quote_token VARCHAR(50) NOT NULL,        -- Quote token: 'USDC'
+    funding_rate_hourly DECIMAL(10,6),       -- Raw hourly rate (e.g., 0.00001)
+    funding_rate_annual DECIMAL(10,6) NOT NULL,  -- Annualized: hourly × 24 × 365
+    next_funding_time TIMESTAMP,             -- Next funding update (optional)
+    PRIMARY KEY (timestamp, protocol, token_contract)
+);
+```
+
+**Indexes**:
+- `idx_perp_rates_time` ON (timestamp) → Fast time-range queries
+- `idx_perp_rates_token` ON (token_contract) → Fast market lookups
+- `idx_perp_rates_base_token` ON (base_token) → Filter by underlying asset
+
+#### rates_snapshot.perp_margin_rate Column
+
+**Purpose**: Enable unified queries for lending + perp markets
+
+**Schema Addition**:
+```sql
+ALTER TABLE rates_snapshot
+ADD COLUMN perp_margin_rate DECIMAL(10,6) DEFAULT NULL;
+```
+
+**Perp Market Rows in rates_snapshot**:
+- **protocol**: `'Bluefin'`
+- **token**: `'BTC-USDC-PERP'` (human-readable)
+- **token_contract**: `'0xBTC-USDC-PERP_bluefin'` (proxy identifier)
+- **market**: `'BTC-PERP'` (Bluefin API naming)
+- **perp_margin_rate**: Annualized funding rate (decimal)
+- **All lending columns**: NULL (lend_total_apr, borrow_total_apr, etc.)
+
+**Benefits**:
+- Unified queries: `SELECT * FROM rates_snapshot WHERE timestamp = ? ORDER BY protocol, token`
+- Historical analysis: Perp rates tracked alongside lending rates
+- Position tracking: Single table lookup for all market types
+
+### Whitelisted Markets
+
+**Source**: [config/settings.py](../config/settings.py)
+
+```python
+BLUEFIN_PERP_MARKETS = [
+    'BTC',   # BTC-PERP
+    'ETH',   # ETH-PERP
+    'SOL',   # SOL-PERP
+    'SUI',   # SUI-PERP
+    'WAL',   # WAL-PERP (Walrus)
+    'DEEP'   # DEEP-PERP (DeepBook)
+]
+```
+
+**Proxy Token Contracts** (generated format):
+- `0xBTC-USDC-PERP_bluefin`
+- `0xETH-USDC-PERP_bluefin`
+- `0xSOL-USDC-PERP_bluefin`
+- `0xSUI-USDC-PERP_bluefin`
+- `0xWAL-USDC-PERP_bluefin`
+- `0xDEEP-USDC-PERP_bluefin`
+
+### Refresh Pipeline Integration
+
+Perp funding rates are integrated directly into `refresh_pipeline()` to ensure perp market rows appear in every rates_snapshot.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ REFRESH PIPELINE WITH PERP INTEGRATION                                      │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+   refresh_pipeline() called
+            ↓
+   Round timestamp to nearest hour (rates_ts_hour)
+            ↓
+   ╔═══════════════════════════════════════════╗
+   ║ STEP 1: Check perp_margin_rates          ║
+   ║ SELECT COUNT(*) WHERE timestamp = ?      ║
+   ╚═══════════════════════════════════════════╝
+            ↓
+         ┌──────┐
+         │Count?│
+         └──┬───┘
+            │
+     ┌──────┴──────┐
+     │             │
+  Count==0      Count>0
+     │             │
+     ↓             ↓
+  Fetch from    Continue
+  Bluefin API   (data exists)
+     │             │
+     ↓             │
+  Save to          │
+  perp_margin_     │
+  rates table      │
+     │             │
+     ↓             │
+  Register         │
+  proxy tokens     │
+     │             │
+     └──────┬──────┘
+            ↓
+   Fetch lending rates from protocols
+   (Navi, Scallop, AlphaFi, etc.)
+            ↓
+   Save lending market rows to rates_snapshot
+            ↓
+         ┌──────────────┐
+         │save_snapshots│
+         │    == True?  │
+         └──┬───────────┘
+            │
+     ┌──────┴──────┐
+     │             │
+    Yes           No
+     │             │
+     ↓             ↓
+  ╔═══════════════════════════════════════════╗    Skip perp
+  ║ STEP 2: Fetch perp rates (bulk query)    ║    insertion
+  ║ EXACT match on rates_ts_hour              ║         │
+  ╚═══════════════════════════════════════════╝         │
+            ↓                                            │
+     ┌─────────────┐                                    │
+     │All 6 markets│                                    │
+     │   found?    │                                    │
+     └──┬──────────┘                                    │
+        │                                               │
+  ┌─────┴─────┐                                        │
+  │           │                                         │
+ Yes         No                                         │
+  │           │                                         │
+  ↓           ↓                                         │
+Bulk      ❌ FAIL LOUDLY                                │
+insert       │                                          │
+perp rows    ↓                                          │
+  │       Exit with error                               │
+  │       "Missing perp data"                           │
+  │                                                      │
+  └──────────────────┬───────────────────────────────────┘
+                     ↓
+           Run analysis & auto-rebalance
+                     ↓
+                 Complete
+
+KEY:
+  ═══ Critical validation step (fails loudly if error)
+  ┌─┐ Decision point
+  ↓   Flow direction
+  ❌  Error exit
+```
+
+**Flow Details**:
+
+1. **START: Perp Data Check** (Lines 95-140 in [refresh_pipeline.py](../data/refresh_pipeline.py))
+   - Round `rates_ts` to nearest hour → `rates_ts_hour`
+   - Query: `SELECT COUNT(*) FROM perp_margin_rates WHERE timestamp = rates_ts_hour`
+   - If count == 0: Fetch from Bluefin API and save
+   - If count > 0: Continue (data already exists)
+
+2. **MIDDLE: Normal Refresh**
+   - Fetch lending rates from protocols (Navi, Scallop, etc.)
+   - Save lending market rows to `rates_snapshot`
+
+3. **END: Perp Row Insertion** (Lines 198-250 in [refresh_pipeline.py](../data/refresh_pipeline.py))
+   - Bulk fetch all 6 perp rates in ONE query
+   - Build rows for each perp market
+   - Insert using `ON CONFLICT DO NOTHING` (idempotent)
+   - **Fail loudly** if any market missing (indicates error)
+
+**SQL Queries Used**:
+
+```sql
+-- Step 1: Check if perp data exists
+SELECT COUNT(*) FROM perp_margin_rates WHERE timestamp = '2026-02-18 14:00:00';
+
+-- Step 3: Bulk fetch perp rates (exact match)
+SELECT token_contract, funding_rate_annual
+FROM perp_margin_rates
+WHERE token_contract IN (
+    '0xBTC-USDC-PERP_bluefin',
+    '0xETH-USDC-PERP_bluefin',
+    '0xSOL-USDC-PERP_bluefin',
+    '0xSUI-USDC-PERP_bluefin',
+    '0xWAL-USDC-PERP_bluefin',
+    '0xDEEP-USDC-PERP_bluefin'
+)
+AND timestamp = '2026-02-18 14:00:00';  -- EXACT match, not <=
+
+-- Step 3: Bulk insert perp rows
+INSERT INTO rates_snapshot (
+    timestamp, protocol, token, token_contract, market, perp_margin_rate
+) VALUES %s
+ON CONFLICT (timestamp, protocol, token_contract) DO NOTHING;
+```
+
+### Validation & Data Quality Checks
+
+#### 1. Rate Capping (±10 bps per hour)
+
+**Source**: [BluefinReader](../data/bluefin/bluefin_reader.py) (Lines 232-253)
+
+**Rule**: Cap funding rates at ±10 basis points (0.1%) per hour per [Bluefin documentation](https://learn.bluefin.io/bluefin/bluefin-perps-exchange/trading/funding)
+
+**Implementation**:
+```python
+MAX_FUNDING_RATE_E9 = 1_000_000   # +10 bps (0.001 * 1e9)
+MIN_FUNDING_RATE_E9 = -1_000_000  # -10 bps
+
+if funding_rate_e9 > MAX_FUNDING_RATE_E9:
+    print(f"⚠️  EXTREME RATE DETECTED - CAPPING TO +10 bps")
+    funding_rate_e9 = MAX_FUNDING_RATE_E9
+elif funding_rate_e9 < MIN_FUNDING_RATE_E9:
+    print(f"⚠️  EXTREME RATE DETECTED - CAPPING TO -10 bps")
+    funding_rate_e9 = MIN_FUNDING_RATE_E9
+```
+
+**When Triggered**: Extreme market conditions or API data errors
+
+**Effect**: Prevents unrealistic funding rates from corrupting PnL calculations
+
+#### 2. Timestamp Handling (UTC Only)
+
+**Source**: [BluefinReader](../data/bluefin/bluefin_reader.py) (Lines 255-258)
+
+**Rules**:
+- Convert Bluefin millisecond timestamps to UTC datetime
+- Round down to nearest hour (minute=0, second=0, microsecond=0)
+- Use [utils/time_helpers.py](../utils/time_helpers.py) to avoid DST issues
+
+**Implementation**:
+```python
+# Convert ms to seconds
+funding_time_seconds = int(funding_time_ms / 1000)
+
+# Convert to UTC datetime (timezone-aware)
+raw_timestamp = to_datetime_utc(funding_time_seconds)
+
+# Round down to nearest hour
+funding_time = raw_timestamp.replace(minute=0, second=0, microsecond=0)
+```
+
+**Why**: Ensures consistent hourly snapshots, no DST edge cases
+
+#### 3. Duplicate Prevention
+
+**Database Level**: Primary key constraint prevents duplicates
+```sql
+PRIMARY KEY (timestamp, protocol, token_contract)
+```
+
+**Application Level**: `ON CONFLICT DO NOTHING` in INSERT statements
+
+**Deduplication**: Historical backfill script uses `drop_duplicates()`:
+```python
+combined_df.drop_duplicates(subset=['timestamp', 'token_contract'])
+```
+
+#### 4. Missing Data Detection
+
+**Fail-Fast Principle**: If perp data should exist but doesn't, fail loudly
+
+**Implementation** (Lines 200-205 in [refresh_pipeline.py](../data/refresh_pipeline.py)):
+```python
+missing_markets = []
+for token_contract in token_contracts:
+    if token_contract not in rates_dict:
+        missing_markets.append(token_contract)
+
+if missing_markets:
+    raise ValueError(
+        f"PERP DATA ERROR: No funding rates found for {len(missing_markets)} market(s) "
+        f"at {rates_ts_hour_str}: {missing_markets}. This should never happen - perp data "
+        f"should have been populated in STEP 1."
+    )
+```
+
+**When Triggered**: System consistency violation (perp check passed but data missing)
+
+**Effect**: Stops pipeline immediately, alerts via logs, prevents corrupt snapshots
+
+#### 5. API Field Validation
+
+**Source**: [BluefinReader](../data/bluefin/bluefin_reader.py) (Lines 210-222)
+
+**Required Fields**:
+- `fundingRateE9`: Funding rate in E9 format (integer)
+- `fundingTimeAtMillis`: Timestamp in milliseconds (integer)
+
+**Validation**:
+```python
+if 'fundingRateE9' not in rate_entry:
+    raise KeyError(
+        f"Missing required field 'fundingRateE9' for {market_symbol}. "
+        f"Available fields: {list(rate_entry.keys())}"
+    )
+
+if 'fundingTimeAtMillis' not in rate_entry:
+    raise KeyError(
+        f"Missing required field 'fundingTimeAtMillis' for {market_symbol}. "
+        f"Available fields: {list(rate_entry.keys())}"
+    )
+```
+
+**Why**: Detect API schema changes immediately, fail with clear error message
+
+#### 6. Rate Conversion Precision
+
+**E9 Format → Decimal**: Bluefin API returns rates in E9 format (integer scaled by 1e9)
+
+**Conversion**:
+```python
+# Step 1: Convert E9 to hourly rate
+funding_rate_hourly = float(funding_rate_e9) / 1e9
+
+# Step 2: Annualize (hourly → annual)
+funding_rate_annual = round(float(funding_rate_hourly) * 24.0 * 365.0, 5)
+```
+
+**Precision**: Round to 5 decimal places to avoid floating-point errors
+
+**Example**:
+- API returns: `fundingRateE9 = 10000` (0.001% per hour)
+- Hourly: `10000 / 1e9 = 0.00001` (0.001%)
+- Annual: `0.00001 × 24 × 365 = 0.0876` (8.76% APR)
+
+### Historical Backfill
+
+**Script**: [Scripts/interpolate_perp_to_snapshot.py](../Scripts/interpolate_perp_to_snapshot.py)
+
+**Purpose**: Populate perp market rows for historical timestamps (one-time or manual re-run)
+
+**Usage**:
+```bash
+# Backfill last 7 days
+python -m Scripts.interpolate_perp_to_snapshot \
+    --start-date "2026-02-11 00:00:00" \
+    --end-date "2026-02-18 23:59:59" \
+    --batch-size 1000
+
+# Backfill all historical timestamps
+python -m Scripts.interpolate_perp_to_snapshot
+```
+
+**Process**:
+1. Fetch all unique timestamps from `rates_snapshot`
+2. For each timestamp:
+   - Round to nearest hour
+   - Fetch perp rates from `perp_margin_rates` (exact match)
+   - Insert perp market rows (6 markets × N timestamps)
+3. Batch processing: 1000 timestamps per commit
+4. Idempotent: `ON CONFLICT DO NOTHING` allows safe re-runs
+
+**Performance**: Optimized with bulk SQL queries (single WHERE IN instead of N individual queries)
+
+### Deprecation: Separate Perp Refresh Job
+
+**OLD**: [main_perp_refresh.py](../main_perp_refresh.py) (separate cron at :05)
+- Ran 5 minutes after main refresh
+- Fetched last 100 perp rates
+- Did NOT insert rows into `rates_snapshot`
+
+**NEW**: Integrated into `refresh_pipeline()` (single cron at :00)
+- Perp data checked/fetched at START
+- Perp rows inserted at END
+- Everything in one synchronous pipeline
+
+**Migration Status**:
+- ✅ **Phase 1 (Complete)**: Integrated into refresh_pipeline
+- ⏳ **Phase 2 (In Progress)**: Monitoring and validation
+- ⏳ **Phase 3 (Pending)**: Remove old cron job after validation period
+
+---
+
 ## 3.5 CACHING IMPLEMENTATION DETAILS
 
 ### Cache Write Operations

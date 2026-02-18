@@ -8,10 +8,10 @@ Rates are converted to annualized decimals per DESIGN_NOTES.md #7.
 import pandas as pd
 import requests
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, List, Tuple
 from dataclasses import dataclass
-from utils.time_helpers import to_datetime_str, to_datetime_utc
+from utils.time_helpers import to_datetime_str, to_datetime_utc, to_seconds
 
 
 @dataclass
@@ -455,6 +455,14 @@ class BluefinReader:
 
         all_historical_rates = []
 
+        # Calculate reference time once for lookback comparison
+        # This is a one-time backfill: "fetch last N days from when script runs"
+        if lookback_days is not None:
+            reference_seconds = int(datetime.now(timezone.utc).timestamp())
+            cutoff_seconds = reference_seconds - (lookback_days * 24 * 3600)
+        else:
+            cutoff_seconds = None
+
         for base_token in whitelisted_markets:
             print(f"\n  Fetching historical rates for {base_token}-PERP...")
 
@@ -478,9 +486,10 @@ class BluefinReader:
                 total_fetched += len(df_page)
 
                 # Check if lookback_days limit reached
-                if lookback_days is not None:
-                    oldest_timestamp = df_page['timestamp'].min()
-                    if oldest_timestamp < datetime.now() - pd.Timedelta(days=lookback_days):
+                # Compare Unix seconds (timezone-agnostic integers)
+                if cutoff_seconds is not None:
+                    oldest_seconds = to_seconds(df_page['timestamp'].min())
+                    if oldest_seconds < cutoff_seconds:
                         break
 
                 # Increment page number for next iteration
