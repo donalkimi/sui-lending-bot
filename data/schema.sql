@@ -73,6 +73,17 @@ CREATE INDEX IF NOT EXISTS idx_rates_pnl_lookup ON rates_snapshot(token_contract
 -- Partial index only includes rows with perp rates
 CREATE INDEX IF NOT EXISTS idx_rates_perp_margin ON rates_snapshot(perp_margin_rate) WHERE perp_margin_rate IS NOT NULL;
 
+-- RLS Policies for rates_snapshot
+ALTER TABLE rates_snapshot ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Service role has full access to rates_snapshot"
+ON rates_snapshot FOR ALL TO service_role
+USING (true) WITH CHECK (true);
+
+CREATE POLICY "Authenticated users can read rates_snapshot"
+ON rates_snapshot FOR SELECT TO authenticated
+USING (true);
+
 
 -- Table 2: token_registry
 -- Stores every token contract (coin type) seen by the bot, and optional mappings to pricing IDs.
@@ -101,6 +112,17 @@ CREATE TABLE IF NOT EXISTS token_registry (
 CREATE INDEX IF NOT EXISTS idx_token_registry_last_seen ON token_registry(last_seen);
 CREATE INDEX IF NOT EXISTS idx_token_registry_pyth_id ON token_registry(pyth_id);
 CREATE INDEX IF NOT EXISTS idx_token_registry_coingecko_id ON token_registry(coingecko_id);
+
+-- RLS Policies for token_registry
+ALTER TABLE token_registry ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Service role has full access to token_registry"
+ON token_registry FOR ALL TO service_role
+USING (true) WITH CHECK (true);
+
+CREATE POLICY "Authenticated users can read token_registry"
+ON token_registry FOR SELECT TO authenticated
+USING (true);
 
 
 -- Table 3: oracle_prices
@@ -140,12 +162,23 @@ CREATE INDEX IF NOT EXISTS idx_oracle_prices_coingecko_time ON oracle_prices(coi
 CREATE INDEX IF NOT EXISTS idx_oracle_prices_pyth_time ON oracle_prices(pyth_time);
 CREATE INDEX IF NOT EXISTS idx_oracle_prices_defillama_time ON oracle_prices(defillama_time);
 
+-- RLS Policies for oracle_prices
+ALTER TABLE oracle_prices ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Service role has full access to oracle_prices"
+ON oracle_prices FOR ALL TO service_role
+USING (true) WITH CHECK (true);
+
+CREATE POLICY "Authenticated users can read oracle_prices"
+ON oracle_prices FOR SELECT TO authenticated
+USING (true);
+
 
 -- Table 4: perp_margin_rates (added 2026-02-17)
 -- Stores historical perpetual funding rates from Bluefin
 -- Rates are annualized for consistency with lending rates (DESIGN_NOTES.md #7)
 CREATE TABLE IF NOT EXISTS perp_margin_rates (
-    timestamp TIMESTAMP NOT NULL,
+    timestamp TIMESTAMP NOT NULL,                -- Rounded to nearest hour for consistent querying
     protocol VARCHAR(50) NOT NULL,               -- 'Bluefin'
     market VARCHAR(100) NOT NULL,                -- 'BTC-PERP', 'SUI-PERP', 'ETH-PERP'
     market_address TEXT NOT NULL,                -- Unique contract identifier from Bluefin
@@ -165,6 +198,7 @@ CREATE TABLE IF NOT EXISTS perp_margin_rates (
 
     -- Market metadata
     next_funding_time TIMESTAMP,                 -- Next funding update
+    raw_timestamp_ms BIGINT,                     -- Raw funding time from API (milliseconds, before rounding)
 
     PRIMARY KEY (timestamp, protocol, token_contract)
 );
@@ -202,9 +236,21 @@ CREATE TABLE IF NOT EXISTS reward_token_prices (
 CREATE INDEX IF NOT EXISTS idx_reward_prices_time ON reward_token_prices(timestamp);
 CREATE INDEX IF NOT EXISTS idx_reward_prices_contract ON reward_token_prices(reward_token_contract);
 
+-- RLS Policies for reward_token_prices
+ALTER TABLE reward_token_prices ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Service role has full access to reward_token_prices"
+ON reward_token_prices FOR ALL TO service_role
+USING (true) WITH CHECK (true);
+
+CREATE POLICY "Authenticated users can read reward_token_prices"
+ON reward_token_prices FOR SELECT TO authenticated
+USING (true);
+
 
 -- View: all_token_prices
 -- Unified view of supply/borrow + reward token prices
+-- Note: Views inherit RLS from underlying tables (rates_snapshot and reward_token_prices)
 CREATE VIEW IF NOT EXISTS all_token_prices AS
 SELECT
     timestamp,
@@ -345,6 +391,17 @@ CREATE INDEX IF NOT EXISTS idx_positions_tokens ON positions(token1, token2, tok
 CREATE INDEX IF NOT EXISTS idx_positions_is_paper ON positions(is_paper_trade);
 CREATE INDEX IF NOT EXISTS idx_positions_portfolio ON positions(portfolio_id);
 
+-- RLS Policies for positions
+ALTER TABLE positions ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Service role has full access to positions"
+ON positions FOR ALL TO service_role
+USING (true) WITH CHECK (true);
+
+CREATE POLICY "Authenticated users can read positions"
+ON positions FOR SELECT TO authenticated
+USING (true);
+
 
 -- Table 7: position_rebalances
 -- Stores historical position segments created through rebalancing
@@ -443,6 +500,17 @@ CREATE TABLE IF NOT EXISTS position_rebalances (
 CREATE INDEX IF NOT EXISTS idx_rebalances_position ON position_rebalances(position_id);
 CREATE INDEX IF NOT EXISTS idx_rebalances_sequence ON position_rebalances(position_id, sequence_number);
 CREATE INDEX IF NOT EXISTS idx_rebalances_timestamps ON position_rebalances(opening_timestamp, closing_timestamp);
+
+-- RLS Policies for position_rebalances
+ALTER TABLE position_rebalances ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Service role has full access to position_rebalances"
+ON position_rebalances FOR ALL TO service_role
+USING (true) WITH CHECK (true);
+
+CREATE POLICY "Authenticated users can read position_rebalances"
+ON position_rebalances FOR SELECT TO authenticated
+USING (true);
 
 
 -- Table 8: position_statistics

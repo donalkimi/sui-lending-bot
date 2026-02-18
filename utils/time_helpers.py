@@ -5,9 +5,11 @@ Core principle: Work in Unix timestamps (seconds as integers) internally.
 Convert only at boundaries (database, UI).
 
 Single datetime string format everywhere: "2026-01-16 12:00:00"
+
+IMPORTANT: All conversions use UTC timezone to avoid DST issues.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Union
 
 
@@ -54,13 +56,20 @@ def to_seconds(ts: Union[str, datetime, int, float]) -> int:
             raise ValueError("Cannot convert empty string to seconds")
         try:
             # Handle both space and 'T' separator
+            # Assume UTC timezone to avoid DST issues
             dt = datetime.fromisoformat(ts.replace(' ', 'T'))
+            # If no timezone info, assume UTC
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
             return int(dt.timestamp())
         except ValueError as e:
             raise ValueError(f"Cannot parse timestamp string '{ts}': {e}")
 
     # Python datetime.datetime object
     elif isinstance(ts, datetime):
+        # If no timezone info, assume UTC
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
         return int(ts.timestamp())
 
     # pandas.Timestamp object
@@ -114,6 +123,44 @@ def to_datetime_str(seconds: int) -> str:
         )
 
     try:
-        return datetime.fromtimestamp(seconds).strftime("%Y-%m-%d %H:%M:%S")
+        # Use UTC timezone to avoid DST issues
+        return datetime.fromtimestamp(seconds, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     except (OSError, OverflowError, ValueError) as e:
         raise ValueError(f"Failed to convert {seconds} to datetime string: {e}")
+
+
+def to_datetime_utc(seconds: int) -> datetime:
+    """
+    Convert Unix seconds to timezone-aware datetime object in UTC.
+    Use this when you need a datetime object for manipulation (e.g., rounding to hour).
+
+    Args:
+        seconds: Unix timestamp in seconds (integer)
+
+    Returns:
+        Timezone-aware datetime object in UTC
+
+    Raises:
+        TypeError: If seconds is not an integer
+        ValueError: If seconds is None or not a valid Unix timestamp
+    """
+    if seconds is None:
+        raise ValueError("Cannot convert None to datetime - seconds is required")
+
+    if not isinstance(seconds, int):
+        raise TypeError(
+            f"seconds must be int, got {type(seconds).__name__}. "
+            f"Use to_seconds() first to convert to int."
+        )
+
+    # Sanity check: should be reasonable Unix timestamp (after year 2000, before year 2100)
+    if seconds < 946684800 or seconds > 4102444800:
+        raise ValueError(
+            f"Integer {seconds} doesn't look like a valid Unix timestamp. "
+            f"Expected range: 946684800 (2000-01-01) to 4102444800 (2100-01-01)"
+        )
+
+    try:
+        return datetime.fromtimestamp(seconds, tz=timezone.utc)
+    except (OSError, OverflowError, ValueError) as e:
+        raise ValueError(f"Failed to convert {seconds} to datetime: {e}")

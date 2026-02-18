@@ -62,39 +62,8 @@ def main():
             return 1
 
         # Step 3: Register proxy tokens in token_registry
-        print("\n[3/5] Registering proxy tokens in token_registry...")
+        print("\n[3/3] Registering proxy tokens in token_registry...")
         tokens_registered = tracker.register_perp_tokens(perp_rates_df)
-
-        # Step 4: Interpolate to latest rates_snapshot
-        print("\n[4/5] Interpolating perp rates to latest rates_snapshot...")
-        latest_snapshot_time = tracker.get_latest_snapshot_timestamp()
-
-        if latest_snapshot_time:
-            print(f"  Latest snapshot: {latest_snapshot_time}")
-            rows_updated = tracker.interpolate_perp_rates_to_snapshot(
-                timestamp=latest_snapshot_time,
-                backfill_existing=False  # Only populate new NULL values
-            )
-            print(f"  ✅ Updated {rows_updated} rates_snapshot rows")
-        else:
-            print("  ⚠️  No rates_snapshot found (table may be empty)")
-
-        # Step 5: Check for new markets and backfill if needed
-        print("\n[5/5] Checking for new markets...")
-        new_markets = tracker.detect_new_perp_markets(perp_rates_df)
-
-        if new_markets:
-            print(f"  🆕 New markets detected: {', '.join(new_markets)}")
-            print("  ⏳ Backfilling historical rates_snapshot rows (last 7 days)...")
-
-            current_time = datetime.now()
-            rows_backfilled = tracker.backfill_perp_rates_to_snapshot(
-                start_date=current_time - timedelta(days=7),
-                end_date=current_time
-            )
-            print(f"  ✅ Backfilled {rows_backfilled} rows")
-        else:
-            print("  No new markets detected")
 
         print("\n=== Perp Margin Rate Refresh Complete ===\n")
         return 0

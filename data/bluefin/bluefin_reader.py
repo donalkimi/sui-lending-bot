@@ -11,6 +11,7 @@ import time
 from datetime import datetime
 from typing import Optional, List, Tuple
 from dataclasses import dataclass
+from utils.time_helpers import to_datetime_str, to_datetime_utc
 
 
 @dataclass
@@ -97,47 +98,6 @@ class BluefinReader:
                 raise Exception(f"HTTP request failed: {e}")
 
         raise Exception("Request failed after all retries")
-
-    def _convert_funding_rate_to_annual(
-        self,
-        rate_value: float,
-        is_hourly: bool = True
-    ) -> float:
-        """
-        Convert Bluefin funding rate to annualized decimal.
-
-        Bluefin API can return rates in different formats:
-        - Hourly rate as decimal (e.g., 0.001 = 0.1% per hour)
-        - e9 format (rate_e9 / 1e9 = hourly rate)
-
-        Conversion: hourly_rate × 24 × 365 = annualized rate
-
-        Args:
-            rate_value: Rate value from API
-            is_hourly: If True, rate_value is hourly rate; if False, convert from e9
-
-        Returns:
-            Annualized rate as decimal (e.g., 0.0876 = 8.76% APR)
-        """
-        if rate_value is None or rate_value == 0:
-            return 0.0
-
-        try:
-            # Convert to hourly rate if needed
-            if is_hourly:
-                hourly_rate = float(rate_value)
-            else:
-                # e9 format: divide by 1e9
-                hourly_rate = float(rate_value) / 1e9
-
-            # Annualize: hourly × 24 hours × 365 days
-            annual_rate = hourly_rate * 24 * 365
-
-            return annual_rate
-
-        except (TypeError, ValueError) as e:
-            print(f"  ⚠️  Failed to convert rate {rate_value}: {e}")
-            return 0.0
 
     def _generate_perp_token_contract(
         self,
@@ -247,50 +207,75 @@ class BluefinReader:
                         base_token, quote_token = self._parse_market_symbol(market_symbol)
                         token_contract = self._generate_perp_token_contract(base_token, quote_token)
 
-                        # Parse rate and timestamp - fail loudly if missing
-                        # Try common field names, but don't provide defaults
-                        funding_rate_raw = None
-                        for field in ['fundingRate', 'funding_rate', 'rate']:
-                            if field in rate_entry:
-                                funding_rate_raw = rate_entry[field]
-                                break
+                        # Parse rate and timestamp - fail fast with clear errors
+                        # Bluefin API returns: fundingRateE9, fundingTimeAtMillis, symbol
+                        if 'fundingRateE9' not in rate_entry:
+                            raise KeyError(
+                                f"Missing required field 'fundingRateE9' for {market_symbol}. "
+                                f"Available fields: {list(rate_entry.keys())}"
+                            )
 
-                        if funding_rate_raw is None:
-                            print(f"  ⚠️  Skipping rate entry for {market_symbol}: No rate field found")
-                            print(f"      Available fields: {list(rate_entry.keys())}")
-                            continue
+                        if 'fundingTimeAtMillis' not in rate_entry:
+                            raise KeyError(
+                                f"Missing required field 'fundingTimeAtMillis' for {market_symbol}. "
+                                f"Available fields: {list(rate_entry.keys())}"
+                            )
 
-                        timestamp_ms = None
-                        for field in ['timestamp', 'time', 'createdAt']:
-                            if field in rate_entry:
-                                timestamp_ms = rate_entry[field]
-                                break
+                        # Extract raw fields from Bluefin API
+                        funding_rate_e9 = int(rate_entry['fundingRateE9'])
+                        funding_time_ms = int(rate_entry['fundingTimeAtMillis'])
+                        market_address = rate_entry.get('marketAddress', '')
 
-                        if not timestamp_ms:
-                            print(f"  ⚠️  Skipping rate entry for {market_symbol}: No timestamp field found")
-                            print(f"      Available fields: {list(rate_entry.keys())}")
-                            continue
+                        # Convert timestamp from milliseconds to seconds
+                        funding_time_seconds = int(funding_time_ms / 1000)
 
-                        # Convert to datetime
-                        timestamp = datetime.fromtimestamp(int(timestamp_ms) / 1000)
+                        # Cap funding rates at ±10 bps (0.001 = 0.1%) per hour
+                        # Reference: https://learn.bluefin.io/bluefin/bluefin-perps-exchange/trading/funding
+                        # 10 bps in E9 format = 0.001 * 1e9 = 1,000,000
+                        MAX_FUNDING_RATE_E9 = 1_000_000  # +10 bps
+                        MIN_FUNDING_RATE_E9 = -1_000_000  # -10 bps
 
-                        # Convert rate to annual (assuming it's hourly decimal)
-                        funding_rate_annual = self._convert_funding_rate_to_annual(funding_rate_raw, is_hourly=True)
+                        if funding_rate_e9 > MAX_FUNDING_RATE_E9:
+                            print(f"\n⚠️  EXTREME RATE DETECTED - CAPPING TO +10 bps:")
+                            print(f"   Market: {market_symbol}")
+                            print(f"   Timestamp (ms): {funding_time_ms}")
+                            print(f"   Timestamp (UTC): {to_datetime_str(funding_time_seconds)}")
+                            print(f"   Original fundingRateE9: {funding_rate_e9:,}")
+                            print(f"   Capped to: {MAX_FUNDING_RATE_E9:,} (+10 bps)")
+                            funding_rate_e9 = MAX_FUNDING_RATE_E9
+                        elif funding_rate_e9 < MIN_FUNDING_RATE_E9:
+                            print(f"\n⚠️  EXTREME RATE DETECTED - CAPPING TO -10 bps:")
+                            print(f"   Market: {market_symbol}")
+                            print(f"   Timestamp (ms): {funding_time_ms}")
+                            print(f"   Timestamp (UTC): {to_datetime_str(funding_time_seconds)}")
+                            print(f"   Original fundingRateE9: {funding_rate_e9:,}")
+                            print(f"   Capped to: {MIN_FUNDING_RATE_E9:,} (-10 bps)")
+                            funding_rate_e9 = MIN_FUNDING_RATE_E9
 
-                        # Get market_address (required field - fail if missing)
-                        market_address = rate_entry['marketAddress'] if 'marketAddress' in rate_entry else ''
+                        # Convert to UTC datetime and round down to nearest hour
+                        # Use helper to ensure UTC consistency (no DST issues)
+                        raw_timestamp = to_datetime_utc(funding_time_seconds)
+                        funding_time = raw_timestamp.replace(minute=0, second=0, microsecond=0)
+
+                        # Convert e9 format to hourly rate: fundingRateE9 / 1e9
+                        funding_rate_hourly = float(funding_rate_e9) / 1e9
+
+                        # Annualize: hourly × 24 hours × 365 days
+                        # Round to 5 decimal places to avoid floating point precision issues
+                        funding_rate_annual = round(float(funding_rate_hourly) * 24.0 * 365.0, 5)
 
                         all_rates.append({
-                            'timestamp': timestamp,
+                            'timestamp': funding_time,  # Rounded to nearest hour
                             'protocol': 'Bluefin',
                             'market': market_symbol,
                             'market_address': market_address,
                             'token_contract': token_contract,
                             'base_token': base_token,
                             'quote_token': quote_token,
-                            'funding_rate_hourly': float(funding_rate_raw) if funding_rate_raw else 0.0,
+                            'funding_rate_hourly': funding_rate_hourly,
                             'funding_rate_annual': funding_rate_annual,
-                            'next_funding_time': None  # May not be in historical data
+                            'next_funding_time': None,
+                            'raw_timestamp_ms': funding_time_ms  # Raw timestamp from API
                         })
 
                     except KeyError as e:
@@ -317,17 +302,17 @@ class BluefinReader:
         self,
         base_token: str,
         limit: int = 1000,
-        start_time_ms: Optional[int] = None
+        page: int = 1
     ) -> pd.DataFrame:
         """
-        Fetch historical funding rates with pagination.
+        Fetch historical funding rates with page-based pagination.
 
         Used for one-time historical backfill.
 
         Args:
             base_token: Base token symbol (e.g., "BTC", "ETH")
             limit: Number of records per page (default 1000, max per Bluefin)
-            start_time_ms: Pagination cursor (timestamp in ms of last row)
+            page: Page number (1-indexed)
 
         Returns:
             DataFrame with same columns as get_recent_funding_rates()
@@ -338,12 +323,9 @@ class BluefinReader:
             url = f"{self.config.api_base_url}/v1/exchange/fundingRateHistory"
             params = {
                 "symbol": market_symbol,
-                "limit": limit
+                "limit": limit,
+                "page": page
             }
-
-            if start_time_ms is not None:
-                # Add pagination parameter (adjust field name based on API docs)
-                params['startTime'] = start_time_ms
 
             data = self._make_request_with_retry(url, params)
 
@@ -365,48 +347,75 @@ class BluefinReader:
 
             for rate_entry in rates_list:
                 try:
-                    # Parse rate - fail loudly if missing
-                    funding_rate_raw = None
-                    for field in ['fundingRate', 'funding_rate', 'rate']:
-                        if field in rate_entry:
-                            funding_rate_raw = rate_entry[field]
-                            break
+                    # Parse rate and timestamp - fail fast with clear errors
+                    # Bluefin API returns: fundingRateE9, fundingTimeAtMillis, symbol
+                    if 'fundingRateE9' not in rate_entry:
+                        raise KeyError(
+                            f"Missing required field 'fundingRateE9' for {market_symbol}. "
+                            f"Available fields: {list(rate_entry.keys())}"
+                        )
 
-                    if funding_rate_raw is None:
-                        print(f"  ⚠️  Skipping historical rate for {market_symbol}: No rate field found")
-                        print(f"      Available fields: {list(rate_entry.keys())}")
-                        continue
+                    if 'fundingTimeAtMillis' not in rate_entry:
+                        raise KeyError(
+                            f"Missing required field 'fundingTimeAtMillis' for {market_symbol}. "
+                            f"Available fields: {list(rate_entry.keys())}"
+                        )
 
-                    # Parse timestamp - fail loudly if missing
-                    timestamp_ms = None
-                    for field in ['timestamp', 'time', 'createdAt']:
-                        if field in rate_entry:
-                            timestamp_ms = rate_entry[field]
-                            break
+                    # Extract raw fields from Bluefin API
+                    funding_rate_e9 = int(rate_entry['fundingRateE9'])
+                    funding_time_ms = int(rate_entry['fundingTimeAtMillis'])
+                    market_address = rate_entry.get('marketAddress', '')
 
-                    if not timestamp_ms:
-                        print(f"  ⚠️  Skipping historical rate for {market_symbol}: No timestamp field found")
-                        print(f"      Available fields: {list(rate_entry.keys())}")
-                        continue
+                    # Convert timestamp from milliseconds to seconds
+                    funding_time_seconds = int(funding_time_ms / 1000)
 
-                    timestamp = datetime.fromtimestamp(int(timestamp_ms) / 1000)
+                    # Cap funding rates at ±10 bps (0.001 = 0.1%) per hour
+                    # Reference: https://learn.bluefin.io/bluefin/bluefin-perps-exchange/trading/funding
+                    # 10 bps in E9 format = 0.001 * 1e9 = 1,000,000
+                    MAX_FUNDING_RATE_E9 = 1_000_000  # +10 bps
+                    MIN_FUNDING_RATE_E9 = -1_000_000  # -10 bps
 
-                    funding_rate_annual = self._convert_funding_rate_to_annual(funding_rate_raw, is_hourly=True)
+                    if funding_rate_e9 > MAX_FUNDING_RATE_E9:
+                        print(f"\n⚠️  EXTREME RATE DETECTED - CAPPING TO +10 bps:")
+                        print(f"   Market: {market_symbol}")
+                        print(f"   Timestamp (ms): {funding_time_ms}")
+                        print(f"   Timestamp (UTC): {to_datetime_str(funding_time_seconds)}")
+                        print(f"   Original fundingRateE9: {funding_rate_e9:,}")
+                        print(f"   Capped to: {MAX_FUNDING_RATE_E9:,} (+10 bps)")
+                        funding_rate_e9 = MAX_FUNDING_RATE_E9
+                    elif funding_rate_e9 < MIN_FUNDING_RATE_E9:
+                        print(f"\n⚠️  EXTREME RATE DETECTED - CAPPING TO -10 bps:")
+                        print(f"   Market: {market_symbol}")
+                        print(f"   Timestamp (ms): {funding_time_ms}")
+                        print(f"   Timestamp (UTC): {to_datetime_str(funding_time_seconds)}")
+                        print(f"   Original fundingRateE9: {funding_rate_e9:,}")
+                        print(f"   Capped to: {MIN_FUNDING_RATE_E9:,} (-10 bps)")
+                        funding_rate_e9 = MIN_FUNDING_RATE_E9
 
-                    # Get market_address (optional field for historical data)
-                    market_address = rate_entry['marketAddress'] if 'marketAddress' in rate_entry else ''
+                    # Convert to UTC datetime and round down to nearest hour
+                    # Use helper to ensure UTC consistency (no DST issues)
+                    raw_timestamp = to_datetime_utc(funding_time_seconds)
+                    funding_time = raw_timestamp.replace(minute=0, second=0, microsecond=0)
+
+                    # Convert e9 format to hourly rate: fundingRateE9 / 1e9
+                    funding_rate_hourly = float(funding_rate_e9) / 1e9
+
+                    # Annualize: hourly × 24 hours × 365 days
+                    # Round to 5 decimal places to avoid floating point precision issues
+                    funding_rate_annual = round(float(funding_rate_hourly) * 24.0 * 365.0, 5)
 
                     all_rates.append({
-                        'timestamp': timestamp,
+                        'timestamp': funding_time,  # Rounded to nearest hour
                         'protocol': 'Bluefin',
                         'market': market_symbol,
                         'market_address': market_address,
                         'token_contract': token_contract,
                         'base_token': base_token_parsed,
                         'quote_token': quote_token,
-                        'funding_rate_hourly': float(funding_rate_raw) if funding_rate_raw else 0.0,
+                        'funding_rate_hourly': funding_rate_hourly,
                         'funding_rate_annual': funding_rate_annual,
-                        'next_funding_time': None
+                        'next_funding_time': None,
+                        'raw_timestamp_ms': funding_time_ms  # Raw timestamp from API
                     })
 
                 except KeyError as e:
@@ -449,8 +458,7 @@ class BluefinReader:
         for base_token in whitelisted_markets:
             print(f"\n  Fetching historical rates for {base_token}-PERP...")
 
-            # Paginate until no more data
-            start_time_ms = None
+            # Paginate through pages until API returns empty/zero rates
             total_fetched = 0
             page = 1
 
@@ -458,33 +466,24 @@ class BluefinReader:
                 df_page = self.get_historical_funding_rates(
                     base_token=base_token,
                     limit=1000,
-                    start_time_ms=start_time_ms
+                    page=page
                 )
 
-                if df_page.empty:
+                # Stop if API returns no data (end of history)
+                if df_page.empty or len(df_page) == 0:
+                    print(f"    End of data (page {page} returned 0 rates)")
                     break
 
                 all_historical_rates.append(df_page)
                 total_fetched += len(df_page)
 
-                print(f"    Page {page}: {len(df_page)} rates (total: {total_fetched})")
-
                 # Check if lookback_days limit reached
                 if lookback_days is not None:
                     oldest_timestamp = df_page['timestamp'].min()
                     if oldest_timestamp < datetime.now() - pd.Timedelta(days=lookback_days):
-                        print(f"    Reached lookback limit of {lookback_days} days")
                         break
 
-                # Check if we got less than requested (end of data)
-                if len(df_page) < 1000:
-                    print(f"    End of data (last page had {len(df_page)} < 1000 rates)")
-                    break
-
-                # Set pagination cursor to oldest timestamp in this page
-                oldest_timestamp_ms = int(df_page['timestamp'].min().timestamp() * 1000)
-                start_time_ms = oldest_timestamp_ms
-
+                # Increment page number for next iteration
                 page += 1
 
                 # Add small delay to avoid rate limits

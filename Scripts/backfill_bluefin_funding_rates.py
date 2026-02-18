@@ -80,30 +80,13 @@ def backfill_historical_rates(lookback_days: int = None):
         tokens_registered = tracker.register_perp_tokens(historical_df)
         print(f"✅ Registered {tokens_registered} perp tokens")
 
-        # 3. Backfill rates_snapshot with interpolated perp rates
-        print("\n[3/3] Backfilling rates_snapshot.perp_margin_rate column...")
-
-        earliest_date = historical_df['timestamp'].min()
-        latest_date = historical_df['timestamp'].max()
-
-        # Explicitly pass current time for end_date (following Principle #2)
-        current_time = datetime.now()
-
-        rows_updated = tracker.backfill_perp_rates_to_snapshot(
-            start_date=earliest_date,
-            end_date=latest_date if latest_date < current_time else current_time
-        )
-
-        print(f"✅ Updated {rows_updated} rates_snapshot rows")
-
         print("\n=== Backfill Complete ===")
         print(f"\nSummary:")
         print(f"  • Total rates fetched: {len(historical_df)}")
         print(f"  • Rates saved to perp_margin_rates: {rows_saved}")
         print(f"  • Tokens registered: {tokens_registered}")
-        print(f"  • rates_snapshot rows updated: {rows_updated}")
-        print(f"\n✅ Historical data successfully seeded!")
-        print(f"   The hourly cron job (main_perp_refresh.py) will maintain data going forward.\n")
+        print(f"\n✅ Historical perp_margin_rates data successfully seeded!")
+        print(f"   The hourly cron job (main_perp_refresh.py) will populate rates_snapshot going forward.\n")
 
         return 0
 
