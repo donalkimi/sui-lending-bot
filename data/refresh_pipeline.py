@@ -137,17 +137,9 @@ def refresh_pipeline(
     perp_rates_available = count > 0
 
     if not perp_rates_available:
-        print(f"[PERP CHECK] No perp data for {rates_ts_hour_str}, attempting to fetch from Bluefin...")
-        bluefin_reader = BluefinReader()
-        perp_rates_df = bluefin_reader.get_recent_funding_rates(limit=10)
-
-        if not perp_rates_df.empty:
-            rows_saved = tracker.save_perp_rates(perp_rates_df)
-            tracker.register_perp_tokens(perp_rates_df)
-            perp_rates_available = True
-            print(f"[PERP CHECK] OK Fetched and saved {rows_saved} perp rates")
-        else:
-            print("[PERP CHECK] WARNING: WARNING: Bluefin rates not available yet")
+        print(f"[PERP CHECK] WARNING: No perp data for {rates_ts_hour_str}")
+        print("[PERP CHECK] WARNING: Run main_perp_refresh.py to populate perp_margin_rates table")
+        print("[PERP CHECK] Continuing without perp data - perp_lending strategies will be unavailable")
     else:
         print(f"[PERP CHECK] OK Perp data exists for {rates_ts_hour_str} ({count} markets)")
 
