@@ -48,13 +48,19 @@ ON perp_margin_rates FOR SELECT TO authenticated
 USING (true);
 
 -- Step 4: Add perp_margin_rate column to rates_snapshot
-ALTER TABLE rates_snapshot
-ADD COLUMN IF NOT EXISTS perp_margin_rate DECIMAL(10,6) DEFAULT NULL;
-
--- Step 5: Create partial index for perp_margin_rate
-CREATE INDEX IF NOT EXISTS idx_rates_perp_margin
-ON rates_snapshot(perp_margin_rate)
-WHERE perp_margin_rate IS NOT NULL;
+-- NOTE (2026-02-19): THIS WAS A MISTAKE!
+-- Perp data should go into lend_total_apr/borrow_total_apr like all other protocols.
+-- This column was removed and Bluefin now uses standard columns via the protocol merger pipeline.
+-- DO NOT RE-ADD THIS COLUMN!
+-- The commented-out code below shows the wrong approach for reference:
+--
+-- ALTER TABLE rates_snapshot
+-- ADD COLUMN IF NOT EXISTS perp_margin_rate DECIMAL(10,6) DEFAULT NULL;
+--
+-- -- Step 5: Create partial index for perp_margin_rate
+-- CREATE INDEX IF NOT EXISTS idx_rates_perp_margin
+-- ON rates_snapshot(perp_margin_rate)
+-- WHERE perp_margin_rate IS NOT NULL;
 
 -- ============================================================================
 -- Rollback Instructions (if needed)

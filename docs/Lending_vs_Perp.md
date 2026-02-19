@@ -1,8 +1,168 @@
 # Perp Lending Strategy
 
+Reference guide for anything related to the perp_lending strategy.
+
 ## Overview
 
 Market-neutral strategy that earns yield from both lending markets and perpetual funding rates.
+
+## Architecture (Refactored 2026-02-19)
+
+### Bluefin as a Protocol
+
+Bluefin is treated as a **first-class protocol** (like Navi, AlphaFi, Suilend) in the system. It flows through the same `fetch_protocol_data()` → `merge_protocol_data()` → `save_snapshot()` pipeline as all other protocols.
+
+**Key difference**: Unlike other protocols that fetch from APIs, Bluefin reads from the `perp_margin_rates` database table, which is populated hourly by `main_perp_refresh.py`.
+
+### Data Flow
+
+```
+main_perp_refresh.py (hourly, independent)
+    │
+    ▼
+┌──────────────────────┐
+│  perp_margin_rates   │  Raw funding rates from Bluefin API
+│  (database table)    │  protocol='Bluefin', funding_rate_annual=0.0876
+└──────────┬───────────┘
+           │
+           │  refresh_pipeline.py calls merge_protocol_data(timestamp)
+           ▼
+┌──────────────────────┐
+│  protocol_merger.py  │  fetch_protocol_data("Bluefin", timestamp)
+│                      │    → BluefinReader(timestamp).get_all_data()
+│                      │    → Queries perp_margin_rates at hour(timestamp)
+│                      │    → Returns DataFrames with -funding_rate_annual
+└──────────┬───────────┘
+           │
+           │  Same flow as Navi, AlphaFi, Suilend, etc.
+           ▼
+┌──────────────────────┐
+│  rate_tracker.py     │  save_snapshot() inserts into rates_snapshot
+│                      │  protocol='Bluefin', lend_total_apr=-0.0876
+└──────────┬───────────┘
+           │
+           ▼
+┌──────────────────────┐
+│  rates_snapshot      │  Bluefin rows alongside Navi, AlphaFi, etc.
+│  (database table)    │  protocol='Bluefin', token='BTC-USDC-PERP'
+└──────────────────────┘
+```
+
+### Critical Files
+
+| File | Role |
+|------|------|
+| `config/settings.py` | `ENABLED_PROTOCOLS`, `BLUEFIN_PERP_MARKETS`, `BLUEFIN_TO_LENDINGS`, fees |
+| `data/bluefin/bluefin_reader.py` | `BluefinReader` class - queries perp_margin_rates, returns protocol-format DataFrames |
+| `data/protocol_merger.py` | `fetch_protocol_data("Bluefin", timestamp)` elif block |
+| `data/refresh_pipeline.py` | Pre-fetch check for perp rates, retry logic |
+| `main_perp_refresh.py` | Hourly job that fetches from Bluefin API → perp_margin_rates table |
+
+### Sign Convention (CRITICAL)
+
+**Published funding rate from Bluefin:**
+- Positive (+5%): Longs pay shorts (bullish market)
+- Negative (-3%): Shorts pay longs (bearish market)
+
+**Our system convention:**
+- Positive rate = you PAY (cost)
+- Negative rate = you EARN (gain)
+
+**Mapping:**
+
+| Funding Rate | Long Perp (= Lending) | Short Perp (= Borrowing) |
+|---|---|---|
+| +5% | Pay 5% → lend_rate = **-5%** | Earn 5% → borrow_rate = **-5%** |
+| -3% | Earn 3% → lend_rate = **+3%** | Pay 3% → borrow_rate = **+3%** |
+
+**Implementation:**
+```python
+# In BluefinReader.get_all_data():
+perp_rate = -funding_rate_annual  # NEGATIVE of published rate
+
+# BOTH lend and borrow use the same negated rate
+Supply_apr = perp_rate
+Borrow_apr = perp_rate
+```
+
+**Why both are the same**: The perp rate represents the same economic reality from different perspectives. The sign inversion maps Bluefin's convention to our convention.
+
+### Why Store as Negative?
+
+The sign convention ensures consistency across all protocols:
+
+**Universal Rule:**
+- Positive rate when lending/longing = you EARN
+- Negative rate when lending/longing = you PAY
+- Positive rate when borrowing/shorting = you PAY
+- Negative rate when borrowing/shorting = you EARN
+
+**This enables uniform calculations:**
+```python
+# Spot lending
+spot_earnings = l_a * lend_rate  # Positive lend_rate = positive earnings
+
+# Perp shorting
+funding_costs = b_b * borrow_rate  # Negative borrow_rate = negative cost (earnings)
+gross_apr = spot_earnings - funding_costs  # Subtract cost (negative cost = add earnings)
+```
+
+**Example:** When Bluefin publishes +5% funding rate (longs pay shorts):
+- We store as borrow_rate = -5% (negative = we earn when shorting)
+- funding_costs = 0.8333 × (-0.05) = -0.04165
+- gross_apr = spot_earnings - (-0.04165) = spot_earnings + 0.04165
+- Subtracting negative cost adds 4.165% to gross APR ✓
+
+### Configuration
+
+```python
+# config/settings.py
+
+ENABLED_PROTOCOLS = [
+    "Navi", "AlphaFi", "Suilend", "ScallopLend",
+    "ScallopBorrow", "Pebble", "Bluefin"
+]
+
+BLUEFIN_PERP_MARKETS = ["BTC", "ETH", "SOL", "SUI", "WAL", "DEEP"]
+
+BLUEFIN_MAKER_FEE = 0.0001    # 0.01% = 1 bps
+BLUEFIN_TAKER_FEE = 0.00035   # 0.035% = 3.5 bps
+
+# Maps perp proxy contracts → compatible spot lending tokens
+BLUEFIN_TO_LENDINGS = {
+    '0xBTC-USDC-PERP_bluefin': ['0xaafb...::btc::BTC', ...],
+    '0xETH-USDC-PERP_bluefin': ['0xaf8c...::coin::COIN', ...],
+    # ... see config/settings.py for full mapping
+}
+```
+
+### Database Tables
+
+**perp_margin_rates** (source - populated by main_perp_refresh.py):
+- `timestamp`: Hour-aligned datetime string
+- `protocol`: 'Bluefin'
+- `token_contract`: e.g. '0xBTC-USDC-PERP_bluefin'
+- `base_token`: e.g. 'BTC'
+- `funding_rate_annual`: Published rate (positive = longs pay shorts)
+
+**rates_snapshot** (destination - populated by refresh_pipeline.py):
+- `protocol`: 'Bluefin'
+- `token`: e.g. 'BTC-USDC-PERP'
+- `lend_total_apr`: **-funding_rate_annual** (negated)
+- `borrow_total_apr`: **-funding_rate_annual** (negated)
+- `price_usd`: 10.10101 (dummy placeholder)
+
+### Perp Rate Availability & Retry
+
+The refresh pipeline handles missing perp rates:
+
+1. **Before snapshot**: Check if `perp_margin_rates` has data for current hour
+2. **If missing**: Fetch from Bluefin API (limit=10), save to perp_margin_rates
+3. **Snapshot**: `merge_protocol_data()` includes Bluefin via BluefinReader
+4. **After snapshot**: If still missing, retry fetch and save to perp_margin_rates
+5. **Backfill**: `backfill_rates_snapshot_with_perp()` stub exists (TODO: implement)
+
+---
 
 ## Mechanics
 
@@ -36,23 +196,23 @@ For $1 deployed:
 
 ### Liquidation Distance
 
-**Key formula:** Nx leverage => liquidation at (1 + 1/N)× price change
+**Key formula:** Nx leverage => liquidation at (1 + 1/N)x price change
 
 **For shorts:**
 - Liquidation when collateral = loss from price increase
-- Loss = Position × Price_change%
-- $S = $L × (1/N) where N = leverage
+- Loss = Position x Price_change%
+- $S = $L x (1/N) where N = leverage
 - Price increase to liquidation = 1/N = S/L
 
 **Examples:**
 
 | Split | L | S | Leverage | Liq Distance | Liq Price |
 |-------|---|---|----------|--------------|-----------|
-| 83.33/16.67 | $0.83 | $0.17 | 5x | 20% | 1.20× entry |
-| 50/50 | $0.50 | $0.50 | 1x | 100% | 2.0× entry |
-| 67/33 | $0.67 | $0.33 | 2x | 50% | 1.5× entry |
-| 75/25 | $0.75 | $0.25 | 3x | 33% | 1.33× entry |
-| 80/20 | $0.80 | $0.20 | 4x | 25% | 1.25× entry |
+| 83.33/16.67 | $0.83 | $0.17 | 5x | 20% | 1.20x entry |
+| 50/50 | $0.50 | $0.50 | 1x | 100% | 2.0x entry |
+| 67/33 | $0.67 | $0.33 | 2x | 50% | 1.5x entry |
+| 75/25 | $0.75 | $0.25 | 3x | 33% | 1.33x entry |
+| 80/20 | $0.80 | $0.20 | 4x | 25% | 1.25x entry |
 
 **Formula derivation:**
 
@@ -102,8 +262,8 @@ B_B = liquidation_distance/(1 + liquidation_distance)  # Perp short
 
 **Net APR formula:**
 ```python
-gross_earnings = L_A × r_1A + B_B × r_3B
-upfront_fees = B_B × (2 × BLUEFIN_TAKER_FEE)  # Entry + exit
+gross_earnings = L_A * r_1A + B_B * r_3B
+upfront_fees = B_B * (2 * BLUEFIN_TAKER_FEE)  # Entry + exit
 holding_period_years = 1.0  # Assume 1 year for APR
 net_apr = gross_earnings - (upfront_fees / holding_period_years)
 ```
@@ -115,7 +275,7 @@ net_apr = gross_earnings - (upfront_fees / holding_period_years)
 **Setup:**
 - Collateral: $C (USDC posted)
 - Position: $P (notional value shorted)
-- Entry price: P₀
+- Entry price: P0
 - Current price: P
 - Leverage: N = P/C
 
@@ -124,21 +284,20 @@ Loss from price increase = Collateral
 
 **Formula:**
 ```
-P - P₀ = C × P/P₀  (loss in dollar terms)
-P × P = C × P₀
-P/P₀ = C/P = 1/N
-P_liq = P₀ × (1 + 1/N)
+P - P0 = C * P/P0  (loss in dollar terms)
+P/P0 = C/P = 1/N
+P_liq = P0 * (1 + 1/N)
 ```
 
 **Liquidation distance:**
 ```
-distance = (P_liq - P₀)/P₀ = 1/N = C/P
+distance = (P_liq - P0)/P0 = 1/N = C/P
 ```
 
 **For long perpetuals** (formula is symmetric):
 ```
-P_liq = P₀ × (1 - 1/N)
-distance = (P₀ - P_liq)/P₀ = 1/N
+P_liq = P0 * (1 - 1/N)
+distance = (P0 - P_liq)/P0 = 1/N
 ```
 
 ### Spot Lending Liquidation
@@ -148,7 +307,7 @@ distance = (P₀ - P_liq)/P₀ = 1/N
 2. Spot tokens are collateral, not borrowed assets
 3. Lending protocols don't liquidate lenders
 
-**Effective liquidation distance:** ∞ (infinite) on lending side
+**Effective liquidation distance:** infinity on lending side
 
 ## Fee Structure
 
@@ -158,9 +317,9 @@ distance = (P₀ - P_liq)/P₀ = 1/N
 **Taker fee:** 0.035% (3.5 bps) - when you take liquidity
 
 **Conservative assumption:** Pay taker fee on both entry and exit
-- Entry: 0.035% × position_size
-- Exit: 0.035% × position_size
-- **Total upfront:** 0.07% × position_size
+- Entry: 0.035% x position_size
+- Exit: 0.035% x position_size
+- **Total upfront:** 0.07% x position_size
 
 **Stored as:**
 ```python
@@ -170,22 +329,12 @@ BLUEFIN_TAKER_FEE = 0.00035  # 0.035%
 
 **Amortized over holding period:**
 ```python
-annual_fee_drag = (2 × BLUEFIN_TAKER_FEE) / holding_period_years
+annual_fee_drag = (2 * BLUEFIN_TAKER_FEE) / holding_period_years
 ```
 
 ### Lending Protocol Fees
 
 Most lending protocols have zero entry/exit fees. Borrow fees are captured in the borrow_total_apr.
-
-## Current Simplifications
-
-**To be addressed later:**
-
-1. **Basis risk:** Assume spot price = perp price (ignore cash-carry arbitrage)
-2. **Maker/taker optimization:** Assume worst case (taker fees)
-3. **Funding rate volatility:** Use current rate, no forecasting
-4. **Rebalancing costs:** Ignore drift between spot and perp sizes
-5. **Oracle risk:** Assume accurate price feeds
 
 ## Token Mappings
 
@@ -200,12 +349,10 @@ BLUEFIN_TO_LENDINGS = {
         '0xaafb...::btc::BTC',      # BTC
         '0x876a...::xbtc::XBTC',    # xBTC
         '0x41f9...::wbtc::WBTC',    # wBTC
-        # ... other BTC-like tokens
     ],
     '0xETH-USDC-PERP_bluefin': [
         '0xaf8c...::coin::COIN',    # ETH
         '0xd0e8...::eth::ETH',      # wETH
-        # ... other ETH-like tokens
     ],
     # ... other perp markets
 }
@@ -218,6 +365,18 @@ BLUEFIN_TO_LENDINGS = {
 4. Map to corresponding perp markets
 
 **Strategy generation:** For each perp market, generate strategies for all mapped spot tokens on all lending protocols.
+
+## Current Simplifications
+
+**To be addressed later:**
+
+1. **Basis risk:** Assume spot price = perp price (ignore cash-carry arbitrage)
+2. **Maker/taker optimization:** Assume worst case (taker fees)
+3. **Funding rate volatility:** Use current rate, no forecasting
+4. **Rebalancing costs:** Ignore drift between spot and perp sizes
+5. **Oracle risk:** Assume accurate price feeds
+6. **Dummy pricing:** Perp tokens use placeholder price 10.10101 (TODO: implement real pricing)
+7. **Backfill:** `backfill_rates_snapshot_with_perp()` is a stub (TODO: implement)
 
 ## Risk Analysis
 
@@ -242,3 +401,26 @@ BLUEFIN_TO_LENDINGS = {
 - Monitor funding rates hourly (already happening)
 - Alert if funding goes negative (to be implemented)
 - Rebalance when spot/perp ratio drifts >5%
+
+## Verification Queries
+
+```sql
+-- Check Bluefin rows in rates_snapshot
+SELECT timestamp, protocol, token, lend_total_apr, borrow_total_apr
+FROM rates_snapshot
+WHERE protocol = 'Bluefin'
+ORDER BY timestamp DESC
+LIMIT 10;
+
+-- Compare with raw rates in perp_margin_rates
+SELECT timestamp, token_contract, funding_rate_annual
+FROM perp_margin_rates
+WHERE protocol = 'Bluefin'
+ORDER BY timestamp DESC
+LIMIT 10;
+
+-- Verify sign convention:
+-- If funding_rate_annual = +0.0876 (8.76%)
+-- Then lend_total_apr should = -0.0876 (-8.76%)
+-- And borrow_total_apr should = -0.0876 (-8.76%)
+```

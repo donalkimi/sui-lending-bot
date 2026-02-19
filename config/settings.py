@@ -135,6 +135,22 @@ BLUEFIN_TO_LENDINGS = {
 }
 
 # ==============================================================================
+# ENABLED PROTOCOLS (added for Part 2 of Bluefin integration)
+# ==============================================================================
+
+# List of enabled lending/perp protocols to fetch and merge
+# This controls which protocols are included in rate snapshots
+ENABLED_PROTOCOLS = [
+    "Navi",
+    "AlphaFi",
+    "Suilend",
+    "ScallopLend",
+    "ScallopBorrow",
+    "Pebble",
+    "Bluefin"  # Perp funding rates from perp_margin_rates table
+]
+
+# ==============================================================================
 # PORTFOLIO ALLOCATION SETTINGS
 # ==============================================================================
 

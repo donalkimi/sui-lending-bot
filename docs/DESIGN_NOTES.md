@@ -848,3 +848,43 @@ fee = strategy['borrow_fee_2a']
 - ✅ All critical dashboard display code uses direct key access
 - ✅ All strategy dict fields are required (no defaults in calculators)
 - ⚠️ Remaining `.get()` calls in non-critical display code to be audited
+
+### 17. Perp Funding Rate Sign Convention
+
+**Core Principle:** Perp funding rates are stored as negative in rates_snapshot to maintain consistency with lending and borrowing rate conventions across all protocols.
+
+**Convention:**
+- **Lend/long at positive rates → you EARN**
+- **Lend/long at negative rates → you PAY**
+- **Borrow/short at positive rates → you PAY**
+- **Borrow/short at negative rates → you EARN**
+
+This is consistent across both spot lending and perpetual futures:
+
+**Spot lending example:**
+- Lend USDC at +5% → earn 5%
+- Borrow USDC at +3% → pay 3%
+
+**Perp funding example:**
+- Bluefin publishes +5% funding (longs pay shorts)
+- Stored as borrow_rate = -5% (shorts earn, so negative rate)
+- When we short, we earn: borrow at -5% = earn 5%
+
+**Why negative storage:**
+- Maintains semantic consistency: negative rates always mean earnings
+- Enables uniform formula: `gross_apr = spot_earnings - funding_costs`
+- When funding_costs is negative (we earn), subtracting adds to APR
+- When funding_costs is positive (we pay), subtracting reduces APR
+
+**Implementation:**
+- BluefinReader in [data/bluefin/bluefin_reader.py](data/bluefin/bluefin_reader.py)
+- PerpLendingCalculator in [analysis/strategy_calculators/perp_lending.py](analysis/strategy_calculators/perp_lending.py)
+
+**Formula:**
+```python
+spot_earnings = l_a * lend_rate  # Positive lend_rate = positive earnings
+funding_costs = b_b * borrow_rate  # Negative borrow_rate = negative cost (earnings)
+gross_apr = spot_earnings - funding_costs  # Subtract cost (negative cost = add earnings)
+```
+
+**Implementation date:** February 19, 2026

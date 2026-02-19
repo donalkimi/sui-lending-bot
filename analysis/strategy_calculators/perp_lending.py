@@ -12,10 +12,12 @@ class PerpLendingCalculator(StrategyCalculatorBase):
         3. Market neutral: long spot = short perp
 
     Position multipliers:
-        L_A = 1/(1 + liquidation_distance)
+        L_A = 1/(1 + liquidation_distance)  # Spot lending notional
         B_A = 0.0
         L_B = 0.0
-        B_B = liquidation_distance/(1 + liquidation_distance)
+        B_B = L_A  # Perp short notional (equals spot for market neutrality)
+
+    Note: Collateral posted = (1 - L_A), Leverage = L_A / (1 - L_A)
 
     Liquidation:
         - Short gets liquidated at price increase of 1/leverage
@@ -41,11 +43,13 @@ class PerpLendingCalculator(StrategyCalculatorBase):
         Calculate position multipliers based on liquidation distance.
 
         For perp lending:
-        - L_A = 1/(1 + liq_dist) = spot lending
-        - B_B = liq_dist/(1 + liq_dist) = perp short collateral
+        - L_A = 1/(1 + liq_dist) = spot lending notional
+        - B_B = L_A = perp short notional (market neutral)
+        - Collateral posted = (1 - L_A)
+        - Leverage = L_A / (1 - L_A)
         """
         l_a = 1.0 / (1.0 + liquidation_distance)
-        b_b = liquidation_distance / (1.0 + liquidation_distance)
+        b_b = l_a  # Notional perp exposure = lending exposure (market neutral)
 
         return {
             'l_a': l_a,
@@ -66,7 +70,9 @@ class PerpLendingCalculator(StrategyCalculatorBase):
         Price PnL is tracked separately and NOT included in APR calculation.
 
         Formula:
-            gross_apr = L_A × lend_total_apr_1A + B_B × funding_rate_3B
+            gross_apr = L_A × lend_total_apr_1A - B_B × funding_costs_3B
+
+        Note: funding_costs are negative when we earn (shorts earn funding)
 
         Args:
             positions: Dict with l_a, b_b
@@ -83,8 +89,8 @@ class PerpLendingCalculator(StrategyCalculatorBase):
 
         # Earnings (yield only, no price PnL)
         spot_earnings = l_a * lend_apr_1a
-        funding_earnings = b_b * funding_rate_3b
-        gross_apr = spot_earnings + funding_earnings
+        funding_costs = b_b * funding_rate_3b  # Negative when we earn (shorts earn)
+        gross_apr = spot_earnings - funding_costs  # Subtract cost (negative cost = add earnings)
 
         return gross_apr
 

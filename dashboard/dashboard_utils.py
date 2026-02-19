@@ -152,8 +152,7 @@ def load_historical_snapshot(timestamp: str, conn: Optional[Any] = None) -> Tupl
             available_borrow_usd,
             borrow_fee,
             borrow_weight,
-            liquidation_threshold,
-            perp_margin_rate
+            liquidation_threshold
         FROM rates_snapshot
         WHERE timestamp = {ph}
         ORDER BY token, protocol
@@ -190,40 +189,6 @@ def load_historical_snapshot(timestamp: str, conn: Optional[Any] = None) -> Tupl
         borrow_fees = pivot_data(df, 'borrow_fee')
         borrow_weights = pivot_data(df, 'borrow_weight')
         liquidation_thresholds = pivot_data(df, 'liquidation_threshold')
-
-        # Add perp token rows to lend_rates (they don't appear in pivot because lend_total_apr is NULL)
-        perp_tokens = df[df['perp_margin_rate'].notna()][['token', 'token_contract']].drop_duplicates('token_contract')
-        if not perp_tokens.empty:
-            # Get protocol columns from lend_rates (all except Token and Contract)
-            protocol_cols = [col for col in lend_rates.columns if col not in ['Token', 'Contract']]
-
-            # Create perp token rows with NaN for all protocol columns
-            perp_rows = []
-            for _, row in perp_tokens.iterrows():
-                perp_row = {'Token': row['token'], 'Contract': row['token_contract']}
-                for col in protocol_cols:
-                    perp_row[col] = None
-                perp_rows.append(perp_row)
-
-            # Append perp rows to lend_rates
-            lend_rates = pd.concat([lend_rates, pd.DataFrame(perp_rows)], ignore_index=True)
-
-        # Add perp_margin_rate column to lend_rates (not pivoted by protocol)
-        perp_rates = df[df['perp_margin_rate'].notna()][['token_contract', 'perp_margin_rate']].drop_duplicates('token_contract')
-        if not perp_rates.empty:
-            # Merge perp rates into lend_rates
-            lend_rates = lend_rates.merge(
-                perp_rates,
-                left_on='Contract',
-                right_on='token_contract',
-                how='left'
-            )
-            # Drop the redundant token_contract column from merge
-            if 'token_contract' in lend_rates.columns:
-                lend_rates.drop('token_contract', axis=1, inplace=True)
-        else:
-            # No perp rates found, add empty column
-            lend_rates['perp_margin_rate'] = None
 
         return (lend_rates, borrow_rates, collateral_ratios, prices,
                 lend_rewards, borrow_rewards, available_borrow, borrow_fees, borrow_weights, liquidation_thresholds)

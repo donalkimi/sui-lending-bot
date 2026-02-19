@@ -29,6 +29,21 @@ from utils.time_helpers import to_seconds, to_datetime_str
 from analysis.position_statistics_calculator import calculate_position_statistics
 
 
+def backfill_rates_snapshot_with_perp():
+    """
+    Backfill rates_snapshot with Bluefin perp data for timestamps where perp rates
+    were not available during the initial snapshot.
+
+    TODO: Implement this function to:
+    1. Query perp_margin_rates for the missing timestamp
+    2. Build Bluefin protocol rows (using BluefinReader format)
+    3. Insert into rates_snapshot table with protocol='Bluefin'
+
+    For now, this is a no-op. The next hourly refresh will include the perp data.
+    """
+    pass
+
+
 @dataclass
 class RefreshResult:
     timestamp: int  # Unix timestamp in seconds
@@ -119,25 +134,22 @@ def refresh_pipeline(
     count = cursor.fetchone()[0]
     conn.close()
 
-    if count == 0:
-        print(f"[PERP CHECK] No perp data found for {rates_ts_hour_str}")
-        print("[PERP FETCH] Fetching from Bluefin...")
+    perp_rates_available = count > 0
 
-        # Fetch from Bluefin API
+    if not perp_rates_available:
+        print(f"[PERP CHECK] No perp data for {rates_ts_hour_str}, attempting to fetch from Bluefin...")
         bluefin_reader = BluefinReader()
-        perp_rates_df = bluefin_reader.get_recent_funding_rates(limit=1)  # Just need latest
+        perp_rates_df = bluefin_reader.get_recent_funding_rates(limit=10)
 
         if not perp_rates_df.empty:
-            # Save to perp_margin_rates
             rows_saved = tracker.save_perp_rates(perp_rates_df)
-            print(f"[PERP FETCH] Saved {rows_saved} perp rates")
-
-            # Register proxy tokens
             tracker.register_perp_tokens(perp_rates_df)
+            perp_rates_available = True
+            print(f"[PERP CHECK] OK Fetched and saved {rows_saved} perp rates")
         else:
-            print("[PERP FETCH] WARNING: No perp rates fetched from Bluefin")
+            print("[PERP CHECK] WARNING: WARNING: Bluefin rates not available yet")
     else:
-        print(f"[PERP CHECK] ✓ Perp data exists ({count} markets)")
+        print(f"[PERP CHECK] OK Perp data exists for {rates_ts_hour_str} ({count} markets)")
 
     notifier = SlackNotifier()
     print("[FETCH] Starting protocol data fetch...")
@@ -196,107 +208,22 @@ def refresh_pipeline(
                 print("[ORACLE] Continuing with refresh - oracle IDs can be populated manually")
                 # Continue with refresh - not a critical failure
 
-        # STEP 2: Insert perp market rows into rates_snapshot
-        print("[PERP SNAPSHOT] Inserting perp market rows...")
-
-        from psycopg2.extras import execute_values
-
-        # Fetch all perp rates in one query (EXACT match on timestamp)
-        token_contracts = [f"0x{base_token}-USDC-PERP_bluefin" for base_token in settings.BLUEFIN_PERP_MARKETS]
-
-        conn_perp = tracker._get_connection()
-        cursor_perp = conn_perp.cursor()
-
-        if tracker.use_cloud:
-            # PostgreSQL - use %s placeholders
-            placeholders = ','.join(['%s'] * len(token_contracts))
-            cursor_perp.execute(
-                f"""
-                SELECT token_contract, funding_rate_annual
-                FROM perp_margin_rates
-                WHERE token_contract IN ({placeholders})
-                  AND timestamp = %s
-                """,
-                token_contracts + [rates_ts_hour_str]
-            )
-        else:
-            # SQLite - use ? placeholders
-            placeholders = ','.join(['?'] * len(token_contracts))
-            cursor_perp.execute(
-                f"""
-                SELECT token_contract, funding_rate_annual
-                FROM perp_margin_rates
-                WHERE token_contract IN ({placeholders})
-                  AND timestamp = ?
-                """,
-                token_contracts + [rates_ts_hour_str]
-            )
-
-        perp_rates = cursor_perp.fetchall()
-        conn_perp.close()
-
-        # Build dictionary for quick lookup
-        rates_dict = {token_contract: rate for token_contract, rate in perp_rates}
-
-        # Verify all markets have data (fail loudly if missing)
-        missing_markets = []
-        for token_contract in token_contracts:
-            if token_contract not in rates_dict:
-                missing_markets.append(token_contract)
-
-        if missing_markets:
-            raise ValueError(
-                f"PERP DATA ERROR: No funding rates found for {len(missing_markets)} market(s) "
-                f"at {rates_ts_hour_str}: {missing_markets}. This should never happen - perp data "
-                f"should have been populated in STEP 1."
-            )
-
-        # Build rows for all 6 perp markets
-        perp_rows = []
-        for base_token in settings.BLUEFIN_PERP_MARKETS:
-            token_contract = f"0x{base_token}-USDC-PERP_bluefin"
-            funding_rate = rates_dict[token_contract]
-
-            perp_rows.append((
-                to_datetime_str(current_seconds),  # timestamp (original rates_ts)
-                'Bluefin',                         # protocol
-                f'{base_token}-USDC-PERP',         # token
-                token_contract,                    # token_contract
-                f'{base_token}-PERP',              # market
-                funding_rate                       # perp_margin_rate
-            ))
-
-        # Bulk insert perp rows
-        conn_insert = tracker._get_connection()
-        cursor_insert = conn_insert.cursor()
-
-        if tracker.use_cloud:
-            execute_values(
-                cursor_insert,
-                """
-                INSERT INTO rates_snapshot (
-                    timestamp, protocol, token, token_contract, market, perp_margin_rate
-                ) VALUES %s
-                ON CONFLICT (timestamp, protocol, token_contract) DO NOTHING
-                """,
-                perp_rows
-            )
-        else:
-            cursor_insert.executemany(
-                """
-                INSERT OR IGNORE INTO rates_snapshot (
-                    timestamp, protocol, token, token_contract, market, perp_margin_rate
-                ) VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                perp_rows
-            )
-
-        conn_insert.commit()
-        conn_insert.close()
-
-        print(f"[PERP SNAPSHOT] ✓ Inserted {len(perp_rows)} perp market rows")
-
         print("[DB] Snapshot saved successfully")
+
+        # Retry Bluefin if rates weren't available during snapshot
+        if not perp_rates_available:
+            print("\n[PERP RETRY] Bluefin data was not available during snapshot, attempting fetch...")
+            bluefin_reader = BluefinReader()
+            perp_rates_df = bluefin_reader.get_recent_funding_rates(limit=10)
+
+            if not perp_rates_df.empty:
+                rows_saved = tracker.save_perp_rates(perp_rates_df)
+                tracker.register_perp_tokens(perp_rates_df)
+                print(f"[PERP RETRY] OK Saved {rows_saved} perp rates to perp_margin_rates")
+                # TODO: backfill this snapshot's rates_snapshot with perp data
+                backfill_rates_snapshot_with_perp()
+            else:
+                print("[PERP RETRY] WARNING: Still no Bluefin data available, will be included in next hourly refresh")
 
     # Initialize strategy results (always, regardless of save_snapshots)
     protocol_a: Optional[str] = None
@@ -372,7 +299,7 @@ def refresh_pipeline(
                 ]
 
                 if positions_needing_rebalance:
-                    print(f"[AUTO-REBALANCE] ⚠️  {len(positions_needing_rebalance)} position(s) need rebalancing")
+                    print(f"[AUTO-REBALANCE] WARNING:️  {len(positions_needing_rebalance)} position(s) need rebalancing")
 
                     for check in positions_needing_rebalance:
                         position_id = check['position_id']
@@ -414,9 +341,9 @@ def refresh_pipeline(
                     if auto_rebalanced_count > 0:
                         print(f"\n[AUTO-REBALANCE] ✅ Auto-rebalanced {auto_rebalanced_count}/{len(positions_needing_rebalance)} position(s)")
                 else:
-                    print("[AUTO-REBALANCE] ✓ All positions within threshold")
+                    print("[AUTO-REBALANCE] OK All positions within threshold")
             else:
-                print("[AUTO-REBALANCE] ✓ No active positions to check")
+                print("[AUTO-REBALANCE] OK No active positions to check")
 
         except Exception as rebalance_system_error:
             print(f"[AUTO-REBALANCE] Error in auto-rebalance system: {rebalance_system_error}")

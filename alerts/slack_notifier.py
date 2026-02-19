@@ -101,7 +101,7 @@ class SlackNotifier:
         from urllib3.util.retry import Retry
 
         if not self.webhook_url or self.webhook_url == "YOUR_SLACK_WEBHOOK_URL_HERE":
-            print("⚠️  Slack webhook not configured. Set SLACK_WEBHOOK_URL in config/settings.py")
+            print("WARNING:  Slack webhook not configured. Set SLACK_WEBHOOK_URL in config/settings.py")
             return False
 
         # Check if this is a Slack Workflow webhook (contains '/workflows/' or '/triggers/')
@@ -122,7 +122,7 @@ class SlackNotifier:
             print(f"[DEBUG] Payload preview (first 3 vars): {json.dumps(preview, indent=2)}")
         elif is_workflow and not variables:
             # Workflow webhook requires variables but none provided
-            print(f"[ERROR] ⚠️  Workflow webhook detected but variables is None - notification will fail")
+            print(f"[ERROR] WARNING:  Workflow webhook detected but variables is None - notification will fail")
             print(f"[ERROR] Falling back to error message")
             return False
         else:
@@ -189,7 +189,7 @@ class SlackNotifier:
             print(f"[ERROR] 🌐 Slack request failed: {e}")
             return False
         except Exception as e:
-            print(f"[ERROR] ⚠️  Unexpected error sending Slack notification: {e}")
+            print(f"[ERROR] WARNING:  Unexpected error sending Slack notification: {e}")
             import traceback
             traceback.print_exc()
             return False
@@ -519,14 +519,14 @@ class SlackNotifier:
         Returns:
             True if successful
         """
-        message = f"⚠️ Bot Error: {error_message}"
+        message = f"WARNING: Bot Error: {error_message}"
         
         blocks = [
             {
                 "type": "header",
                 "text": {
                     "type": "plain_text",
-                    "text": "⚠️ Bot Error",
+                    "text": "WARNING: Bot Error",
                     "emoji": True
                 }
             },
@@ -620,7 +620,7 @@ class SlackNotifier:
             elif delta > 0:
                 return " ✅"  # Improved (increased distance)
             else:
-                return " ⚠️"  # Worsened (decreased distance)
+                return " WARNING:"  # Worsened (decreased distance)
 
         # Format leg 2A (token2 at protocol_a)
         leg_2a_label = f"{token2} in {protocol_a}"

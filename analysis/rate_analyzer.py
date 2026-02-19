@@ -445,7 +445,7 @@ class RateAnalyzer:
             else:
                 excluded_token2s.append((token2, r_2_max, b_2_min))
 
-        print(f"[ANALYZER] NoLoop: Pre-filtered {len(all_tokens)} tokens → {len(valid_token2s)} valid token2 candidates")
+        print(f"[ANALYZER] NoLoop: Pre-filtered {len(all_tokens)} tokens -> {len(valid_token2s)} valid token2 candidates")
         if excluded_token2s:
             print(f"[ANALYZER] NoLoop: Excluded {len(excluded_token2s)} tokens with r_max < b_min")
 
@@ -580,127 +580,105 @@ class RateAnalyzer:
         calculator: StrategyCalculatorBase
     ) -> pd.DataFrame:
         """
-        Generate perp lending strategies.
+        Generate perp lending strategies (spot + perp short).
 
-        For each perp market (BTC-PERP, ETH-PERP, etc.):
-            - Find compatible spot tokens (BTC, wBTC, xBTC, etc.)
-            - Generate strategy for each spot token on each lending protocol
-
-        Returns:
-            DataFrame with perp lending strategies
+        Iteration pattern:
+        - token1 (spot tokens from Bluefin mappings) × protocol_a (lending protocols)
+        - token3 (perp tokens from Bluefin)
+        - protocol_b (always 'Bluefin')
         """
         results = []
 
-        # Check if 'perp_margin_rate' column exists in the data
-        if 'perp_margin_rate' not in self.lend_rates.columns:
-            print("[ANALYZER] Perp lending: No 'perp_margin_rate' column found in lend_rates, skipping perp strategies")
+        # Get all Bluefin perp tokens from rates
+        bluefin_tokens = [token for token in self.ALL_TOKENS if '-PERP' in token]
+
+        print(f"[ANALYZER] Perp: Found {len(bluefin_tokens)} perp tokens: {bluefin_tokens}")
+
+        if not bluefin_tokens:
+            print("[ANALYZER] Perp: No Bluefin perp markets found in rates_snapshot")
             return pd.DataFrame()
 
-        # Get all perp tokens (tokens with perp_margin_rate populated)
-        # These are stored in lend_rates with 'perp_margin_rate' column
-        if 'Token' not in self.lend_rates.columns:
-            print("[ANALYZER] Perp lending: 'Token' column not found in lend_rates")
-            return pd.DataFrame()
+        # Get BLUEFIN_TO_LENDINGS mapping from settings
+        from config.settings import BLUEFIN_TO_LENDINGS
 
-        # Find all tokens that have perp_margin_rate populated (perp markets)
-        perp_tokens = []
-        for _, row in self.lend_rates.iterrows():
-            token = row.get('Token')
-            contract = row.get('Contract')
-            perp_rate = self.get_rate(self.lend_rates, token, 'perp_margin_rate')
-
-            # Allow negative funding rates (shorts pay when negative)
-            if not np.isnan(perp_rate) and abs(perp_rate) > 1e-9:
-                perp_tokens.append((token, contract))
-
-        if not perp_tokens:
-            print("[ANALYZER] Perp lending: No perp markets found with perp_margin_rate")
-            return pd.DataFrame()
-
-        print(f"[ANALYZER] Perp lending: Found {len(perp_tokens)} perp markets")
-
-        for perp_token, perp_contract in perp_tokens:
-            # Get perp funding rate (stored in lend_rates perp_margin_rate column)
-            funding_rate = self.get_rate(self.lend_rates, perp_token, 'perp_margin_rate')
-
-            if np.isnan(funding_rate):
+        for perp_token in bluefin_tokens:
+            # Get perp funding rate from Bluefin
+            borrow_total_apr_3B = self.get_rate(self.borrow_rates, perp_token, 'Bluefin')
+            if np.isnan(borrow_total_apr_3B):
+                print(f"[ANALYZER] Perp: No borrow rate for {perp_token} on Bluefin - skipping")
                 continue
 
-            # Find compatible spot tokens using BLUEFIN_TO_LENDINGS mapping
-            compatible_contracts = settings.BLUEFIN_TO_LENDINGS.get(perp_contract, [])
+            print(f"[ANALYZER] Perp: Processing {perp_token}, funding_rate={borrow_total_apr_3B:.4f}")
 
-            if not compatible_contracts:
-                print(f"[ANALYZER] Perp lending: No compatible spot tokens configured for {perp_contract}")
+            price_3B = self.get_rate(self.prices, perp_token, 'Bluefin')
+            perp_contract = self.get_contract(perp_token, 'Bluefin')
+
+            # Get compatible spot tokens for this perp market
+            # Build the perp contract key for lookup
+            perp_contract_key = perp_contract if perp_contract else f'0x{perp_token}_bluefin'
+
+            compatible_spot_contracts = BLUEFIN_TO_LENDINGS.get(perp_contract_key, [])
+
+            print(f"[ANALYZER] Perp: {perp_token} -> key={perp_contract_key}, found {len(compatible_spot_contracts)} spot contracts")
+
+            if not compatible_spot_contracts:
+                # Try alternative key formats
+                print(f"[ANALYZER] Perp: No compatible spot contracts for {perp_token} - skipping")
                 continue
 
             # For each compatible spot token
-            for spot_contract in compatible_contracts:
-                # Find the token symbol for this contract
+            for spot_contract in compatible_spot_contracts:
+                # Find spot token symbol from contract
                 spot_token = None
-                for _, row in self.lend_rates.iterrows():
-                    if row.get('Contract') == spot_contract:
-                        spot_token = row.get('Token')
+                for token in self.ALL_TOKENS:
+                    if self.get_contract(token, self.protocols[0]) == spot_contract:
+                        spot_token = token
                         break
 
                 if not spot_token:
                     continue
 
                 # For each lending protocol
-                for protocol in self.protocols:
-                    # Skip perp_margin_rate column (not a lending protocol)
-                    if protocol == 'perp_margin_rate':
-                        continue
+                for protocol_a in self.protocols:
+                    if protocol_a == 'Bluefin':
+                        continue  # Skip Bluefin as lending protocol
 
                     # Get spot token lending rate
-                    lend_apr = self.get_rate(self.lend_rates, spot_token, protocol)
-                    spot_price = self.get_price(spot_token, protocol)
-
-                    # Skip if APR or price is invalid
-                    if np.isnan(lend_apr) or lend_apr <= 1e-9:
-                        continue
-                    if np.isnan(spot_price) or spot_price <= 1e-9:
+                    lend_total_apr_1A = self.get_rate(self.lend_rates, spot_token, protocol_a)
+                    if np.isnan(lend_total_apr_1A) or lend_total_apr_1A <= 1e-9:
                         continue
 
-                    # Use spot_price for perp_price (strategy assumes spot ≈ perp, basis risk ignored in MVP)
-                    perp_price = spot_price
+                    price_1A = self.get_rate(self.prices, spot_token, protocol_a)
+                    if np.isnan(price_1A) or price_1A <= 1e-9:
+                        continue
+
+                    token1_contract = self.get_contract(spot_token, protocol_a)
 
                     # Call calculator
-                    try:
-                        result = calculator.analyze_strategy(
-                            token1=spot_token,
-                            protocol_a=protocol,
-                            protocol_b='Perp',  # Generic name for perp protocol (was 'Bluefin')
-                            lend_total_apr_1A=lend_apr,
-                            borrow_total_apr_3B=funding_rate,  # Perp funding rate
-                            price_1A=spot_price,
-                            liquidation_distance=self.liquidation_distance,
-                            # Additional kwargs
-                            token1_contract=spot_contract,
-                            token3=f'{perp_token}',  # Just use perp token name (e.g., 'BTC')
-                            token3_contract=perp_contract,
-                            price_3B=perp_price,
-                            timestamp=self.timestamp
-                        )
+                    result = calculator.analyze_strategy(
+                        token1=spot_token,
+                        token1_contract=token1_contract,
+                        protocol_a=protocol_a,
+                        protocol_b='Bluefin',
+                        lend_total_apr_1A=lend_total_apr_1A,
+                        borrow_total_apr_3B=borrow_total_apr_3B,
+                        price_1A=price_1A,
+                        price_3B=price_3B,
+                        token3=perp_token,
+                        token3_contract=perp_contract,
+                        liquidation_distance=self.liquidation_distance,
+                        timestamp=self.timestamp
+                    )
 
-                        if result.get('valid', False):
-                            # Add basis tracking (price difference between spot and perp)
-                            # In MVP, basis = 0 since we assume spot_price = perp_price
-                            basis_pct = abs(spot_price - perp_price) / spot_price if spot_price > 0 else 0
-                            result['basis_pct'] = basis_pct
-                            results.append(result)
+                    if result.get('valid', False):
+                        results.append(result)
 
-                    except Exception as e:
-                        print(f"[ANALYZER] Perp lending: Error analyzing {spot_token} × {protocol} × {perp_token}-PERP: {e}")
-                        continue
-
-        print(f"[ANALYZER] Perp lending: Generated {len(results)} strategies")
+        print(f"[ANALYZER] Perp: Generated {len(results)} total strategies")
         df = pd.DataFrame(results)
         if not df.empty:
             df['strategy_type'] = calculator.get_strategy_type()
-            # Add timestamp column
             df['timestamp'] = self.timestamp
             df['timestamp'] = df['timestamp'].astype(int)
-
         return df
 
     def analyze_all_combinations(self, tokens: Optional[List[str]] = None) -> pd.DataFrame:

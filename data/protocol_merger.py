@@ -13,6 +13,7 @@ from data.suilend.suilend_reader import SuilendReader, SuilendReaderConfig
 from data.scallop_lend.scallop_lend_reader import ScallopLendReader, ScallopReaderConfig
 from data.scallop_borrow.scallop_borrow_reader import ScallopBorrowReader
 from data.pebble.pebble_reader import PebbleReader
+from config import settings
 
 # Import stablecoin configuration
 try:
@@ -47,12 +48,13 @@ def normalize_coin_type(coin_type: str) -> str:
     return "::".join([addr] + parts[1:])
 
 
-def fetch_protocol_data(protocol_name: str) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def fetch_protocol_data(protocol_name: str, timestamp: int) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
     Fetch data from a single protocol.
 
     Args:
-        protocol_name: Protocol to fetch ("Navi", "AlphaFi", or "Suilend")
+        protocol_name: Protocol to fetch ("Navi", "AlphaFi", "Suilend", "ScallopLend", "ScallopBorrow", "Pebble", "Bluefin")
+        timestamp: Unix timestamp in seconds (REQUIRED per DESIGN_NOTES.md #1)
 
     Returns:
         Tuple of (lend_df, borrow_df, collateral_df)
@@ -100,6 +102,17 @@ def fetch_protocol_data(protocol_name: str) -> Tuple[pd.DataFrame, pd.DataFrame,
             reader = PebbleReader()
             return reader.get_all_data()
 
+        elif protocol_name == "Bluefin":
+            print("\t\tgetting Bluefin perp rates:")
+            from data.bluefin.bluefin_reader import BluefinReader
+            reader = BluefinReader(timestamp)
+            lend_df, borrow_df, collateral_df = reader.get_all_data()
+            print(f"\t\t  [DEBUG] Bluefin returned: {len(lend_df)} lend, {len(borrow_df)} borrow, {len(collateral_df)} collateral")
+            if not lend_df.empty:
+                print(f"\t\t  [DEBUG] Lend columns: {lend_df.columns.tolist()}")
+                print(f"\t\t  [DEBUG] Lend sample:\n{lend_df.head(2)}")
+            return lend_df, borrow_df, collateral_df
+
         else:
             raise ValueError(f"Unknown protocol: {protocol_name}")
 
@@ -133,100 +146,6 @@ def get_rate_for_contract(df: pd.DataFrame, contract: str, value_column: str) ->
 
     return float('nan')
 
-
-def fetch_perp_tokens_at_timestamp(timestamp: int):
-    """
-    Fetch perp tokens from rates_snapshot at given timestamp where perp_margin_rate IS NOT NULL.
-
-    Args:
-        timestamp: Unix timestamp in seconds (the "current time" per DESIGN_NOTES.md #1)
-
-    Returns:
-        Dict mapping token_contract -> symbol
-        Example: {'0xBTC-USDC-PERP_bluefin': 'BTC'}
-
-    Note: Uses timestamp <= query per DESIGN_NOTES.md #1 (historical context principle)
-    """
-    try:
-        from dashboard.db_utils import get_db_engine
-        from utils.time_helpers import to_datetime_str  # DESIGN_NOTES.md #5
-
-        engine = get_db_engine()
-
-        # Convert timestamp to datetime string for SQL query (DESIGN_NOTES.md #5)
-        timestamp_str = to_datetime_str(timestamp)
-
-        # Query: Get most recent perp tokens UP TO the selected timestamp
-        # Per DESIGN_NOTES.md #1: "selected timestamp IS the current time"
-        query = """
-            SELECT DISTINCT
-                token_contract,
-                token as symbol
-            FROM rates_snapshot
-            WHERE protocol = 'Bluefin'
-              AND perp_margin_rate IS NOT NULL
-              AND timestamp <= %s
-            ORDER BY token
-        """
-
-        df = pd.read_sql_query(query, engine, params=(timestamp_str,))
-
-        # Return as dict: {token_contract: symbol}
-        return dict(zip(df['token_contract'], df['symbol']))
-
-    except Exception as e:
-        print(f"\t\t⚠️  ERROR ({type(e).__name__}): Failed to fetch perp tokens: {e}")
-        print(f"\t\t   Continuing without perp data...")
-        return {}
-
-
-def fetch_perp_rate_at_timestamp(token_contract: str, timestamp: int):
-    """
-    Fetch perp funding rate for a given token contract from rates_snapshot AT the given timestamp.
-
-    Args:
-        token_contract: Normalized token contract (e.g., '0xBTC-USDC-PERP_bluefin')
-        timestamp: Unix timestamp in seconds (REQUIRED, NO DEFAULT per DESIGN_NOTES.md #2)
-
-    Returns:
-        Perp funding rate (annualized decimal, e.g., 0.0876 = 8.76% APR) or None
-
-    CRITICAL: NO datetime.now() fallback. Timestamp must be explicit.
-              Per DESIGN_NOTES.md #1: "selected timestamp IS the current time"
-    """
-    try:
-        from dashboard.db_utils import get_db_engine
-        from utils.time_helpers import to_datetime_str  # DESIGN_NOTES.md #5
-
-        engine = get_db_engine()
-
-        # Convert timestamp to datetime string for SQL (DESIGN_NOTES.md #5)
-        timestamp_str = to_datetime_str(timestamp)
-
-        # Get rate at exact timestamp (or closest before it)
-        # Per DESIGN_NOTES.md #1: Use "<= timestamp" for historical context
-        query = """
-            SELECT perp_margin_rate
-            FROM rates_snapshot
-            WHERE token_contract = %s
-              AND protocol = 'Bluefin'
-              AND perp_margin_rate IS NOT NULL
-              AND timestamp <= %s
-            ORDER BY timestamp DESC
-            LIMIT 1
-        """
-        params = (token_contract, timestamp_str)
-
-        df = pd.read_sql_query(query, engine, params=params)
-
-        if df.empty:
-            return None
-
-        return df['perp_margin_rate'].iloc[0]
-
-    except Exception as e:
-        # Fail silently for individual token lookups to not break entire merge
-        return None
 
 
 def merge_protocol_data(
@@ -275,13 +194,13 @@ def merge_protocol_data(
     
     # Normalize all stablecoin contracts for matching
     stablecoin_contracts = {normalize_coin_type(c) for c in stablecoin_contracts}
-    
-    protocols = ["Navi", "AlphaFi", "Suilend", "ScallopLend", "ScallopBorrow", "Pebble"]
+
+    protocols = settings.ENABLED_PROTOCOLS
     protocol_data = {}
     
     # Fetch all protocol data
     for protocol in protocols:
-        lend, borrow, collateral = fetch_protocol_data(protocol)
+        lend, borrow, collateral = fetch_protocol_data(protocol, timestamp)
         protocol_data[protocol] = {
             'lend': lend,
             'borrow': borrow,
@@ -290,42 +209,27 @@ def merge_protocol_data(
     
     # Build universe of all tokens by contract
     token_universe = {}  # normalized_contract -> {symbol, protocols}
-    
+
     for protocol in protocols:
         for df_type in ['lend', 'borrow', 'collateral']:
             df = protocol_data[protocol][df_type]
-            
+
             if df.empty or 'Token_coin_type' not in df.columns:
                 continue
-            
+
             for _, row in df.iterrows():
                 contract = normalize_coin_type(row.get('Token_coin_type', ''))
                 symbol = row.get('Token', '')
-                
+
                 if contract and symbol:
                     if contract not in token_universe:
                         token_universe[contract] = {
                             'symbol': symbol,
                             'protocols': set()
                         }
+                        if protocol == 'Bluefin':
+                            print(f"\t\t  [DEBUG] Added Bluefin token: {symbol} ({contract[:20]}...)")
                     token_universe[contract]['protocols'].add(protocol)
-
-    # NEW: Add perp tokens to token universe
-    print("\t\tFetching perp tokens...")
-    perp_tokens = fetch_perp_tokens_at_timestamp(timestamp)
-    if perp_tokens:
-        print(f"\t\tFound {len(perp_tokens)} perp tokens")
-        for token_contract, symbol in perp_tokens.items():
-            contract = normalize_coin_type(token_contract)
-            if contract not in token_universe:
-                token_universe[contract] = {
-                    'symbol': symbol,
-                    'protocols': set(),  # Perp tokens don't appear in lending protocols
-                    'is_perp_token': True  # Mark as perp token for filter exemption
-                }
-            # Don't add to protocols set - perp rate will be its own column
-    else:
-        print("\t\tNo perp tokens found")
 
     # Build merged DataFrames
     lend_rows = []
@@ -348,10 +252,6 @@ def merge_protocol_data(
             df = protocol_data[protocol]['lend']
             rate = get_rate_for_contract(df, contract, 'Supply_apr')
             lend_row[protocol] = rate
-
-        # NEW: Add perp_margin_rate column (separate from protocol columns)
-        perp_rate = fetch_perp_rate_at_timestamp(contract, timestamp)
-        lend_row['perp_margin_rate'] = perp_rate
 
         lend_rows.append(lend_row)
         
@@ -453,22 +353,17 @@ def merge_protocol_data(
         has_suilend = pd.notna(row.get('Suilend'))
         # Count Scallop as present if EITHER ScallopLend OR ScallopBorrow has data
         has_scallop = pd.notna(row.get('ScallopLend')) or pd.notna(row.get('ScallopBorrow'))
-        has_pebble = pd.notna(row.get('Pebble'))  
+        has_pebble = pd.notna(row.get('Pebble'))
+        has_bluefin = pd.notna(row.get('Bluefin'))  # Perp funding rates
 
         lending_protocol_count = sum([has_pebble, has_navi, has_alphafi, has_suilend, has_scallop])
-
-        # NEW: Check if this is a perp token
-        is_perp = contract in token_universe and token_universe[contract].get('is_perp_token', False)
-        has_perp_rate = pd.notna(row.get('perp_margin_rate'))
 
         # Keep if:
         # 1. Stablecoin in 1+ protocols
         # 2. OR has lending rates in 2+ unique protocols
-        # 3. OR is perp token with perp_margin_rate (NEW)
-        if contract in stablecoin_contracts or lending_protocol_count >= 2 or (is_perp and has_perp_rate):
+        # 3. OR has Bluefin perp rates (needed for perp_lending strategies)
+        if contract in stablecoin_contracts or lending_protocol_count >= 2 or has_bluefin:
             tokens_to_keep.append(idx)
-            if is_perp and has_perp_rate:
-                print(f"  [FILTER] Keeping perp token {row['Token']} ({contract}) with funding rate {row['perp_margin_rate']:.4%}")
 
     print(f"[FILTER] Tokens kept: {len(tokens_to_keep)} tokens")
     print(f"[FILTER] Tokens removed: {len(lend_df) - len(tokens_to_keep)} tokens ({((len(lend_df) - len(tokens_to_keep)) / len(lend_df) * 100):.1f}%)")

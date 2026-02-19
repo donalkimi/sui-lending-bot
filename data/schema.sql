@@ -50,11 +50,6 @@ CREATE TABLE IF NOT EXISTS rates_snapshot (
     -- Marks snapshots to use for PnL calculations (one per hour, closest to top of hour)
     use_for_pnl BOOLEAN NOT NULL DEFAULT FALSE,
 
-    -- Perpetual Funding Rates (added 2026-02-17)
-    -- Interpolated perp funding rate (annualized) from perp_margin_rates table
-    -- Nullable: only populated for tokens with perp markets (e.g., BTC, ETH)
-    perp_margin_rate DECIMAL(10,6) DEFAULT NULL,
-
     -- Composite primary key for PostgreSQL ON CONFLICT support
     PRIMARY KEY (timestamp, protocol, token_contract)
 );
@@ -68,10 +63,6 @@ CREATE INDEX IF NOT EXISTS idx_rates_protocol_contract ON rates_snapshot(protoco
 -- Partial indexes only include rows where use_for_pnl = TRUE for efficiency
 CREATE INDEX IF NOT EXISTS idx_rates_pnl_flag ON rates_snapshot(use_for_pnl, timestamp) WHERE use_for_pnl = TRUE;
 CREATE INDEX IF NOT EXISTS idx_rates_pnl_lookup ON rates_snapshot(token_contract, protocol, timestamp) WHERE use_for_pnl = TRUE;
-
--- Perp margin rate index (added 2026-02-17)
--- Partial index only includes rows with perp rates
-CREATE INDEX IF NOT EXISTS idx_rates_perp_margin ON rates_snapshot(perp_margin_rate) WHERE perp_margin_rate IS NOT NULL;
 
 -- RLS Policies for rates_snapshot
 ALTER TABLE rates_snapshot ENABLE ROW LEVEL SECURITY;
