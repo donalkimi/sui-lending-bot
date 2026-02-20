@@ -1440,6 +1440,144 @@ class RateTracker:
         finally:
             conn.close()
 
+    def save_spot_perp_pricing(self, pricing_df: pd.DataFrame) -> int:
+        """
+        Save spot and perp pricing data to spot_perp_pricing table.
+
+        Uses ON CONFLICT DO UPDATE to overwrite existing pricing.
+        Allows updating with fresher data within the same hour.
+
+        Args:
+            pricing_df: DataFrame with columns:
+                - timestamp: Pricing timestamp (datetime, rounded to hour)
+                - protocol: 'Bluefin'
+                - ticker: Token symbol (e.g., 'BTC', 'ETH')
+                - token_address: Proxy for perp or contract for spot
+                - market_symbol: API symbol
+                - bid, offer, mid_price, spread_bps
+                - bid_size, ask_size
+                - is_perp: Boolean
+                - price_type: Type of price data
+                - actual_fetch_time: When data was fetched (datetime)
+                - source: Data source identifier
+
+        Returns:
+            Number of rows inserted/updated
+        """
+        if pricing_df.empty:
+            print("[PRICING] No pricing data to save")
+            return 0
+
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            all_values = []
+
+            for _, row in pricing_df.iterrows():
+                try:
+                    # Convert timestamps to strings
+                    ts_seconds = to_seconds(row['timestamp'])
+                    timestamp_str = to_datetime_str(ts_seconds)
+
+                    # actual_fetch_time is optional
+                    actual_fetch_time = None
+                    if 'actual_fetch_time' in row and pd.notna(row['actual_fetch_time']):
+                        fetch_seconds = to_seconds(row['actual_fetch_time'])
+                        actual_fetch_time = to_datetime_str(fetch_seconds)
+
+                    values = (
+                        timestamp_str,
+                        row['protocol'],
+                        row['ticker'],
+                        row['token_address'],
+                        row.get('market_symbol'),
+                        self._convert_to_native_types(row.get('bid')),
+                        self._convert_to_native_types(row.get('offer')),
+                        self._convert_to_native_types(row.get('mid_price')),
+                        self._convert_to_native_types(row.get('spread_bps')),
+                        self._convert_to_native_types(row.get('bid_size')),
+                        self._convert_to_native_types(row.get('ask_size')),
+                        bool(row['is_perp']),
+                        row.get('price_type', 'unknown'),
+                        actual_fetch_time,
+                        row.get('source', 'unknown')
+                    )
+
+                    all_values.append(values)
+
+                except KeyError as e:
+                    print(f"[PRICING] KeyError processing row: {e}")
+                    print(f"[PRICING] Available columns: {list(row.index)}")
+                    continue
+                except Exception as e:
+                    print(f"[PRICING] Error processing row: {e}")
+                    continue
+
+            if not all_values:
+                print("[PRICING] No values to insert")
+                return 0
+
+            # Deduplicate by primary key - keep last
+            unique_values = {}
+            for values in all_values:
+                key = (values[0], values[1], values[3], values[11])  # timestamp, protocol, token_address, is_perp
+                unique_values[key] = values
+
+            deduplicated_values = list(unique_values.values())
+
+            if self.use_cloud:
+                # PostgreSQL: Batch upsert
+                execute_values(
+                    cursor,
+                    """
+                    INSERT INTO spot_perp_pricing (
+                        timestamp, protocol, ticker, token_address, market_symbol,
+                        bid, offer, mid_price, spread_bps,
+                        bid_size, ask_size, is_perp, price_type,
+                        actual_fetch_time, source
+                    ) VALUES %s
+                    ON CONFLICT (timestamp, protocol, token_address, is_perp)
+                    DO UPDATE SET
+                        ticker = EXCLUDED.ticker,
+                        market_symbol = EXCLUDED.market_symbol,
+                        bid = EXCLUDED.bid,
+                        offer = EXCLUDED.offer,
+                        mid_price = EXCLUDED.mid_price,
+                        spread_bps = EXCLUDED.spread_bps,
+                        bid_size = EXCLUDED.bid_size,
+                        ask_size = EXCLUDED.ask_size,
+                        price_type = EXCLUDED.price_type,
+                        actual_fetch_time = EXCLUDED.actual_fetch_time,
+                        source = EXCLUDED.source
+                    """,
+                    deduplicated_values
+                )
+            else:
+                # SQLite: Batch insert
+                cursor.executemany(
+                    """
+                    INSERT OR REPLACE INTO spot_perp_pricing (
+                        timestamp, protocol, ticker, token_address, market_symbol,
+                        bid, offer, mid_price, spread_bps,
+                        bid_size, ask_size, is_perp, price_type,
+                        actual_fetch_time, source
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    deduplicated_values
+                )
+
+            rows_saved = len(deduplicated_values)
+            conn.commit()
+            print(f"[PRICING] Saved/updated {rows_saved} pricing records")
+            return rows_saved
+
+        except Exception as e:
+            conn.rollback()
+            print(f"[PRICING] Error saving pricing data: {e}")
+            raise
+        finally:
+            conn.close()
+
     def detect_new_perp_markets(self, perp_rates_df: pd.DataFrame) -> List[str]:
         """
         Detect if any new perp markets were added that weren't in previous data.

@@ -212,7 +212,59 @@ ON perp_margin_rates FOR SELECT TO authenticated
 USING (true);
 
 
--- Table 5: reward_token_prices
+-- Table 5: spot_perp_pricing (added 2026-02-20)
+-- Stores historical spot and perpetual bid/ask pricing from Bluefin
+-- Used for analyzing perp vs spot arbitrage opportunities
+CREATE TABLE IF NOT EXISTS spot_perp_pricing (
+    -- Identification
+    timestamp TIMESTAMP NOT NULL,                -- Rounded to nearest hour (consistent with rates_snapshot)
+    protocol VARCHAR(50) NOT NULL,               -- 'Bluefin'
+    ticker VARCHAR(50) NOT NULL,                 -- Base token symbol (e.g., 'BTC', 'ETH', 'SUI')
+    token_address TEXT NOT NULL,                 -- Proxy for perp (0xBTC-USDC-PERP_bluefin), contract for spot
+
+    -- Market identifiers
+    market_symbol VARCHAR(100),                  -- API symbol (e.g., 'BTC-PERP', 'BTC-USDC')
+
+    -- Pricing data (DECIMAL for precision)
+    bid DECIMAL(20,10),                          -- Best bid price (USD)
+    offer DECIMAL(20,10),                        -- Best offer/ask price (USD)
+    mid_price DECIMAL(20,10),                    -- Mid price: (bid + offer) / 2
+    spread_bps DECIMAL(10,2),                    -- Spread in basis points: (offer - bid) / mid * 10000
+
+    bid_size DECIMAL(30,10),                     -- Size available at bid (in base token units)
+    ask_size DECIMAL(30,10),                     -- Size available at ask (in base token units)
+
+    -- Type and source
+    is_perp BOOLEAN NOT NULL,                    -- true = perp market, false = spot/index
+    price_type VARCHAR(50),                      -- 'orderbook', 'index', 'mark', 'oracle'
+
+    -- Metadata
+    actual_fetch_time TIMESTAMP,                 -- When data was actually fetched from API
+    source VARCHAR(100),                         -- Data source: 'bluefin_ticker', 'bluefin_orderbook', 'bluefin_index'
+
+    PRIMARY KEY (timestamp, protocol, token_address, is_perp)
+);
+
+-- Indexes for spot_perp_pricing
+CREATE INDEX IF NOT EXISTS idx_spot_perp_pricing_timestamp ON spot_perp_pricing(timestamp);
+CREATE INDEX IF NOT EXISTS idx_spot_perp_pricing_ticker ON spot_perp_pricing(ticker);
+CREATE INDEX IF NOT EXISTS idx_spot_perp_pricing_token ON spot_perp_pricing(token_address);
+CREATE INDEX IF NOT EXISTS idx_spot_perp_pricing_type ON spot_perp_pricing(is_perp, ticker);
+CREATE INDEX IF NOT EXISTS idx_spot_perp_pricing_spread ON spot_perp_pricing(spread_bps) WHERE is_perp = true;
+
+-- RLS Policies for spot_perp_pricing
+ALTER TABLE spot_perp_pricing ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Service role has full access to spot_perp_pricing"
+ON spot_perp_pricing FOR ALL TO service_role
+USING (true) WITH CHECK (true);
+
+CREATE POLICY "Authenticated users can read spot_perp_pricing"
+ON spot_perp_pricing FOR SELECT TO authenticated
+USING (true);
+
+
+-- Table 6: reward_token_prices
 -- Stores prices for reward tokens (no protocol - last write wins)
 CREATE TABLE IF NOT EXISTS reward_token_prices (
     timestamp TIMESTAMP NOT NULL,
