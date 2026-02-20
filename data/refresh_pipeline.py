@@ -202,20 +202,8 @@ def refresh_pipeline(
 
         print("[DB] Snapshot saved successfully")
 
-        # Retry Bluefin if rates weren't available during snapshot
-        if not perp_rates_available:
-            print("\n[PERP RETRY] Bluefin data was not available during snapshot, attempting fetch...")
-            bluefin_reader = BluefinReader()
-            perp_rates_df = bluefin_reader.get_recent_funding_rates(limit=10)
-
-            if not perp_rates_df.empty:
-                rows_saved = tracker.save_perp_rates(perp_rates_df)
-                tracker.register_perp_tokens(perp_rates_df)
-                print(f"[PERP RETRY] OK Saved {rows_saved} perp rates to perp_margin_rates")
-                # TODO: backfill this snapshot's rates_snapshot with perp data
-                backfill_rates_snapshot_with_perp()
-            else:
-                print("[PERP RETRY] WARNING: Still no Bluefin data available, will be included in next hourly refresh")
+        # Note: If perp data was not available, it will be included in the next refresh
+        # after main_perp_refresh.py populates the perp_margin_rates table
 
     # Initialize strategy results (always, regardless of save_snapshots)
     protocol_a: Optional[str] = None
