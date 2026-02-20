@@ -105,8 +105,8 @@ def fetch_protocol_data(protocol_name: str, timestamp: int) -> Tuple[pd.DataFram
         elif protocol_name == "Bluefin":
             print("\t\tgetting Bluefin perp rates:")
             from data.bluefin.bluefin_reader import BluefinReader
-            reader = BluefinReader(timestamp)
-            lend_df, borrow_df, collateral_df = reader.get_all_data()
+            reader = BluefinReader()  # No config needed for database reading
+            lend_df, borrow_df, collateral_df = reader.get_all_data_for_timestamp(timestamp)
             print(f"\t\t  [DEBUG] Bluefin returned: {len(lend_df)} lend, {len(borrow_df)} borrow, {len(collateral_df)} collateral")
             if not lend_df.empty:
                 print(f"\t\t  [DEBUG] Lend columns: {lend_df.columns.tolist()}")
