@@ -1440,32 +1440,24 @@ class RateTracker:
         finally:
             conn.close()
 
-    def save_spot_perp_pricing(self, pricing_df: pd.DataFrame) -> int:
+    def save_spot_perp_basis(self, basis_df: pd.DataFrame) -> int:
         """
-        Save spot and perp pricing data to spot_perp_pricing table.
+        Save spot/perp basis rows to spot_perp_basis table.
 
-        Uses ON CONFLICT DO UPDATE to overwrite existing pricing.
-        Allows updating with fresher data within the same hour.
+        One row per (timestamp, perp_proxy, spot_contract). Uses upsert so
+        re-running within the same hour overwrites with fresher data.
 
         Args:
-            pricing_df: DataFrame with columns:
-                - timestamp: Pricing timestamp (datetime, rounded to hour)
-                - protocol: 'Bluefin'
-                - ticker: Token symbol (e.g., 'BTC', 'ETH')
-                - token_address: Proxy for perp or contract for spot
-                - market_symbol: API symbol
-                - bid, offer, mid_price, spread_bps
-                - bid_size, ask_size
-                - is_perp: Boolean
-                - price_type: Type of price data
-                - actual_fetch_time: When data was fetched (datetime)
-                - source: Data source identifier
+            basis_df: DataFrame with columns:
+                timestamp, perp_proxy, perp_ticker, spot_contract,
+                spot_bid, spot_ask, perp_bid, perp_ask,
+                basis_bid, basis_ask, basis_mid, actual_fetch_time
 
         Returns:
             Number of rows inserted/updated
         """
-        if pricing_df.empty:
-            print("[PRICING] No pricing data to save")
+        if basis_df.empty:
+            print("[BASIS] No basis data to save")
             return 0
 
         conn = self._get_connection()
@@ -1473,107 +1465,85 @@ class RateTracker:
             cursor = conn.cursor()
             all_values = []
 
-            for _, row in pricing_df.iterrows():
+            for _, row in basis_df.iterrows():
                 try:
-                    # Convert timestamps to strings
-                    ts_seconds = to_seconds(row['timestamp'])
-                    timestamp_str = to_datetime_str(ts_seconds)
-
-                    # actual_fetch_time is optional
-                    actual_fetch_time = None
-                    if 'actual_fetch_time' in row and pd.notna(row['actual_fetch_time']):
-                        fetch_seconds = to_seconds(row['actual_fetch_time'])
-                        actual_fetch_time = to_datetime_str(fetch_seconds)
-
                     values = (
-                        timestamp_str,
-                        row['protocol'],
-                        row['ticker'],
-                        row['token_address'],
-                        row.get('market_symbol'),
-                        self._convert_to_native_types(row.get('bid')),
-                        self._convert_to_native_types(row.get('offer')),
-                        self._convert_to_native_types(row.get('mid_price')),
-                        self._convert_to_native_types(row.get('spread_bps')),
-                        self._convert_to_native_types(row.get('bid_size')),
-                        self._convert_to_native_types(row.get('ask_size')),
-                        bool(row['is_perp']),
-                        row.get('price_type', 'unknown'),
-                        actual_fetch_time,
-                        row.get('source', 'unknown')
+                        row['timestamp'],
+                        row['perp_proxy'],
+                        row['perp_ticker'],
+                        row['spot_contract'],
+                        self._convert_to_native_types(row.get('spot_bid')),
+                        self._convert_to_native_types(row.get('spot_ask')),
+                        self._convert_to_native_types(row.get('perp_bid')),
+                        self._convert_to_native_types(row.get('perp_ask')),
+                        self._convert_to_native_types(row.get('basis_bid')),
+                        self._convert_to_native_types(row.get('basis_ask')),
+                        self._convert_to_native_types(row.get('basis_mid')),
+                        row.get('actual_fetch_time'),
                     )
-
                     all_values.append(values)
-
                 except KeyError as e:
-                    print(f"[PRICING] KeyError processing row: {e}")
-                    print(f"[PRICING] Available columns: {list(row.index)}")
+                    print(f"[BASIS] KeyError processing row: {e}")
+                    print(f"[BASIS] Available columns: {list(row.index)}")
                     continue
                 except Exception as e:
-                    print(f"[PRICING] Error processing row: {e}")
+                    print(f"[BASIS] Error processing row: {e}")
                     continue
 
             if not all_values:
-                print("[PRICING] No values to insert")
+                print("[BASIS] No values to insert")
                 return 0
 
-            # Deduplicate by primary key - keep last
+            # Deduplicate by primary key (timestamp, perp_proxy, spot_contract) — keep last
             unique_values = {}
             for values in all_values:
-                key = (values[0], values[1], values[3], values[11])  # timestamp, protocol, token_address, is_perp
+                key = (values[0], values[1], values[3])  # timestamp, perp_proxy, spot_contract
                 unique_values[key] = values
-
             deduplicated_values = list(unique_values.values())
 
             if self.use_cloud:
-                # PostgreSQL: Batch upsert
                 execute_values(
                     cursor,
                     """
-                    INSERT INTO spot_perp_pricing (
-                        timestamp, protocol, ticker, token_address, market_symbol,
-                        bid, offer, mid_price, spread_bps,
-                        bid_size, ask_size, is_perp, price_type,
-                        actual_fetch_time, source
+                    INSERT INTO spot_perp_basis (
+                        timestamp, perp_proxy, perp_ticker, spot_contract,
+                        spot_bid, spot_ask, perp_bid, perp_ask,
+                        basis_bid, basis_ask, basis_mid, actual_fetch_time
                     ) VALUES %s
-                    ON CONFLICT (timestamp, protocol, token_address, is_perp)
+                    ON CONFLICT (timestamp, perp_proxy, spot_contract)
                     DO UPDATE SET
-                        ticker = EXCLUDED.ticker,
-                        market_symbol = EXCLUDED.market_symbol,
-                        bid = EXCLUDED.bid,
-                        offer = EXCLUDED.offer,
-                        mid_price = EXCLUDED.mid_price,
-                        spread_bps = EXCLUDED.spread_bps,
-                        bid_size = EXCLUDED.bid_size,
-                        ask_size = EXCLUDED.ask_size,
-                        price_type = EXCLUDED.price_type,
-                        actual_fetch_time = EXCLUDED.actual_fetch_time,
-                        source = EXCLUDED.source
+                        perp_ticker = EXCLUDED.perp_ticker,
+                        spot_bid = EXCLUDED.spot_bid,
+                        spot_ask = EXCLUDED.spot_ask,
+                        perp_bid = EXCLUDED.perp_bid,
+                        perp_ask = EXCLUDED.perp_ask,
+                        basis_bid = EXCLUDED.basis_bid,
+                        basis_ask = EXCLUDED.basis_ask,
+                        basis_mid = EXCLUDED.basis_mid,
+                        actual_fetch_time = EXCLUDED.actual_fetch_time
                     """,
                     deduplicated_values
                 )
             else:
-                # SQLite: Batch insert
                 cursor.executemany(
                     """
-                    INSERT OR REPLACE INTO spot_perp_pricing (
-                        timestamp, protocol, ticker, token_address, market_symbol,
-                        bid, offer, mid_price, spread_bps,
-                        bid_size, ask_size, is_perp, price_type,
-                        actual_fetch_time, source
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT OR REPLACE INTO spot_perp_basis (
+                        timestamp, perp_proxy, perp_ticker, spot_contract,
+                        spot_bid, spot_ask, perp_bid, perp_ask,
+                        basis_bid, basis_ask, basis_mid, actual_fetch_time
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     deduplicated_values
                 )
 
             rows_saved = len(deduplicated_values)
             conn.commit()
-            print(f"[PRICING] Saved/updated {rows_saved} pricing records")
+            print(f"[BASIS] Saved/updated {rows_saved} basis records")
             return rows_saved
 
         except Exception as e:
             conn.rollback()
-            print(f"[PRICING] Error saving pricing data: {e}")
+            print(f"[BASIS] Error saving basis data: {e}")
             raise
         finally:
             conn.close()

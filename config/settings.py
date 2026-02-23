@@ -79,6 +79,25 @@ BLUEFIN_PERP_MARKETS = [
 ]
 
 # ==============================================================================
+# BLUEFIN AMM AGGREGATOR (added 2026-02-23)
+# ==============================================================================
+
+# Aggregator endpoint for spot price discovery across all SUI DEXes
+BLUEFIN_AGGREGATOR_BASE_URL = "https://aggregator.api.sui-prod.bluefin.io"
+
+# All AMM sources to include in aggregated quotes
+BLUEFIN_AGGREGATOR_SOURCES = [
+    "suiswap", "turbos", "cetus", "bluemove", "kriya", "kriya_v3",
+    "aftermath", "deepbook_v3", "flowx", "flowx_v3", "bluefin",
+    "springsui", "obric", "stsui", "steamm", "steamm_oracle_quoter",
+    "steamm_oracle_quoter_v2", "magma", "haedal_pmm", "momentum",
+    "sevenk_v1", "fullsail", "cetus_dlmm", "ferra_dlmm", "ferra_clmm", "RFQ"
+]
+
+# Fixed USDC input amount for the USDC→X offer query (100 USDC, 6 decimals)
+BLUEFIN_AMM_USDC_AMOUNT_RAW = 100_000_000
+
+# ==============================================================================
 # BLUEFIN PERPETUAL FEES (added 2026-02-18)
 # ==============================================================================
 

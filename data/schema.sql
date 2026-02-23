@@ -212,59 +212,56 @@ ON perp_margin_rates FOR SELECT TO authenticated
 USING (true);
 
 
--- Table 5: spot_perp_pricing (added 2026-02-20)
--- Stores historical spot and perpetual bid/ask pricing from Bluefin
--- Used for analyzing perp vs spot arbitrage opportunities
-CREATE TABLE IF NOT EXISTS spot_perp_pricing (
-    -- Identification
-    timestamp TIMESTAMP NOT NULL,                -- Rounded to nearest hour (consistent with rates_snapshot)
-    protocol VARCHAR(50) NOT NULL,               -- 'Bluefin'
-    ticker VARCHAR(50) NOT NULL,                 -- Base token symbol (e.g., 'BTC', 'ETH', 'SUI')
-    token_address TEXT NOT NULL,                 -- Proxy for perp (0xBTC-USDC-PERP_bluefin), contract for spot
+-- Table 5: spot_perp_basis (added 2026-02-23)
+-- One row per (perp, spot_contract) per snapshot hour.
+-- Captures AMM spot bid/ask and perp orderbook bid/ask, plus the derived basis metrics
+-- used to evaluate entry/exit economics for the long-spot / short-perp strategy.
+CREATE TABLE IF NOT EXISTS spot_perp_basis (
+    timestamp           TIMESTAMP NOT NULL,     -- Snapshot hour (rounded, matches rates_snapshot)
+    perp_proxy          TEXT NOT NULL,           -- '0xBTC-USDC-PERP_bluefin' proxy address
+    perp_ticker         VARCHAR(20) NOT NULL,    -- Base token symbol: 'BTC', 'ETH', 'SOL', etc.
+    spot_contract       TEXT NOT NULL,           -- Actual on-chain spot token contract
 
-    -- Market identifiers
-    market_symbol VARCHAR(100),                  -- API symbol (e.g., 'BTC-PERP', 'BTC-USDC')
+    -- AMM spot prices (from Bluefin aggregator, all DEXes aggregated)
+    spot_bid            DECIMAL(20, 10),         -- USDC received per spot token when selling (X→USDC)
+    spot_ask            DECIMAL(20, 10),         -- USDC paid per spot token when buying (USDC→X)
 
-    -- Pricing data (DECIMAL for precision)
-    bid DECIMAL(20,10),                          -- Best bid price (USD)
-    offer DECIMAL(20,10),                        -- Best offer/ask price (USD)
-    mid_price DECIMAL(20,10),                    -- Mid price: (bid + offer) / 2
-    spread_bps DECIMAL(10,2),                    -- Spread in basis points: (offer - bid) / mid * 10000
+    -- Perp orderbook prices (from Bluefin ticker API)
+    perp_bid            DECIMAL(20, 10),         -- Best bid on perp (USDC) — short perp at this price
+    perp_ask            DECIMAL(20, 10),         -- Best ask on perp (USDC) — cover short at this price
 
-    bid_size DECIMAL(30,10),                     -- Size available at bid (in base token units)
-    ask_size DECIMAL(30,10),                     -- Size available at ask (in base token units)
-
-    -- Type and source
-    is_perp BOOLEAN NOT NULL,                    -- true = perp market, false = spot/index
-    price_type VARCHAR(50),                      -- 'orderbook', 'index', 'mark', 'oracle'
+    -- Basis metrics (dimensionless, stored as decimals: -0.002 = -0.2%)
+    -- basis_bid: exit economics  — sell perp at bid, cover short spot at ask
+    -- basis_ask: entry economics — buy perp at ask, short spot at bid
+    basis_bid           DECIMAL(10, 8),          -- (perp_bid - spot_ask) / perp_bid
+    basis_ask           DECIMAL(10, 8),          -- (perp_ask - spot_bid) / perp_ask
+    basis_mid           DECIMAL(10, 8),          -- (basis_bid + basis_ask) / 2
 
     -- Metadata
-    actual_fetch_time TIMESTAMP,                 -- When data was actually fetched from API
-    source VARCHAR(100),                         -- Data source: 'bluefin_ticker', 'bluefin_orderbook', 'bluefin_index'
+    actual_fetch_time   TIMESTAMP,               -- Wall-clock time of API calls
 
-    PRIMARY KEY (timestamp, protocol, token_address, is_perp)
+    PRIMARY KEY (timestamp, perp_proxy, spot_contract)
 );
 
--- Indexes for spot_perp_pricing
-CREATE INDEX IF NOT EXISTS idx_spot_perp_pricing_timestamp ON spot_perp_pricing(timestamp);
-CREATE INDEX IF NOT EXISTS idx_spot_perp_pricing_ticker ON spot_perp_pricing(ticker);
-CREATE INDEX IF NOT EXISTS idx_spot_perp_pricing_token ON spot_perp_pricing(token_address);
-CREATE INDEX IF NOT EXISTS idx_spot_perp_pricing_type ON spot_perp_pricing(is_perp, ticker);
-CREATE INDEX IF NOT EXISTS idx_spot_perp_pricing_spread ON spot_perp_pricing(spread_bps) WHERE is_perp = true;
+-- Indexes for spot_perp_basis
+CREATE INDEX IF NOT EXISTS idx_spot_perp_basis_timestamp ON spot_perp_basis(timestamp);
+CREATE INDEX IF NOT EXISTS idx_spot_perp_basis_perp ON spot_perp_basis(perp_proxy, timestamp);
+CREATE INDEX IF NOT EXISTS idx_spot_perp_basis_spot ON spot_perp_basis(spot_contract, timestamp);
+CREATE INDEX IF NOT EXISTS idx_spot_perp_basis_ticker ON spot_perp_basis(perp_ticker, timestamp);
 
--- RLS Policies for spot_perp_pricing
-ALTER TABLE spot_perp_pricing ENABLE ROW LEVEL SECURITY;
+-- RLS Policies for spot_perp_basis
+ALTER TABLE spot_perp_basis ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "Service role has full access to spot_perp_pricing"
-ON spot_perp_pricing FOR ALL TO service_role
+CREATE POLICY "Service role has full access to spot_perp_basis"
+ON spot_perp_basis FOR ALL TO service_role
 USING (true) WITH CHECK (true);
 
-CREATE POLICY "Authenticated users can read spot_perp_pricing"
-ON spot_perp_pricing FOR SELECT TO authenticated
+CREATE POLICY "Authenticated users can read spot_perp_basis"
+ON spot_perp_basis FOR SELECT TO authenticated
 USING (true);
 
 
--- Table 6: reward_token_prices
+-- Table 7: reward_token_prices
 -- Stores prices for reward tokens (no protocol - last write wins)
 CREATE TABLE IF NOT EXISTS reward_token_prices (
     timestamp TIMESTAMP NOT NULL,

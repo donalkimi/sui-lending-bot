@@ -153,6 +153,21 @@ def refresh_pipeline(
     else:
         print(f"[PERP CHECK] OK Perp data exists for {rates_ts_hour_str} ({count} markets)")
 
+    # STEP 2: Fetch spot/perp basis (AMM aggregator + perp orderbook)
+    if save_snapshots:
+        try:
+            from data.bluefin.bluefin_pricing_reader import BluefinPricingReader
+            basis_reader = BluefinPricingReader()
+            basis_df = basis_reader.get_spot_perp_basis(timestamp=current_seconds)
+            if not basis_df.empty:
+                rows_saved = tracker.save_spot_perp_basis(basis_df)
+                print(f"[BASIS] Saved {rows_saved} spot/perp basis rows")
+            else:
+                print("[BASIS] WARNING: No basis data fetched — skipping save")
+        except Exception as e:
+            print(f"[BASIS] WARNING: Basis fetch failed: {e}")
+            print("[BASIS] Continuing without basis data — not a critical failure")
+
     notifier = SlackNotifier()
     print("[FETCH] Starting protocol data fetch...")
     lend_rates, borrow_rates, collateral_ratios, prices, lend_rewards, borrow_rewards, available_borrow, borrow_fees, borrow_weights, liquidation_thresholds = merge_protocol_data(

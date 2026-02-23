@@ -12,13 +12,14 @@ API Response Format (verified 2026-02-20):
 - Timestamp: updatedAtMillis (milliseconds)
 """
 
+import re
 import pandas as pd
 import requests
 import time
 from datetime import datetime, timezone
 from typing import Optional, List, Dict
 from dataclasses import dataclass
-from utils.time_helpers import to_datetime_str, to_datetime_utc, to_seconds
+from utils.time_helpers import to_datetime_str, to_seconds
 
 
 @dataclass
@@ -130,120 +131,188 @@ class BluefinPricingReader:
             print(f"  [ERROR] Failed to fetch ticker for {market_symbol}: {e}")
             return None
 
-    def get_spot_perp_pricing(
-        self,
-        timestamp: int,
-        protocol: str = 'Bluefin'
-    ) -> pd.DataFrame:
+    def _fetch_amm_quote(self, token_in: str, token_out: str, amount_raw: int) -> Optional[dict]:
         """
-        Fetch spot and perp pricing for all markets in BLUEFIN_PERP_MARKETS.
+        Fetch a best-price quote from the Bluefin AMM aggregator.
+
+        Aggregates across all major SUI DEXes (Cetus, Turbos, Aftermath, etc.)
+        to return the optimal route for the given token swap.
 
         Args:
-            timestamp: Unix timestamp (seconds) for pipeline coordination
-                      This is the timestamp that will be stored in DB
-                      (NOT the actual fetch time - that goes in actual_fetch_time)
-            protocol: Protocol name (default 'Bluefin')
+            token_in: Contract address of the input token
+            token_out: Contract address of the output token
+            amount_raw: Integer amount of token_in in raw on-chain units
 
         Returns:
-            DataFrame with columns:
-                - timestamp, protocol, ticker, token_address, market_symbol
-                - bid, offer, mid_price, spread_bps
-                - bid_size, ask_size
-                - is_perp, price_type, actual_fetch_time, source
+            Raw API response dict, or None on failure.
+            Key fields:
+                - effectivePrice: tokenIn / tokenOut (e.g. USDC per X for USDC→X)
+                - effectivePriceReserved: tokenOut / tokenIn (inverse of effectivePrice)
+                - returnAmountWithDecimal: raw integer amount of tokenOut received
+                - swapAmount / returnAmount: human-readable decimal amounts
+                - warning: e.g. "PriceImpactTooHigh" (logged but not fatal)
         """
         from config import settings
 
-        # Round timestamp to nearest hour for consistency
-        ts_datetime = to_datetime_utc(timestamp)
-        rounded_time = ts_datetime.replace(minute=0, second=0, microsecond=0)
+        url = f"{settings.BLUEFIN_AGGREGATOR_BASE_URL}/v3/quote"
+        params = {
+            'amount': str(amount_raw),
+            'from': token_in,
+            'to': token_out,
+            'sources': ','.join(settings.BLUEFIN_AGGREGATOR_SOURCES),
+        }
 
-        all_pricing = []
-        current_fetch_time = datetime.now(timezone.utc)
+        try:
+            data = self._make_request_with_retry(url, params)
 
-        print(f"[PRICING] Fetching spot/perp pricing for {len(settings.BLUEFIN_PERP_MARKETS)} markets...")
+            if data.get('warning'):
+                print(f"    [WARN] Aggregator warning for {token_in[:20]}...→{token_out[:20]}...: {data['warning']}")
 
-        for base_token in settings.BLUEFIN_PERP_MARKETS:
-            market_symbol = f"{base_token}-PERP"
-            perp_proxy = f"0x{base_token}-USDC-PERP_bluefin"
+            return data
 
-            print(f"\n  Fetching {market_symbol} ticker...")
-            ticker_data = self.fetch_perp_ticker(market_symbol)
+        except Exception as e:
+            print(f"    [ERROR] AMM quote failed ({token_in[:20]}...→{token_out[:20]}...): {e}")
+            return None
 
-            if not ticker_data:
-                print(f"    [WARN] Skipping {market_symbol} - no data")
+    def get_spot_perp_basis(self, timestamp: int) -> pd.DataFrame:
+        """
+        Fetch spot/perp basis for all (perp, spot_contract) pairs in BLUEFIN_TO_LENDINGS.
+
+        For each perp market:
+          - Fetches the perp orderbook bid/ask from the Bluefin ticker API (one call per perp)
+        For each associated spot token:
+          - Fetches the AMM offer price: USDC → spot_contract (best ask price in USDC per token)
+          - Fetches the AMM bid price:   spot_contract → USDC (best bid price in USDC per token)
+        Then computes:
+          - basis_bid = (perp_bid - spot_ask) / perp_bid   [exit: sell perp at bid, cover short spot at ask]
+          - basis_ask = (perp_ask - spot_bid) / perp_ask   [entry: buy perp at ask, short spot at bid]
+          - basis_mid = (basis_bid + basis_ask) / 2
+
+        Args:
+            timestamp: Unix seconds — pipeline snapshot time, passed from caller.
+                       NEVER call datetime.now() or time.time() for this value.
+
+        Returns:
+            DataFrame with one row per (perp_proxy, spot_contract) with columns:
+                timestamp, perp_proxy, perp_ticker, spot_contract,
+                spot_bid, spot_ask, perp_bid, perp_ask,
+                basis_bid, basis_ask, basis_mid, actual_fetch_time
+        """
+        from config import settings
+        from config.stablecoins import STABLECOINS
+
+        usdc_contract = STABLECOINS['USDC']
+        timestamp_str = to_datetime_str(timestamp)
+        actual_fetch_time = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+
+        rows = []
+        total_pairs = sum(len(v) for v in settings.BLUEFIN_TO_LENDINGS.values())
+        print(f"[BASIS] Fetching spot/perp basis for {len(settings.BLUEFIN_TO_LENDINGS)} perps, "
+              f"{total_pairs} spot contracts...")
+
+        for perp_proxy, spot_contracts in settings.BLUEFIN_TO_LENDINGS.items():
+            # Extract ticker from proxy address: '0xBTC-USDC-PERP_bluefin' → 'BTC'
+            match = re.search(r'0x(\w+)-USDC-PERP', perp_proxy)
+            if not match:
+                print(f"  [WARN] Cannot parse ticker from perp proxy: {perp_proxy}")
                 continue
 
-            # Determine actual fetch time (use API timestamp if available)
-            if ticker_data.get('timestamp'):
-                # Timestamp is in milliseconds - convert to seconds
-                api_fetch_time = to_datetime_utc(int(ticker_data['timestamp'] / 1000))
+            ticker = match.group(1)
+            market_symbol = f"{ticker}-PERP"
+
+            print(f"\n  [{ticker}] Fetching perp ticker {market_symbol}...")
+            perp_data = self.fetch_perp_ticker(market_symbol)
+
+            if not perp_data or perp_data.get('bid') is None or perp_data.get('ask') is None:
+                print(f"    [WARN] No perp bid/ask for {market_symbol}, skipping all spot contracts")
+                continue
+
+            perp_bid = perp_data['bid']
+            perp_ask = perp_data['ask']
+            print(f"    [OK] Perp: bid=${perp_bid:.4f}, ask=${perp_ask:.4f}")
+
+            # Append index price row (zero spread — index_price == oraclePriceE9 on Bluefin)
+            index_price = perp_data.get('index_price')
+            if index_price is None:
+                print(f"    [WARN] No index_price for {market_symbol}, skipping index row")
             else:
-                api_fetch_time = current_fetch_time
-
-            # Extract perp orderbook pricing
-            bid = ticker_data.get('bid')
-            ask = ticker_data.get('ask')
-
-            if bid and ask:
-                mid_price = (bid + ask) / 2
-                spread_bps = ((ask - bid) / mid_price * 10000) if mid_price > 0 else None
-
-                # Add perp orderbook row
-                all_pricing.append({
-                    'timestamp': rounded_time,
-                    'protocol': protocol,
-                    'ticker': base_token,
-                    'token_address': perp_proxy,
-                    'market_symbol': market_symbol,
-                    'bid': bid,
-                    'offer': ask,
-                    'mid_price': mid_price,
-                    'spread_bps': spread_bps,
-                    'bid_size': ticker_data.get('bid_size'),
-                    'ask_size': ticker_data.get('ask_size'),
-                    'is_perp': True,
-                    'price_type': 'orderbook',
-                    'actual_fetch_time': api_fetch_time,
-                    'source': 'bluefin_ticker'
+                index_contract = f"0x{ticker}-USDC-INDEX_bluefin"
+                basis_bid = (perp_bid - index_price) / perp_bid
+                basis_ask = (perp_ask - index_price) / perp_ask
+                basis_mid = (basis_bid + basis_ask) / 2
+                print(f"    [OK] Index: ${index_price:.4f}, "
+                      f"basis_bid={basis_bid*100:.3f}%, basis_ask={basis_ask*100:.3f}%")
+                rows.append({
+                    'timestamp': timestamp_str,
+                    'perp_proxy': perp_proxy,
+                    'perp_ticker': ticker,
+                    'spot_contract': index_contract,
+                    'spot_bid': index_price,
+                    'spot_ask': index_price,
+                    'perp_bid': perp_bid,
+                    'perp_ask': perp_ask,
+                    'basis_bid': basis_bid,
+                    'basis_ask': basis_ask,
+                    'basis_mid': basis_mid,
+                    'actual_fetch_time': actual_fetch_time,
                 })
 
-                print(f"    [OK] Perp orderbook: bid=${bid:.2f}, ask=${ask:.2f}, spread={spread_bps:.2f}bps")
+            for spot_contract in spot_contracts:
+                short_addr = spot_contract[:30] + '...'
+                print(f"    Spot {short_addr}")
 
-            # Extract spot index price (if available)
-            index_price = ticker_data.get('index_price')
+                # Step 1: USDC → spot (offer query) — how much USDC to pay per spot token
+                offer_data = self._fetch_amm_quote(usdc_contract, spot_contract,
+                                                   settings.BLUEFIN_AMM_USDC_AMOUNT_RAW)
+                if offer_data is None:
+                    print(f"      [WARN] No offer quote, skipping")
+                    continue
 
-            # Use index price as "spot" reference
-            if index_price:
-                # Create synthetic token address for index price
-                index_token_address = f"0x{base_token}-USDC-INDEX_{protocol.lower()}"
+                return_raw = offer_data.get('returnAmountWithDecimal', '0')
+                if not return_raw or str(return_raw) == '0':
+                    print(f"      [WARN] Zero returnAmount for USDC→spot, skipping (no AMM liquidity)")
+                    continue
 
-                all_pricing.append({
-                    'timestamp': rounded_time,
-                    'protocol': protocol,
-                    'ticker': base_token,
-                    'token_address': index_token_address,
-                    'market_symbol': f"{base_token}-INDEX",
-                    'bid': index_price,  # Index price has no spread
-                    'offer': index_price,
-                    'mid_price': index_price,
-                    'spread_bps': 0.0,
-                    'bid_size': None,
-                    'ask_size': None,
-                    'is_perp': False,
-                    'price_type': 'index',
-                    'actual_fetch_time': api_fetch_time,
-                    'source': 'bluefin_index'
+                spot_ask = float(offer_data['effectivePrice'])
+                x_amount_raw = int(return_raw)
+
+                # Step 2: spot → USDC (bid query) — how much USDC received per spot token sold
+                bid_data = self._fetch_amm_quote(spot_contract, usdc_contract, x_amount_raw)
+                if bid_data is None:
+                    print(f"      [WARN] No bid quote, skipping")
+                    continue
+
+                spot_bid = float(bid_data['effectivePriceReserved'])
+
+                if spot_bid <= 0 or spot_ask <= 0:
+                    print(f"      [WARN] Invalid spot prices (bid={spot_bid}, ask={spot_ask}), skipping")
+                    continue
+
+                basis_bid = (perp_bid - spot_ask) / perp_bid
+                basis_ask = (perp_ask - spot_bid) / perp_ask
+                basis_mid = (basis_bid + basis_ask) / 2
+
+                print(f"      [OK] spot_bid=${spot_bid:.4f}, spot_ask=${spot_ask:.4f}, "
+                      f"basis_bid={basis_bid*100:.3f}%, basis_ask={basis_ask*100:.3f}%")
+
+                rows.append({
+                    'timestamp': timestamp_str,
+                    'perp_proxy': perp_proxy,
+                    'perp_ticker': ticker,
+                    'spot_contract': spot_contract,
+                    'spot_bid': spot_bid,
+                    'spot_ask': spot_ask,
+                    'perp_bid': perp_bid,
+                    'perp_ask': perp_ask,
+                    'basis_bid': basis_bid,
+                    'basis_ask': basis_ask,
+                    'basis_mid': basis_mid,
+                    'actual_fetch_time': actual_fetch_time,
                 })
 
-                print(f"    [OK] Spot index: ${index_price:.2f}")
-
-        if not all_pricing:
-            print("  [WARN] No pricing data fetched")
+        if not rows:
+            print("[BASIS] No basis rows collected")
             return pd.DataFrame()
 
-        df = pd.DataFrame(all_pricing)
-        perp_count = len(df[df['is_perp']])
-        spot_count = len(df[~df['is_perp']])
-        print(f"\n[PRICING] Fetched {len(df)} total records ({perp_count} perp, {spot_count} spot/index)")
-
-        return df
+        print(f"\n[BASIS] Collected {len(rows)} spot/perp basis rows")
+        return pd.DataFrame(rows)

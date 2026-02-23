@@ -2239,12 +2239,13 @@ Perp funding rates are integrated directly into `refresh_pipeline()` to ensure p
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│ REFRESH PIPELINE WITH PERP INTEGRATION                                      │
+│ REFRESH PIPELINE WITH PERP + BASIS INTEGRATION                              │
 └─────────────────────────────────────────────────────────────────────────────┘
 
    refresh_pipeline() called
             ↓
-   Round timestamp to nearest hour (rates_ts_hour)
+   Round timestamp to nearest minute (ts) → current_seconds
+   Round timestamp to nearest hour  (rates_ts_hour)
             ↓
    ╔═══════════════════════════════════════════╗
    ║ STEP 1: Check perp_margin_rates          ║
@@ -2268,78 +2269,58 @@ Perp funding rates are integrated directly into `refresh_pipeline()` to ensure p
   perp_margin_     │
   rates table      │
      │             │
-     ↓             │
-  Register         │
-  proxy tokens     │
-     │             │
      └──────┬──────┘
+            ↓
+   ╔═══════════════════════════════════════════╗
+   ║ STEP 2: Fetch spot/perp basis            ║
+   ║ (only if save_snapshots=True)            ║
+   ║ BluefinPricingReader.get_spot_perp_basis ║
+   ╚═══════════════════════════════════════════╝
+            ↓
+   For each perp in BLUEFIN_TO_LENDINGS:
+     - fetch_perp_ticker → bid/ask/index_price
+     - append INDEX row (oracle reference, zero spread)
+     - for each spot_contract:
+         AMM quote USDC→X (spot_ask)
+         AMM quote X→USDC (spot_bid)
+         compute basis_bid, basis_ask, basis_mid
+            ↓
+   save_spot_perp_basis → spot_perp_basis table
+   (non-fatal: failure logs warning, pipeline continues)
             ↓
    Fetch lending rates from protocols
    (Navi, Scallop, AlphaFi, etc.)
             ↓
-   Save lending market rows to rates_snapshot
+   Save lending + Bluefin perp rows to rates_snapshot
             ↓
-         ┌──────────────┐
-         │save_snapshots│
-         │    == True?  │
-         └──┬───────────┘
-            │
-     ┌──────┴──────┐
-     │             │
-    Yes           No
-     │             │
-     ↓             ↓
-  ╔═══════════════════════════════════════════╗    Skip perp
-  ║ STEP 2: Fetch perp rates (bulk query)    ║    insertion
-  ║ EXACT match on rates_ts_hour              ║         │
-  ╚═══════════════════════════════════════════╝         │
-            ↓                                            │
-     ┌─────────────┐                                    │
-     │All 6 markets│                                    │
-     │   found?    │                                    │
-     └──┬──────────┘                                    │
-        │                                               │
-  ┌─────┴─────┐                                        │
-  │           │                                         │
- Yes         No                                         │
-  │           │                                         │
-  ↓           ↓                                         │
-Bulk      ❌ FAIL LOUDLY                                │
-insert       │                                          │
-perp rows    ↓                                          │
-  │       Exit with error                               │
-  │       "Missing perp data"                           │
-  │                                                      │
-  └──────────────────┬───────────────────────────────────┘
-                     ↓
            Run analysis & auto-rebalance
                      ↓
                  Complete
 
 KEY:
-  ═══ Critical validation step (fails loudly if error)
+  ═══ Critical step
   ┌─┐ Decision point
   ↓   Flow direction
-  ❌  Error exit
 ```
 
 **Flow Details**:
 
-1. **START: Perp Data Check** (Lines 95-140 in [refresh_pipeline.py](../data/refresh_pipeline.py))
+1. **STEP 1: Perp Data Check** ([refresh_pipeline.py](../data/refresh_pipeline.py) lines ~110-154)
    - Round `rates_ts` to nearest hour → `rates_ts_hour`
    - Query: `SELECT COUNT(*) FROM perp_margin_rates WHERE timestamp = rates_ts_hour`
-   - If count == 0: Fetch from Bluefin API and save
+   - If count == 0: Fetch from Bluefin API (limit=100) and save
    - If count > 0: Continue (data already exists)
 
-2. **MIDDLE: Normal Refresh**
-   - Fetch lending rates from protocols (Navi, Scallop, etc.)
-   - Save lending market rows to `rates_snapshot`
+2. **STEP 2: Spot/Perp Basis Fetch** ([refresh_pipeline.py](../data/refresh_pipeline.py) lines ~156-169)
+   - Only runs when `save_snapshots=True`
+   - Calls `BluefinPricingReader.get_spot_perp_basis(timestamp=current_seconds)`
+   - Saves rows to `spot_perp_basis` via `tracker.save_spot_perp_basis()`
+   - Non-fatal: exceptions are caught, logged, and the pipeline continues
+   - Timestamp used is `current_seconds` — same value as `rates_snapshot`
 
-3. **END: Perp Row Insertion** (Lines 198-250 in [refresh_pipeline.py](../data/refresh_pipeline.py))
-   - Bulk fetch all 6 perp rates in ONE query
-   - Build rows for each perp market
-   - Insert using `ON CONFLICT DO NOTHING` (idempotent)
-   - **Fail loudly** if any market missing (indicates error)
+3. **STEP 3: Normal Refresh**
+   - Fetch lending rates from protocols (Navi, Scallop, etc.) via `merge_protocol_data()`
+   - Save lending + Bluefin perp market rows to `rates_snapshot`
 
 **SQL Queries Used**:
 
@@ -2526,26 +2507,85 @@ python -m Scripts.interpolate_perp_to_snapshot
 
 **Performance**: Optimized with bulk SQL queries (single WHERE IN instead of N individual queries)
 
-### Deprecation: Separate Perp Refresh Job
+### Standalone Scripts (Backfill / Manual Runs)
 
-**OLD**: [main_perp_refresh.py](../main_perp_refresh.py) (separate cron at :05)
-- Ran 5 minutes after main refresh
-- Fetched last 100 perp rates
-- Did NOT insert rows into `rates_snapshot`
-
-**NEW**: Integrated into `refresh_pipeline()` (single cron at :00)
-- Perp data checked/fetched at START
-- Perp rows inserted at END
-- Everything in one synchronous pipeline
-
-**Migration Status**:
-- ✅ **Phase 1 (Complete)**: Integrated into refresh_pipeline
-- ⏳ **Phase 2 (In Progress)**: Monitoring and validation
-- ⏳ **Phase 3 (Pending)**: Remove old cron job after validation period
+- **[main_perp_refresh.py](../main_perp_refresh.py)**: Fetches the last 100 historical perp funding rates from Bluefin API and saves to `perp_margin_rates`. Useful for backfilling gaps. (Normal operation: STEP 1 of `refresh_pipeline` handles this automatically.)
+- **[main_spot_perp_pricing.py](../main_spot_perp_pricing.py)**: Standalone run of just the basis fetch (STEP 2). Rounds timestamp to current hour. Useful for backfilling `spot_perp_basis` without running a full refresh.
 
 ---
 
-## 3.5 CACHING IMPLEMENTATION DETAILS
+## 3.5 SPOT/PERP BASIS PRICING SYSTEM (added 2026-02-23)
+
+### Overview
+
+Tracks real tradeable AMM prices for every (perp market, spot token) pair in `BLUEFIN_TO_LENDINGS`. Runs as STEP 2 of `refresh_pipeline`, giving entry/exit economics alongside the funding rate captured in STEP 1.
+
+### spot_perp_basis Table
+
+**Purpose**: One row per (timestamp, perp, spot_contract). Stores AMM spot bid/ask from Bluefin aggregator and perp orderbook bid/ask from the ticker API, plus derived basis metrics.
+
+```sql
+CREATE TABLE IF NOT EXISTS spot_perp_basis (
+    timestamp       TIMESTAMP NOT NULL,   -- matches rates_snapshot.timestamp
+    perp_proxy      TEXT NOT NULL,        -- '0xBTC-USDC-PERP_bluefin'
+    perp_ticker     VARCHAR(20) NOT NULL, -- 'BTC'
+    spot_contract   TEXT NOT NULL,        -- on-chain contract or synthetic INDEX address
+    spot_bid        DECIMAL(20,10),       -- USDC received per token sold (AMM)
+    spot_ask        DECIMAL(20,10),       -- USDC paid per token bought (AMM)
+    perp_bid        DECIMAL(20,10),       -- best bid on perp orderbook
+    perp_ask        DECIMAL(20,10),       -- best ask on perp orderbook
+    basis_bid       DECIMAL(10,8),        -- (perp_bid - spot_ask) / perp_bid  [exit]
+    basis_ask       DECIMAL(10,8),        -- (perp_ask - spot_bid) / perp_ask  [entry]
+    basis_mid       DECIMAL(10,8),        -- (basis_bid + basis_ask) / 2
+    actual_fetch_time TIMESTAMP,          -- wall-clock time of API calls (metadata)
+    PRIMARY KEY (timestamp, perp_proxy, spot_contract)
+);
+```
+
+**Index reference rows**: Each perp also gets one row with `spot_contract = '0x{ticker}-USDC-INDEX_bluefin'`. Uses `oraclePriceE9` (= Bluefin Index Price, sourced from Pyth) as spot price with zero spread.
+
+### Basis Convention
+
+Follows standard futures convention `(future - spot) / future`:
+
+| Metric | Formula | Sign | Meaning |
+|--------|---------|------|---------|
+| `basis_ask` | `(perp_ask - spot_bid) / perp_ask` | + = contango | Entry cost: pay perp ask, receive spot bid |
+| `basis_bid` | `(perp_bid - spot_ask) / perp_bid` | + = contango | Exit receipt: receive perp bid, pay spot ask |
+| `basis_mid` | Average of above | — | Mid-market estimate |
+
+Positive basis (perp > spot) = contango = positive funding rate (longs pay shorts).
+
+### Key Files
+
+| File | Role |
+|------|------|
+| [data/bluefin/bluefin_pricing_reader.py](../data/bluefin/bluefin_pricing_reader.py) | `BluefinPricingReader` — `fetch_perp_ticker()`, `_fetch_amm_quote()`, `get_spot_perp_basis()` |
+| [data/rate_tracker.py](../data/rate_tracker.py) | `save_spot_perp_basis()` — upserts DataFrame to `spot_perp_basis` |
+| [config/settings.py](../config/settings.py) | `BLUEFIN_AGGREGATOR_BASE_URL`, `BLUEFIN_AGGREGATOR_SOURCES`, `BLUEFIN_AMM_USDC_AMOUNT_RAW`, `BLUEFIN_TO_LENDINGS` |
+| [data/refresh_pipeline.py](../data/refresh_pipeline.py) | STEP 2 — basis fetch wired into pipeline |
+| [main_spot_perp_pricing.py](../main_spot_perp_pricing.py) | Standalone backfill script |
+
+### AMM Two-Step Pricing
+
+Spot prices come from the Bluefin aggregator (all major SUI DEXes aggregated):
+
+```
+Step 1 — Offer (USDC → X):
+  GET /v3/quote?from=USDC_contract&to=spot_contract&amount=100_000_000
+  → effectivePrice        = spot_ask (USDC per token)
+  → returnAmountWithDecimal = raw X amount (used in Step 2)
+
+Step 2 — Bid (X → USDC):
+  GET /v3/quote?from=spot_contract&to=USDC_contract&amount={from Step 1}
+  → effectivePriceReserved = spot_bid (USDC per token)
+```
+
+Using `returnAmountWithDecimal` as the Step 2 input avoids needing a separate decimals lookup.
+
+---
+
+## 3.6 CACHING IMPLEMENTATION DETAILS
 
 ### Cache Write Operations
 

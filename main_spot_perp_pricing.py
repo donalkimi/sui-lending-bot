@@ -3,7 +3,8 @@
 Spot/Perp Pricing Refresh Pipeline
 
 Runs independently (separate from main lending rate refresh).
-Fetches perp orderbook and spot index prices from Bluefin.
+Fetches perp orderbook and spot index prices from Bluefin, then computes
+the AMM spot/perp basis for all (perp, spot_contract) pairs.
 
 Usage:
     python main_spot_perp_pricing.py
@@ -22,14 +23,16 @@ def main():
     Main entry point for spot/perp pricing refresh.
 
     Flow:
-        1. Fetch perp ticker + spot index data from Bluefin API
-        2. Save to spot_perp_pricing table
+        1. Fetch AMM spot/perp basis (aggregator quotes) for all (perp, spot_contract) pairs
+        2. Save to spot_perp_basis table
     """
     print("\n" + "="*60)
     print("Spot/Perp Pricing Refresh Started")
     print("="*60)
 
     # Get current timestamp (rounded to hour)
+    # This is the snapshot time passed to all downstream functions — never use datetime.now()
+    # inside those functions for the timestamp field.
     current_time = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
     timestamp_seconds = to_seconds(current_time)
 
@@ -38,31 +41,30 @@ def main():
     print(f"Markets: {', '.join(settings.BLUEFIN_PERP_MARKETS)}\n")
 
     try:
-        # Step 1: Fetch pricing data
-        print("[1/2] Fetching spot and perp pricing from Bluefin API...")
         reader = BluefinPricingReader()
-        pricing_df = reader.get_spot_perp_pricing(timestamp=timestamp_seconds)
-
-        if pricing_df.empty:
-            print("\n[WARN] No pricing data fetched. Exiting.")
-            print("    This may indicate API issues or incorrect endpoint format.")
-            print("    Check the Bluefin API documentation and update BluefinPricingReader.")
-            return 1
-
-        # Step 2: Save to database
-        print("\n[2/2] Saving to spot_perp_pricing table...")
         tracker = RateTracker(
             use_cloud=settings.USE_CLOUD_DB,
             connection_url=settings.SUPABASE_URL
         )
 
-        rows_saved = tracker.save_spot_perp_pricing(pricing_df)
-        if rows_saved == 0:
-            print("[WARN] No rows saved. Check for errors above.")
+        # Step 1: Fetch AMM spot/perp basis for all (perp, spot_contract) pairs
+        print("[1/2] Fetching spot/perp basis via Bluefin aggregator...")
+        basis_df = reader.get_spot_perp_basis(timestamp=timestamp_seconds)
+
+        if basis_df.empty:
+            print("[WARN] No basis data fetched.")
+            return 1
+
+        # Step 2: Save basis rows
+        print("\n[2/2] Saving to spot_perp_basis table...")
+        rows_saved_basis = tracker.save_spot_perp_basis(basis_df)
+        if rows_saved_basis == 0:
+            print("[WARN] No basis rows saved. Check for errors above.")
             return 1
 
         print("\n" + "="*60)
-        print(f"[SUCCESS] Pricing Refresh Complete - {rows_saved} rows saved")
+        print(f"[SUCCESS] Pricing Refresh Complete")
+        print(f"          spot_perp_basis: {rows_saved_basis} rows")
         print("="*60 + "\n")
         return 0
 

@@ -17,15 +17,32 @@ Bluefin is treated as a **first-class protocol** (like Navi, AlphaFi, Suilend) i
 ### Data Flow
 
 ```
-main_perp_refresh.py (hourly, independent)
-    │
-    ▼
+main_perp_refresh.py (hourly, independent)              refresh_pipeline.py (hourly)
+    │                                                           │
+    ▼                                                    STEP 1: perp check
+┌──────────────────────┐                                       │
+│  perp_margin_rates   │◄──────────────────────────────────────┘
+│  (database table)    │  Raw funding rates from Bluefin API
+└──────────┬───────────┘  protocol='Bluefin', funding_rate_annual=0.0876
+           │
+           │  refresh_pipeline.py Step 2: BluefinPricingReader
+           ▼
 ┌──────────────────────┐
-│  perp_margin_rates   │  Raw funding rates from Bluefin API
-│  (database table)    │  protocol='Bluefin', funding_rate_annual=0.0876
+│  BluefinPricingReader│  get_spot_perp_basis(timestamp)
+│                      │    → fetch_perp_ticker(BTC-PERP) → bid/ask/index
+│                      │    → _fetch_amm_quote(USDC→spot) → spot_ask
+│                      │    → _fetch_amm_quote(spot→USDC) → spot_bid
+│                      │    → compute basis_bid, basis_ask, basis_mid
 └──────────┬───────────┘
            │
-           │  refresh_pipeline.py calls merge_protocol_data(timestamp)
+           ▼
+┌──────────────────────┐
+│  spot_perp_basis     │  One row per (perp, spot_contract) per snapshot
+│  (database table)    │  + one INDEX row per perp (oracle reference price)
+└──────────────────────┘
+
+           refresh_pipeline.py Step 3: merge_protocol_data(timestamp)
+           │
            ▼
 ┌──────────────────────┐
 │  protocol_merger.py  │  fetch_protocol_data("Bluefin", timestamp)
@@ -52,11 +69,13 @@ main_perp_refresh.py (hourly, independent)
 
 | File | Role |
 |------|------|
-| `config/settings.py` | `ENABLED_PROTOCOLS`, `BLUEFIN_PERP_MARKETS`, `BLUEFIN_TO_LENDINGS`, fees |
+| `config/settings.py` | `ENABLED_PROTOCOLS`, `BLUEFIN_PERP_MARKETS`, `BLUEFIN_TO_LENDINGS`, fees, aggregator config |
 | `data/bluefin/bluefin_reader.py` | `BluefinReader` class - queries perp_margin_rates, returns protocol-format DataFrames |
+| `data/bluefin/bluefin_pricing_reader.py` | `BluefinPricingReader` - fetches perp orderbook + AMM spot quotes, computes basis |
 | `data/protocol_merger.py` | `fetch_protocol_data("Bluefin", timestamp)` elif block |
-| `data/refresh_pipeline.py` | Pre-fetch check for perp rates, retry logic |
-| `main_perp_refresh.py` | Hourly job that fetches from Bluefin API → perp_margin_rates table |
+| `data/refresh_pipeline.py` | Pre-fetch check for perp rates; STEP 2: basis fetch integrated inline |
+| `main_perp_refresh.py` | Standalone job to bulk-backfill perp_margin_rates (100 historical rates) |
+| `main_spot_perp_pricing.py` | Standalone script for basis-only backfill runs |
 
 ### Sign Convention (CRITICAL)
 
@@ -138,12 +157,28 @@ BLUEFIN_TO_LENDINGS = {
 
 ### Database Tables
 
-**perp_margin_rates** (source - populated by main_perp_refresh.py):
+**perp_margin_rates** (populated by main_perp_refresh.py / refresh_pipeline STEP 1):
 - `timestamp`: Hour-aligned datetime string
 - `protocol`: 'Bluefin'
 - `token_contract`: e.g. '0xBTC-USDC-PERP_bluefin'
 - `base_token`: e.g. 'BTC'
 - `funding_rate_annual`: Published rate (positive = longs pay shorts)
+
+**spot_perp_basis** (populated by refresh_pipeline STEP 2 via BluefinPricingReader):
+- `timestamp`: Same timestamp as rates_snapshot for the same run
+- `perp_proxy`: e.g. '0xBTC-USDC-PERP_bluefin'
+- `perp_ticker`: e.g. 'BTC'
+- `spot_contract`: On-chain token contract (or synthetic INDEX address)
+- `spot_bid`: USDC received when selling spot token (AMM bid)
+- `spot_ask`: USDC paid when buying spot token (AMM ask)
+- `perp_bid`: Best bid price on perp orderbook (USDC)
+- `perp_ask`: Best ask price on perp orderbook (USDC)
+- `basis_bid`: `(perp_bid - spot_ask) / perp_bid` — exit economics
+- `basis_ask`: `(perp_ask - spot_bid) / perp_ask` — entry economics
+- `basis_mid`: `(basis_bid + basis_ask) / 2`
+- `actual_fetch_time`: Wall-clock time of API calls (metadata only)
+
+Special rows with `spot_contract = '0x{ticker}-USDC-INDEX_bluefin'` use `oraclePriceE9` (= Bluefin Index Price from Pyth) as a zero-spread reference: `spot_bid == spot_ask == index_price`.
 
 **rates_snapshot** (destination - populated by refresh_pipeline.py):
 - `protocol`: 'Bluefin'
@@ -157,10 +192,59 @@ BLUEFIN_TO_LENDINGS = {
 The refresh pipeline handles missing perp rates:
 
 1. **Before snapshot**: Check if `perp_margin_rates` has data for current hour
-2. **If missing**: Fetch from Bluefin API (limit=10), save to perp_margin_rates
+2. **If missing**: Fetch from Bluefin API (limit=100), save to perp_margin_rates
 3. **Snapshot**: `merge_protocol_data()` includes Bluefin via BluefinReader
-4. **After snapshot**: If still missing, retry fetch and save to perp_margin_rates
-5. **Backfill**: `backfill_rates_snapshot_with_perp()` stub exists (TODO: implement)
+4. **Backfill**: `backfill_rates_snapshot_with_perp()` stub exists (TODO: implement)
+
+---
+
+## Spot/Perp Basis Pricing (added 2026-02-23)
+
+### Overview
+
+Each hourly refresh fetches live tradeable prices for every (perp, spot_token) pair in `BLUEFIN_TO_LENDINGS`. This gives real entry/exit economics beyond just the funding rate.
+
+### Basis Definition
+
+Basis follows the standard futures convention: `(future - spot) / future`
+
+Positive basis = perp trades above spot (contango) = positive funding rate (longs pay).
+
+| Name | Formula | Scenario |
+|------|---------|----------|
+| `basis_ask` | `(perp_ask - spot_bid) / perp_ask` | **Entry**: buy perp at ask, short spot at bid |
+| `basis_bid` | `(perp_bid - spot_ask) / perp_bid` | **Exit**: sell perp at bid, cover short spot at ask |
+| `basis_mid` | `(basis_bid + basis_ask) / 2` | Mid-market estimate |
+
+### Index Reference Rows
+
+Each perp also gets one synthetic row per refresh with `spot_contract = '0x{ticker}-USDC-INDEX_bluefin'`. This uses `oraclePriceE9` from the Bluefin ticker API, which equals the Pyth-sourced Index Price. Since `spot_bid == spot_ask == index_price`, these rows show the pure perp-vs-oracle basis with zero AMM spread.
+
+### Data Sources
+
+| Field | Source |
+|-------|--------|
+| `perp_bid`, `perp_ask` | `GET https://api.sui-prod.bluefin.io/v1/exchange/ticker?symbol=BTC-PERP` → `bestBidPriceE9 / 1e9` |
+| `spot_ask` | `GET aggregator.api.sui-prod.bluefin.io/v3/quote?from=USDC&to=spot_contract` → `effectivePrice` |
+| `spot_bid` | Same endpoint reversed (`from=spot_contract&to=USDC`), using `effectivePriceReserved` |
+| `index_price` | Same ticker API → `oraclePriceE9 / 1e9` (Pyth-sourced) |
+
+The two-step AMM approach (`returnAmountWithDecimal` from Step 1 feeds Step 2 as the X amount) avoids needing a separate token decimals lookup.
+
+### Pipeline Integration
+
+Basis fetch runs as **STEP 2** in `refresh_pipeline()`, after the perp check and before lending rate fetch. It only runs when `save_snapshots=True` and is non-fatal (failures log a warning, pipeline continues).
+
+All three tables (`perp_margin_rates`, `spot_perp_basis`, `rates_snapshot`) share the same `current_seconds` timestamp for every run.
+
+### Configuration
+
+```python
+# config/settings.py
+BLUEFIN_AGGREGATOR_BASE_URL = "https://aggregator.api.sui-prod.bluefin.io"
+BLUEFIN_AMM_USDC_AMOUNT_RAW = 100_000_000   # 100 USDC (6 decimals)
+BLUEFIN_AGGREGATOR_SOURCES = ["cetus", "turbos", "aftermath", ...]  # all DEXes
+```
 
 ---
 
@@ -370,13 +454,15 @@ BLUEFIN_TO_LENDINGS = {
 
 **To be addressed later:**
 
-1. **Basis risk:** Assume spot price = perp price (ignore cash-carry arbitrage)
-2. **Maker/taker optimization:** Assume worst case (taker fees)
-3. **Funding rate volatility:** Use current rate, no forecasting
-4. **Rebalancing costs:** Ignore drift between spot and perp sizes
-5. **Oracle risk:** Assume accurate price feeds
-6. **Dummy pricing:** Perp tokens use placeholder price 10.10101 (TODO: implement real pricing)
-7. **Backfill:** `backfill_rates_snapshot_with_perp()` is a stub (TODO: implement)
+1. **Maker/taker optimization:** Assume worst case (taker fees)
+2. **Funding rate volatility:** Use current rate, no forecasting
+3. **Rebalancing costs:** Ignore drift between spot and perp sizes
+4. **Oracle risk:** Assume accurate price feeds
+5. **Dummy pricing:** Perp tokens use placeholder price 10.10101 in `rates_snapshot` (TODO: replace with real mark price)
+6. **Backfill:** `backfill_rates_snapshot_with_perp()` is a stub (TODO: implement)
+
+**Addressed:**
+- ~~Basis risk: assume spot = perp~~ → `spot_perp_basis` table now tracks real AMM spread and tradeable entry/exit costs
 
 ## Risk Analysis
 
@@ -423,4 +509,34 @@ LIMIT 10;
 -- If funding_rate_annual = +0.0876 (8.76%)
 -- Then lend_total_apr should = -0.0876 (-8.76%)
 -- And borrow_total_apr should = -0.0876 (-8.76%)
+
+-- Check basis rows for latest snapshot
+SELECT perp_ticker, spot_contract,
+       spot_bid, spot_ask,
+       perp_bid, perp_ask,
+       basis_bid * 100 AS basis_bid_pct,
+       basis_ask * 100 AS basis_ask_pct,
+       basis_mid * 100 AS basis_mid_pct
+FROM spot_perp_basis
+ORDER BY timestamp DESC, perp_ticker, spot_contract
+LIMIT 30;
+
+-- Check index reference rows only (oracle basis, zero AMM spread)
+SELECT perp_ticker, spot_bid AS index_price,
+       basis_bid * 100 AS basis_bid_pct,
+       basis_ask * 100 AS basis_ask_pct
+FROM spot_perp_basis
+WHERE spot_contract LIKE '0x%-USDC-INDEX_bluefin'
+ORDER BY timestamp DESC;
+
+-- Verify timestamp alignment: basis and rates_snapshot share the same timestamp
+SELECT r.timestamp, r.protocol, r.token,
+       b.perp_ticker, b.basis_mid * 100 AS basis_mid_pct
+FROM rates_snapshot r
+JOIN spot_perp_basis b
+  ON r.timestamp = b.timestamp
+  AND r.token_contract = b.perp_proxy
+WHERE r.protocol = 'Bluefin'
+ORDER BY r.timestamp DESC
+LIMIT 12;
 ```
