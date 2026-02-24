@@ -1353,7 +1353,7 @@ def render_positions_table_tab(timestamp_seconds: int):
         engine = get_db_engine()
         ph = service._get_placeholder()
         rates_query = f"""
-        SELECT protocol, token, lend_total_apr, borrow_total_apr, borrow_fee, price_usd
+        SELECT protocol, token, token_contract, lend_total_apr, borrow_total_apr, borrow_fee, price_usd
         FROM rates_snapshot
         WHERE timestamp = {ph}
         """
@@ -1541,9 +1541,10 @@ def render_positions_table_tab(timestamp_seconds: int):
 
         # OPTIMIZATION: Build rate lookup dictionary once for O(1) access
         # This replaces O(n) DataFrame filtering with O(1) dictionary lookups
+        # Key uses token_contract (not symbol) to match how calculate_position_statistics calls get_rate_func
         rate_lookup = {}
         for _, row in rates_df.iterrows():
-            key = (row['token'], row['protocol'])
+            key = (row['token_contract'], row['protocol'])
             rate_lookup[key] = {
                 'lend': float(row['lend_total_apr']) if pd.notna(row['lend_total_apr']) else 0.0,
                 'borrow': float(row['borrow_total_apr']) if pd.notna(row['borrow_total_apr']) else 0.0,
