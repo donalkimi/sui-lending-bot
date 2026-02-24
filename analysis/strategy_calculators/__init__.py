@@ -11,6 +11,8 @@ from .stablecoin_lending import StablecoinLendingCalculator
 from .noloop_cross_protocol import NoLoopCrossProtocolCalculator
 from .recursive_lending import RecursiveLendingCalculator
 from .perp_lending import PerpLendingCalculator
+from .perp_borrowing import PerpBorrowingCalculator
+from .perp_borrowing_recursive import PerpBorrowingRecursiveCalculator
 
 # Global calculator registry
 _CALCULATORS: Dict[str, StrategyCalculatorBase] = {}
@@ -98,6 +100,8 @@ register_calculator(StablecoinLendingCalculator)
 register_calculator(NoLoopCrossProtocolCalculator)
 register_calculator(RecursiveLendingCalculator)
 register_calculator(PerpLendingCalculator)
+register_calculator(PerpBorrowingCalculator)
+register_calculator(PerpBorrowingRecursiveCalculator)
 
 # Export public API
 __all__ = [
@@ -109,6 +113,8 @@ __all__ = [
     'NoLoopCrossProtocolCalculator',
     'RecursiveLendingCalculator',
     'PerpLendingCalculator',
+    'PerpBorrowingCalculator',
+    'PerpBorrowingRecursiveCalculator',
 
     # Registry functions
     'register_calculator',

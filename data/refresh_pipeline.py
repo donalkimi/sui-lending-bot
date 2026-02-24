@@ -242,6 +242,7 @@ def refresh_pipeline(
     # Run analysis (always, regardless of save_snapshots)
     try:
         print("[ANALYSIS] Running rate analysis...")
+        perp_basis_df = tracker.load_spot_perp_basis(current_seconds)
         analyzer = RateAnalyzer(
             lend_rates=lend_rates,
             borrow_rates=borrow_rates,
@@ -255,7 +256,8 @@ def refresh_pipeline(
             borrow_weights=borrow_weights,
             timestamp=current_seconds,  # Pass Unix timestamp in seconds (integer)
             liquidation_distance=liquidation_distance,
-            strategy_types=get_all_strategy_types()  # Generate all strategy types
+            strategy_types=get_all_strategy_types(),  # Generate all strategy types
+            perp_basis=perp_basis_df
         )
 
         protocol_a, protocol_b, all_results = analyzer.find_best_protocol_pair()

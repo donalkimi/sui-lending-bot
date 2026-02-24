@@ -566,9 +566,10 @@ class BluefinReader:
             borrow_rows = []
             collateral_rows = []
 
-            dummy_price = 10.10101  # Placeholder price for perp tokens
+            dummy_price = 10.10101  # Placeholder — real perp prices come from spot_perp_basis via rate_analyzer
 
             for token_contract, base_token, funding_rate_annual in rows:
+                price = dummy_price
                 symbol = f"{base_token}-USDC-PERP"
 
                 # CRITICAL: Sign convention
@@ -583,7 +584,7 @@ class BluefinReader:
                     'Supply_base_apr': perp_rate,
                     'Supply_reward_apr': 0.0,
                     'Supply_apr': perp_rate,
-                    'Price': dummy_price,
+                    'Price': price,
                     'Token_coin_type': token_contract
                 })
 
@@ -592,7 +593,7 @@ class BluefinReader:
                     'Borrow_base_apr': perp_rate,
                     'Borrow_reward_apr': 0.0,
                     'Borrow_apr': perp_rate,
-                    'Price': dummy_price,
+                    'Price': price,
                     'Token_coin_type': token_contract
                 })
 

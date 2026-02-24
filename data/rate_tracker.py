@@ -1548,6 +1548,62 @@ class RateTracker:
         finally:
             conn.close()
 
+    def load_spot_perp_basis(self, timestamp_seconds: int) -> pd.DataFrame:
+        """
+        Load spot/perp basis data for a given timestamp.
+
+        Returns the most recent basis row at or before timestamp_seconds for
+        every (perp_proxy, spot_contract) pair, so callers get directional
+        bid/ask prices without using mid.
+
+        Args:
+            timestamp_seconds: Unix timestamp in seconds
+
+        Returns:
+            DataFrame with columns: perp_proxy, spot_contract,
+            spot_bid, spot_ask, perp_bid, perp_ask.
+            Empty DataFrame if no data is available.
+        """
+        from utils.time_helpers import to_datetime_str
+        ts_str = to_datetime_str(timestamp_seconds)
+
+        try:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                ph = '%s' if self.use_cloud else '?'
+
+                # Fetch rows for the most-recent timestamp at or before the request.
+                # "YYYY-MM-DD HH:MM:SS" strings sort lexicographically, so MAX/<=  works.
+                cursor.execute(f"""
+                    SELECT perp_proxy, spot_contract,
+                           spot_bid, spot_ask, perp_bid, perp_ask
+                    FROM spot_perp_basis
+                    WHERE timestamp = (
+                        SELECT MAX(timestamp)
+                        FROM spot_perp_basis
+                        WHERE timestamp <= {ph}
+                    )
+                """, (ts_str,))
+
+                rows = cursor.fetchall()
+                if not rows:
+                    print(f"[BASIS LOAD] No spot/perp basis data found at or before {ts_str}")
+                    return pd.DataFrame()
+
+                df = pd.DataFrame(
+                    rows,
+                    columns=['perp_proxy', 'spot_contract',
+                             'spot_bid', 'spot_ask', 'perp_bid', 'perp_ask']
+                )
+                print(f"[BASIS LOAD] Loaded {len(df)} spot/perp basis rows for {ts_str}")
+                return df
+            finally:
+                conn.close()
+        except Exception as e:
+            print(f"[BASIS LOAD] Warning: Failed to load perp basis: {e}")
+            return pd.DataFrame()
+
     def detect_new_perp_markets(self, perp_rates_df: pd.DataFrame) -> List[str]:
         """
         Detect if any new perp markets were added that weren't in previous data.

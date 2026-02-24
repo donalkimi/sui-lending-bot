@@ -592,41 +592,52 @@ Fees:
 
 The system uses a **registry pattern** to map strategy types to calculator classes. This enables a plugin architecture where new strategy types can be added without modifying existing code.
 
+### Registered Strategy Types (Current)
+
+| Strategy type | Calculator class | Generator method | Legs |
+|--------------|-----------------|-----------------|------|
+| `stablecoin_lending` | `StablecoinLendingCalculator` | `_generate_stablecoin_strategies()` | 1 |
+| `noloop_cross_protocol_lending` | `NoLoopCrossProtocolCalculator` | `_generate_noloop_strategies()` | 3 |
+| `recursive_lending` | `RecursiveLendingCalculator` | `_generate_recursive_strategies()` | 4 |
+| `perp_lending` | `PerpLendingCalculator` | `_generate_perp_lending_strategies()` | 2 |
+| `perp_borrowing` | `PerpBorrowingCalculator` | `_generate_perp_borrowing_strategies()` | 3 |
+| `perp_borrowing_recursive` | `PerpBorrowingRecursiveCalculator` | `_generate_perp_borrowing_strategies()` | 3 (looped) |
+
+All classes live in `analysis/strategy_calculators/` and are registered at module-load time in `analysis/strategy_calculators/__init__.py`.
+
+`perp_borrowing` and `perp_borrowing_recursive` share the same generator method — the calculator class passed as an argument determines which position formula is used.
+
+### Registry Pattern
+
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │ REGISTRY INITIALIZATION (Module Load Time)                   │
 └─────────────────────────────────────────────────────────────┘
-   analysis/strategy_calculators.py
+   analysis/strategy_calculators/__init__.py
    │
-   └─ STRATEGY_CALCULATORS = {
-      'stablecoin': StablecoinStrategyCalculator,
-      'noloop': NoLoopStrategyCalculator,
-      'recursive_lending': RecursiveLendingStrategyCalculator,
-      'funding_rate_arb': FundingRateArbCalculator,
-      ...
-   }
+   └─ _CALCULATORS = {}
+      register_calculator(StablecoinLendingCalculator)
+      register_calculator(NoLoopCrossProtocolCalculator)
+      register_calculator(RecursiveLendingCalculator)
+      register_calculator(PerpLendingCalculator)
+      register_calculator(PerpBorrowingCalculator)
+      register_calculator(PerpBorrowingRecursiveCalculator)
 
                     ↓
 
 ┌─────────────────────────────────────────────────────────────┐
 │ USAGE: RateAnalyzer.analyze_all_combinations()              │
 └─────────────────────────────────────────────────────────────┘
-   For each strategy_type:
+   for strategy_type, calculator in self.calculators.items():
    │
-   ├─ Get calculator class from registry:
-   │  calculator_class = STRATEGY_CALCULATORS.get(strategy_type)
-   │  if not calculator_class:
-   │      raise ValueError(f"Unknown strategy type: {strategy_type}")
+   ├─ 'stablecoin_lending'           → _generate_stablecoin_strategies(calculator)
+   ├─ 'noloop_cross_protocol_lending' → _generate_noloop_strategies(calculator)
+   ├─ 'recursive_lending'            → _generate_recursive_strategies(calculator, tokens)
+   ├─ 'perp_lending'                 → _generate_perp_lending_strategies(calculator)
+   └─ 'perp_borrowing' /
+      'perp_borrowing_recursive'     → _generate_perp_borrowing_strategies(calculator)
    │
-   ├─ Instantiate calculator:
-   │  calculator = calculator_class(merged_data, timestamp)
-   │
-   └─ Call analyze_strategy():
-      result = calculator.analyze_strategy(
-         token1, token2, token3,
-         protocol_A, protocol_B,
-         liquidation_distance
-      )
+   └─ Combined into single DataFrame, sorted by apr_net descending
 
                     ↓
 
@@ -635,85 +646,51 @@ The system uses a **registry pattern** to map strategy types to calculator class
 └─────────────────────────────────────────────────────────────┘
    class StrategyCalculatorBase(ABC):
       @abstractmethod
-      def analyze_strategy(self, token1, token2, token3,
-                          protocol_A, protocol_B, liq_dist):
-         """
-         Calculate position sizes, rates, APR, max_size.
-
-         Returns:
-            dict with keys: L_A, B_A, L_B, B_B, net_apr,
-                           apr5, apr30, apr90, max_size, valid
-         """
-         pass
+      def get_strategy_type(self) -> str
+      def get_required_legs(self) -> int
+      def calculate_positions(self, ...) -> Dict[str, float]
+      def calculate_gross_apr(self, positions, rates) -> float
+      def calculate_net_apr(self, positions, rates, fees) -> float
+      def analyze_strategy(self, ...) -> Dict[str, Any]
+      def calculate_rebalance_amounts(self, ...) -> Dict
 
                     ↓
 
 ┌─────────────────────────────────────────────────────────────┐
-│ CONCRETE CALCULATORS (Strategy-Specific)                     │
+│ CONCRETE CALCULATORS                                         │
 └─────────────────────────────────────────────────────────────┘
-   RecursiveLendingStrategyCalculator:
-      ├─ analyze_strategy()
-      │  ├─ calculate_positions() [Geometric series]
-      │  │  └─ L_A = 1 / (1 - r_A × r_B)
-      │  ├─ calculate_net_apr() [4-leg APR]
-      │  │  └─ earnings - costs - fees
-      │  └─ calculate_max_size() [Liquidity constraint]
-      │     └─ min(avail_2A / B_A, avail_3B / B_B)
+   RecursiveLendingCalculator:
+      calculate_positions()  L_A = 1 / (1 - r_A × r_B)  [4-leg geometric series]
 
-   NoLoopStrategyCalculator:
-      ├─ analyze_strategy()
-      │  ├─ calculate_positions() [3-leg, no recursion]
-      │  │  └─ L_A = 1.0, B_A = r_A, L_B = r_A, B_B = None
-      │  ├─ calculate_net_apr() [3-leg APR]
-      │  └─ calculate_max_size() [Liquidity constraint]
+   NoLoopCrossProtocolCalculator:
+      calculate_positions()  L_A = 1.0, B_A = r_A, L_B = r_A  [3-leg, no loop]
 
-   StablecoinStrategyCalculator:
-      ├─ analyze_strategy()
-      │  ├─ calculate_positions() [1-leg, pure lending]
-      │  │  └─ L_A = 1.0, B_A = 0, L_B = 0, B_B = None
-      │  ├─ calculate_net_apr() [Single lend APR]
-      │  └─ calculate_max_size() [Supply limit]
+   StablecoinLendingCalculator:
+      calculate_positions()  L_A = 1.0, B_A = 0  [1-leg pure lending]
 
-                    ↓
+   PerpLendingCalculator:
+      calculate_positions()  L_A = 1/(1+d), B_B = L_A  [2-leg: spot lend + perp short]
 
-┌─────────────────────────────────────────────────────────────┐
-│ EXTENSION: ADDING NEW STRATEGY TYPE                          │
-└─────────────────────────────────────────────────────────────┘
-   1. Create new calculator class:
-      class MyNewStrategyCalculator(StrategyCalculatorBase):
-          def analyze_strategy(self, ...):
-              # Custom logic here
-              return {...}
+   PerpBorrowingCalculator:
+      calculate_positions()  L_A = 1.0, B_A = r, L_B = r  [3-leg: stablecoin lend + borrow + long perp]
 
-   2. Register in STRATEGY_CALCULATORS:
-      STRATEGY_CALCULATORS['my_new_strategy'] = MyNewStrategyCalculator
-
-   3. Add generation method in RateAnalyzer:
-      def _generate_my_new_strategies(self):
-          for ...:
-              yield self._build_strategy_row('my_new_strategy', ...)
-
-   4. Call in analyze_all_combinations():
-      all_strategies.extend(self._generate_my_new_strategies())
-
-   → NO CHANGES to other parts of codebase
-   → Registry automatically routes to new calculator
+   PerpBorrowingRecursiveCalculator (inherits PerpBorrowingCalculator):
+      calculate_positions()  L_A = 1/(1-r(1-d)), B_A = r×factor, L_B = r×factor  [looped]
+      analyze_strategy()     super() + adds loop_ratio, loop_amplifier to result
 ```
 
-**Key Architectural Benefits:**
+### Adding a New Strategy Type
 
-| Benefit | Implementation |
-|---------|----------------|
-| **Plugin Architecture** | Add new strategy types without modifying existing code |
-| **Common Interface** | All calculators implement StrategyCalculatorBase |
-| **Type Safety** | ValueError if unknown strategy_type |
-| **Extensibility** | 4-step process to add new strategy type |
-| **Maintainability** | Each strategy encapsulated in own class |
+1. Create calculator class in `analysis/strategy_calculators/` inheriting `StrategyCalculatorBase`
+2. Call `register_calculator(MyNewCalculator)` in `analysis/strategy_calculators/__init__.py`
+3. Add `_generate_my_new_strategies(calculator)` to `RateAnalyzer`
+4. Add `elif strategy_type == 'my_new_strategy':` dispatch in `analyze_all_combinations()`
+5. Add history handler in `analysis/strategy_history/` and register it
 
-**File Reference:**
-- **Base Class**: [analysis/strategy_calculators.py](../analysis/strategy_calculators.py)
-- **Registry**: `STRATEGY_CALCULATORS` dict at module level
-- **Usage**: [analysis/rate_analyzer.py](../analysis/rate_analyzer.py) - `analyze_all_combinations()`
+**File References:**
+- **Base Class + Registry**: [analysis/strategy_calculators/__init__.py](../analysis/strategy_calculators/__init__.py)
+- **Strategy generator dispatch**: [analysis/rate_analyzer.py](../analysis/rate_analyzer.py) — `analyze_all_combinations()`
+- **Perp strategy detail**: [docs/BorrowLend_Perp_Strategy.md](BorrowLend_Perp_Strategy.md)
 
 ---
 

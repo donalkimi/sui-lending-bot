@@ -16,6 +16,8 @@ logger = logging.getLogger(__name__)
 from .stablecoin_lending import StablecoinLendingHistoryHandler
 from .noloop_cross_protocol import NoLoopCrossProtocolHistoryHandler
 from .recursive_lending import RecursiveLendingHistoryHandler
+from .perp_borrowing import PerpBorrowingHistoryHandler
+from .perp_lending import PerpLendingHistoryHandler
 
 
 # Global handler registry
@@ -80,6 +82,9 @@ def get_all_handlers() -> Dict[str, HistoryHandlerBase]:
 register_handler(StablecoinLendingHistoryHandler)
 register_handler(NoLoopCrossProtocolHistoryHandler)
 register_handler(RecursiveLendingHistoryHandler)
+register_handler(PerpBorrowingHistoryHandler)                          # registers 'perp_borrowing'
+_HANDLERS['perp_borrowing_recursive'] = _HANDLERS['perp_borrowing']   # reuse same 3-leg handler
+register_handler(PerpLendingHistoryHandler)                            # registers 'perp_lending'
 
 logger.info(f"Registered {len(_HANDLERS)} strategy history handlers: {get_all_strategy_types()}")
 
@@ -89,6 +94,8 @@ __all__ = [
     'StablecoinLendingHistoryHandler',
     'NoLoopCrossProtocolHistoryHandler',
     'RecursiveLendingHistoryHandler',
+    'PerpBorrowingHistoryHandler',
+    'PerpLendingHistoryHandler',
     'register_handler',
     'get_handler',
     'get_all_strategy_types',
