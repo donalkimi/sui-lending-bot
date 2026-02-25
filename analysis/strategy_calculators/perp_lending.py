@@ -254,8 +254,16 @@ class PerpLendingCalculator(StrategyCalculatorBase):
         funding_rate_apr = b_b * borrow_total_apr_3B
         perp_fees_apr = b_b * 2.0 * settings.BLUEFIN_TAKER_FEE
 
-        # Time-adjusted APRs: upfront fee = perp entry + exit on b_b position
-        total_upfront_fee = perp_fees_apr  # b_b * 2 * BLUEFIN_TAKER_FEE
+        # Basis spread cost: round-trip bid/ask friction on the spot+perp hedge.
+        # basis_spread = basis_ask - basis_bid from spot_perp_basis table.
+        # None when basis data is unavailable; cost treated as 0 in that case.
+        basis_spread = kwargs.get('basis_spread')
+        basis_mid    = kwargs.get('basis_mid')
+        basis_cost = b_b * basis_spread if basis_spread is not None else 0.0
+
+        # Time-adjusted APRs: upfront fee = perp taker fees + basis spread cost.
+        # Costs are one-time upfront payments; gross_apr is the ongoing daily earn rate.
+        total_upfront_fee = perp_fees_apr + basis_cost
         apr5  = gross_apr - total_upfront_fee * 365.0 / 5
         apr30 = gross_apr - total_upfront_fee * 365.0 / 30
         apr90 = gross_apr - total_upfront_fee * 365.0 / 90
@@ -290,6 +298,11 @@ class PerpLendingCalculator(StrategyCalculatorBase):
             'spot_lending_apr': spot_lending_apr,
             'funding_rate_apr': funding_rate_apr,
             'perp_fees_apr': perp_fees_apr,
+            'basis_spread': basis_spread,
+            'basis_mid': basis_mid,
+            'basis_cost': basis_cost,
+            'total_upfront_fee': total_upfront_fee,
+            'basis_cost_included': basis_spread is not None,
             'apr5': apr5,
             'apr30': apr30,
             'apr90': apr90,

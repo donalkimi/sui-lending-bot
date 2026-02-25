@@ -204,6 +204,10 @@ def _render_rate_table(history_df: pd.DataFrame, strategy: dict) -> None:
             record['Perp 3B'] = _fmt(row.get('perp_rate_3B'))
             record['Perp 3B (8hr)'] = _fmt(row.get('avg8hr_perp_rate_3B'))
             record['Perp 3B (24hr)'] = _fmt(row.get('avg24hr_perp_rate_3B'))
+            record['APR 5d'] = _fmt(row.get('apr5'))
+            record['APR 30d'] = _fmt(row.get('apr30'))
+            record['APR 90d'] = _fmt(row.get('apr90'))
+            record['Mid Basis'] = _fmt(row.get('basis_mid'))
 
         elif is_perp_borrowing:
             # 3 legs: stable lend + volatile borrow + perp long
@@ -212,6 +216,10 @@ def _render_rate_table(history_df: pd.DataFrame, strategy: dict) -> None:
             record['Perp 3B'] = _fmt(row.get('perp_rate_3B'))
             record['Perp 3B (8hr)'] = _fmt(row.get('avg8hr_perp_rate_3B'))
             record['Perp 3B (24hr)'] = _fmt(row.get('avg24hr_perp_rate_3B'))
+            record['APR 5d'] = _fmt(row.get('apr5'))
+            record['APR 30d'] = _fmt(row.get('apr30'))
+            record['APR 90d'] = _fmt(row.get('apr90'))
+            record['Mid Basis'] = _fmt(row.get('basis_mid'))
 
         else:
             # Spot strategies — avg columns will show "—"
@@ -279,7 +287,7 @@ def _render_apr_chart(history_df: pd.DataFrame) -> None:
     fig.update_layout(
         yaxis_title='Net APR (%)',
         hovermode='x unified',
-        height=420,
+        height=600,
         legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1),
         margin=dict(l=40, r=20, t=40, b=40),
     )

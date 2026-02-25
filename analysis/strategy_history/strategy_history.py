@@ -5,7 +5,7 @@ from typing import Dict, Optional
 import logging
 
 from analysis.strategy_history import get_handler
-from analysis.strategy_history.data_fetcher import fetch_rates_from_database
+from analysis.strategy_history.data_fetcher import fetch_rates_from_database, fetch_basis_history
 from analysis.strategy_calculators import get_calculator
 
 logger = logging.getLogger(__name__)
@@ -84,6 +84,31 @@ def get_strategy_history(
 
     # Step 7: Add strategy_type column
     apr_df['strategy_type'] = strategy_type
+
+    # Step 8: For perp strategies, left-join basis_mid from spot_perp_basis.
+    # spot_contract is token1_contract for perp_lending, token2_contract for perp_borrowing*.
+    perp_types = {'perp_lending', 'perp_borrowing', 'perp_borrowing_recursive'}
+    if strategy_type in perp_types:
+        perp_proxy    = strategy.get('token3_contract')
+        spot_contract = (strategy.get('token1_contract')
+                         if strategy_type == 'perp_lending'
+                         else strategy.get('token2_contract'))
+
+        if perp_proxy and spot_contract:
+            basis_df = fetch_basis_history(
+                perp_proxy=perp_proxy,
+                spot_contract=spot_contract,
+                start_timestamp=start_timestamp,
+                end_timestamp=end_timestamp,
+            )
+            if not basis_df.empty:
+                apr_df = apr_df.join(basis_df[['basis_mid']], how='left')
+            else:
+                apr_df['basis_mid'] = None
+        else:
+            apr_df['basis_mid'] = None
+    else:
+        apr_df['basis_mid'] = None
 
     logger.info(f"Calculated APR for {len(apr_df)} timestamps")
 
@@ -185,6 +210,9 @@ def calculate_apr_timeseries(
                 'net_avg8hr_apr':       net_avg8hr_apr,
                 'net_avg24hr_apr':      net_avg24hr_apr,
                 'gross_apr':            result.get('gross_apr', result.get('apr_gross')),
+                'apr5':                 result.get('apr5'),
+                'apr30':                result.get('apr30'),
+                'apr90':                result.get('apr90'),
                 'token2_price':         token2_price,
                 # Per-leg raw rates for analysis tab display
                 'lend_total_apr_1A':    market_data.get('raw_lend_total_apr_1A'),
@@ -203,9 +231,10 @@ def calculate_apr_timeseries(
         logger.warning("No APR values calculated")
         return pd.DataFrame(columns=[
             'timestamp', 'net_apr', 'net_avg8hr_apr', 'net_avg24hr_apr',
-            'gross_apr', 'token2_price',
+            'gross_apr', 'apr5', 'apr30', 'apr90', 'token2_price',
             'lend_total_apr_1A', 'borrow_total_apr_2A',
             'perp_rate_3B', 'avg8hr_perp_rate_3B', 'avg24hr_perp_rate_3B',
+            'basis_mid',
         ]).set_index('timestamp')
 
     df = pd.DataFrame(results)

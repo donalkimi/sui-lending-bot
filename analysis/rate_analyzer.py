@@ -382,6 +382,68 @@ class RateAnalyzer:
         val = rows.iloc[0][col]
         return float(val) if val is not None and not pd.isna(val) else float('nan')
 
+    def get_basis_mid(self, perp_proxy: str, spot_contract: str) -> float | None:
+        """
+        Return the mid basis = (basis_bid + basis_ask) / 2 for a given pair.
+
+        Returns None if data is unavailable.
+        """
+        if self.perp_basis.empty:
+            return None
+        if 'basis_bid' not in self.perp_basis.columns or 'basis_ask' not in self.perp_basis.columns:
+            return None
+
+        mask = (
+            (self.perp_basis['perp_proxy'] == perp_proxy) &
+            (self.perp_basis['spot_contract'] == spot_contract)
+        )
+        rows = self.perp_basis[mask]
+        if rows.empty:
+            return None
+
+        row = rows.iloc[0]
+        bid = row['basis_bid']
+        ask = row['basis_ask']
+        if bid is None or ask is None or pd.isna(bid) or pd.isna(ask):
+            return None
+        return (float(bid) + float(ask)) / 2.0
+
+    def get_basis_spread(self, perp_proxy: str, spot_contract: str) -> float | None:
+        """
+        Return the round-trip basis spread cost = basis_ask - basis_bid.
+
+        This is the total bid/ask friction paid when entering and exiting a
+        spot+perp hedge position (both directions contribute equally, regardless
+        of whether the strategy is long-spot/short-perp or short-spot/long-perp).
+
+        Args:
+            perp_proxy:    Perp market proxy key (e.g. '0xSUI-USDC-PERP_bluefin')
+            spot_contract: On-chain contract address of the spot token
+
+        Returns:
+            basis_ask - basis_bid as float (always >= 0), or None if basis data
+            is unavailable for this pair.
+        """
+        if self.perp_basis.empty:
+            return None
+        if 'basis_bid' not in self.perp_basis.columns or 'basis_ask' not in self.perp_basis.columns:
+            return None
+
+        mask = (
+            (self.perp_basis['perp_proxy'] == perp_proxy) &
+            (self.perp_basis['spot_contract'] == spot_contract)
+        )
+        rows = self.perp_basis[mask]
+        if rows.empty:
+            return None
+
+        row = rows.iloc[0]
+        bid = row['basis_bid']
+        ask = row['basis_ask']
+        if bid is None or ask is None or pd.isna(bid) or pd.isna(ask):
+            return None
+        return float(ask) - float(bid)
+
     def _get_protocol_pairs(self) -> List[Tuple[str, str]]:
         """
         Get all valid protocol pairs.
@@ -905,6 +967,10 @@ class RateAnalyzer:
 
                     token1_contract = self.get_contract(spot_token, protocol_a)
 
+                    # Round-trip basis spread and mid (None if no basis data available)
+                    basis_spread = self.get_basis_spread(perp_contract_key, spot_contract)
+                    basis_mid    = self.get_basis_mid(perp_contract_key, spot_contract)
+
                     # Call calculator
                     result = calculator.analyze_strategy(
                         token1=spot_token,
@@ -918,7 +984,9 @@ class RateAnalyzer:
                         token3=perp_token,
                         token3_contract=perp_contract,
                         liquidation_distance=self.liquidation_distance,
-                        timestamp=self.timestamp
+                        timestamp=self.timestamp,
+                        basis_spread=basis_spread,
+                        basis_mid=basis_mid
                     )
 
                     if result.get('valid', False):
@@ -1019,6 +1087,10 @@ class RateAnalyzer:
                         if collateral_ratio_1A <= 1e-9 or liquidation_threshold_1A <= 1e-9:
                             continue
 
+                        # Round-trip basis spread and mid (None if no basis data available)
+                        basis_spread = self.get_basis_spread(perp_key, spot_contract)
+                        basis_mid    = self.get_basis_mid(perp_key, spot_contract)
+
                         result = calculator.analyze_strategy(
                             token1=token1,
                             token2=spot_token,
@@ -1040,7 +1112,9 @@ class RateAnalyzer:
                             token2_contract=spot_contract,
                             token3_contract=perp_contract,
                             liquidation_distance=self.liquidation_distance,
-                            timestamp=self.timestamp
+                            timestamp=self.timestamp,
+                            basis_spread=basis_spread,
+                            basis_mid=basis_mid
                         )
                         if result.get('valid', False):
                             results.append(result)

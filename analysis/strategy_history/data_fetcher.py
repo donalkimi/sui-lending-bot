@@ -125,3 +125,59 @@ def fetch_rates_from_database(
         logger.error(f"Query: {query}")
         logger.error(f"Params: {params}")
         raise
+
+
+def fetch_basis_history(
+    perp_proxy: str,
+    spot_contract: str,
+    start_timestamp: Optional[int] = None,
+    end_timestamp: Optional[int] = None,
+) -> pd.DataFrame:
+    """
+    Fetch basis_mid history from spot_perp_basis for a specific perp/spot pair.
+
+    Args:
+        perp_proxy:       Perp proxy contract key (e.g. '0xBTC-USDC-PERP_bluefin')
+        spot_contract:    On-chain spot token contract address
+        start_timestamp:  Start time (Unix seconds), inclusive
+        end_timestamp:    End time (Unix seconds), inclusive
+
+    Returns:
+        DataFrame with columns:
+        - timestamp (Unix seconds, index)
+        - basis_mid (decimal, e.g. -0.0003 = -0.03%)
+        Empty DataFrame if no data is available.
+    """
+    engine = get_db_engine()
+    from utils.time_helpers import to_datetime_str, to_seconds
+
+    placeholder = '%s' if settings.USE_CLOUD_DB else '?'
+
+    params: list = [perp_proxy, spot_contract]
+    time_clause = ""
+    if start_timestamp is not None:
+        time_clause += f" AND timestamp >= {placeholder}"
+        params.append(to_datetime_str(start_timestamp))
+    if end_timestamp is not None:
+        time_clause += f" AND timestamp <= {placeholder}"
+        params.append(to_datetime_str(end_timestamp))
+
+    query = f"""
+        SELECT timestamp, basis_mid
+        FROM spot_perp_basis
+        WHERE perp_proxy = {placeholder}
+          AND spot_contract = {placeholder}
+          {time_clause}
+        ORDER BY timestamp ASC
+    """
+
+    try:
+        df = pd.read_sql(query, engine, params=tuple(params))
+        if df.empty:
+            return pd.DataFrame(columns=['timestamp', 'basis_mid']).set_index('timestamp')
+        df['timestamp'] = df['timestamp'].apply(to_seconds)
+        df = df.set_index('timestamp')
+        return df
+    except Exception as e:
+        logger.warning(f"Failed to fetch basis history: {e}")
+        return pd.DataFrame(columns=['timestamp', 'basis_mid']).set_index('timestamp')

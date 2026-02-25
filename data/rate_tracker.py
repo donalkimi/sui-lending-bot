@@ -1662,7 +1662,7 @@ class RateTracker:
 
         Returns:
             DataFrame with columns: perp_proxy, spot_contract,
-            spot_bid, spot_ask, perp_bid, perp_ask.
+            spot_bid, spot_ask, perp_bid, perp_ask, basis_bid, basis_ask.
             Empty DataFrame if no data is available.
         """
         from utils.time_helpers import to_datetime_str
@@ -1678,7 +1678,8 @@ class RateTracker:
                 # "YYYY-MM-DD HH:MM:SS" strings sort lexicographically, so MAX/<=  works.
                 cursor.execute(f"""
                     SELECT perp_proxy, spot_contract,
-                           spot_bid, spot_ask, perp_bid, perp_ask
+                           spot_bid, spot_ask, perp_bid, perp_ask,
+                           basis_bid, basis_ask
                     FROM spot_perp_basis
                     WHERE timestamp = (
                         SELECT MAX(timestamp)
@@ -1695,7 +1696,8 @@ class RateTracker:
                 df = pd.DataFrame(
                     rows,
                     columns=['perp_proxy', 'spot_contract',
-                             'spot_bid', 'spot_ask', 'perp_bid', 'perp_ask']
+                             'spot_bid', 'spot_ask', 'perp_bid', 'perp_ask',
+                             'basis_bid', 'basis_ask']
                 )
                 print(f"[BASIS LOAD] Loaded {len(df)} spot/perp basis rows for {ts_str}")
                 return df
