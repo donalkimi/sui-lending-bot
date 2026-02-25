@@ -152,6 +152,13 @@ def refresh_pipeline(
             print("[PERP CHECK] Continuing without perp data — perp strategies unavailable")
     else:
         print(f"[PERP CHECK] OK Perp data exists for {rates_ts_hour_str} ({count} markets)")
+        # Still patch any rows that are missing rolling averages (e.g. inserted before
+        # avg columns existed, or by an older code path without the avg UPDATE).
+        if tracker.use_cloud:
+            try:
+                tracker.patch_missing_perp_avg_rates()
+            except Exception as e:
+                print(f"[PERP CHECK] WARNING: avg rate patch failed: {e}")
 
     # STEP 2: Fetch spot/perp basis (AMM aggregator + perp orderbook)
     if save_snapshots:

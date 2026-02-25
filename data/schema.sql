@@ -17,8 +17,11 @@ CREATE TABLE IF NOT EXISTS rates_snapshot (
     borrow_base_apr DECIMAL(10,6),
     borrow_reward_apr DECIMAL(10,6),
     borrow_total_apr DECIMAL(10,6),
-    
-    -- Collateral
+    avg8hr_lend_total_apr   NUMERIC(10,6),   -- 8hr rolling avg lend APR (Bluefin perp negated per Design Note #17)
+    avg8hr_borrow_total_apr NUMERIC(10,6),   -- 8hr rolling avg borrow APR (Bluefin perp negated per Design Note #17)
+    avg24hr_lend_total_apr  NUMERIC(10,6),   -- 24hr rolling avg lend APR (Bluefin perp negated per Design Note #17)
+    avg24hr_borrow_total_apr NUMERIC(10,6),  -- 24hr rolling avg borrow APR (Bluefin perp negated per Design Note #17)
+-- Collateral
     collateral_ratio DECIMAL(10,6),
     liquidation_threshold DECIMAL(10,6),
     
@@ -190,6 +193,8 @@ CREATE TABLE IF NOT EXISTS perp_margin_rates (
     -- Market metadata
     next_funding_time TIMESTAMP,                 -- Next funding update
     raw_timestamp_ms BIGINT,                     -- Raw funding time from API (milliseconds, before rounding)
+    avg_rate_8hr  NUMERIC(10,6),   -- rolling avg of last 8 observations (incl current)
+    avg_rate_24hr NUMERIC(10,6),   -- rolling avg of last 24 observations (incl current)
 
     PRIMARY KEY (timestamp, protocol, token_contract)
 );

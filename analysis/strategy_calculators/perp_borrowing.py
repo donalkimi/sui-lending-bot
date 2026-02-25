@@ -118,6 +118,14 @@ class PerpBorrowingCalculator(StrategyCalculatorBase):
         gross_apr = self.calculate_gross_apr(positions, rates)
         net_apr   = self.calculate_net_apr(positions, rates, fees)
 
+        # Time-adjusted APRs: borrow origination fee + perp entry/exit fee
+        perp_fee = l_b * 2.0 * settings.BLUEFIN_TAKER_FEE
+        total_upfront_fee = b_a * borrow_fee_2A + perp_fee
+        apr5  = gross_apr - total_upfront_fee * 365.0 / 5
+        apr30 = gross_apr - total_upfront_fee * 365.0 / 30
+        apr90 = gross_apr - total_upfront_fee * 365.0 / 90
+        days_to_breakeven = (total_upfront_fee * 365.0 / gross_apr) if gross_apr > 0 else float('inf')
+
         max_size = (available_borrow / b_a) if (available_borrow and b_a > 0) else float('inf')
 
         return {
@@ -138,6 +146,10 @@ class PerpBorrowingCalculator(StrategyCalculatorBase):
             'token2_borrow_apr':      b_a * borrow_total_apr_2A,
             'funding_rate_apr':       l_b * lend_total_apr_3B,
             'perp_fees_apr':          l_b * 2.0 * settings.BLUEFIN_TAKER_FEE,
+            'apr5':  apr5,
+            'apr30': apr30,
+            'apr90': apr90,
+            'days_to_breakeven': days_to_breakeven,
 
             # Risk
             'liquidation_distance': liquidation_distance,

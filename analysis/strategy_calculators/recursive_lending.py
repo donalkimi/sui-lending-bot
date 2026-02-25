@@ -351,7 +351,8 @@ class RecursiveLendingCalculator(StrategyCalculatorBase):
                 'b_b': positions['b_b'],
 
                 # APR metrics
-                'net_apr': net_apr,
+                'net_apr': net_apr,   # kept for backwards compat (dashboard, position_renderers)
+                'apr_net': net_apr,   # added for consistency with all other strategy types
                 'apr5': apr5,
                 'apr30': apr30,
                 'apr90': apr90,

@@ -32,6 +32,8 @@ def fetch_rates_from_database(
         - borrow_total_apr, borrow_base_apr, borrow_reward_apr
         - price_usd
         - collateral_ratio, liquidation_threshold, borrow_fee
+        - avg8hr_lend_total_apr, avg8hr_borrow_total_apr (NULL for non-Bluefin rows)
+        - avg24hr_lend_total_apr, avg24hr_borrow_total_apr (NULL for non-Bluefin rows)
 
     Example:
         >>> pairs = [('0xabc...', 'navi'), ('0xdef...', 'suilend')]
@@ -76,6 +78,7 @@ def fetch_rates_from_database(
 
     # Query rates_snapshot table (Principle 10: Always fetch both collateral_ratio and liquidation_threshold)
     # Include base and reward APR components for breakdown analysis
+    # avg8hr/avg24hr columns are populated for Bluefin perp rows only (NULL elsewhere)
     query = f"""
         SELECT
             timestamp,
@@ -90,7 +93,11 @@ def fetch_rates_from_database(
             price_usd,
             collateral_ratio,
             liquidation_threshold,
-            borrow_fee
+            borrow_fee,
+            avg8hr_lend_total_apr,
+            avg8hr_borrow_total_apr,
+            avg24hr_lend_total_apr,
+            avg24hr_borrow_total_apr
         FROM rates_snapshot
         WHERE use_for_pnl = TRUE
           AND ({pairs_clause})

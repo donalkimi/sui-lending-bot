@@ -16,6 +16,16 @@ from config import settings
 from utils.time_helpers import to_datetime_str  # ADDED: CRITICAL - required for timestamp formatting
 
 
+def _first_valid_apr(strategy, *keys, default=0.0):
+    """Return first non-None, non-NaN value from strategy dict keys."""
+    import math
+    for k in keys:
+        v = strategy.get(k)
+        if v is not None and not (isinstance(v, float) and math.isnan(v)):
+            return v
+    return default
+
+
 def format_usd_abbreviated(value: float) -> str:
     """Format USD amount abbreviated (e.g., $1.23M, $456K)"""
     if value is None or (isinstance(value, float) and np.isnan(value)):
@@ -30,8 +40,8 @@ def format_usd_abbreviated(value: float) -> str:
 
 def format_max_size_millions(value: float) -> str:
     """Format max size as millions with 2 decimal places (e.g., $1.80M)"""
-    if value is None or (isinstance(value, float) and np.isnan(value)):
-        return "N/A"
+    if value is None or (isinstance(value, float) and (np.isnan(value) or np.isinf(value))):
+        return "Uncapped"
     return f"${value/1_000_000:.2f}M"
 
 
@@ -58,9 +68,11 @@ def format_strategy_summary_line(strategy: Dict, liq_dist: float) -> str:
     # Format max size
     max_size_str = format_max_size_millions(max_size)
 
-    # Get APR values (levered)
-    net_apr_value = strategy.get('apr_net', strategy.get('net_apr', 0))
-    apr5_value = strategy.get('apr5', strategy.get('net_apr', 0))
+    # Get APR values — use NaN-safe fallback so that when a field exists but is NaN
+    # (e.g. recursive_lending rows have apr_net=NaN in a mixed-type DataFrame), we
+    # correctly fall through to the next candidate instead of propagating NaN.
+    net_apr_value = _first_valid_apr(strategy, 'apr_net', 'net_apr')
+    apr5_value    = _first_valid_apr(strategy, 'apr5', 'net_apr', 'apr_net')
 
     # Determine emoji indicators based on positive/negative values
     net_apr_indicator = "🟢" if net_apr_value >= 0 else "🔴"
@@ -325,23 +337,29 @@ class SlackNotifier:
         try:
             print(f"[DEBUG] Starting strategy filtering...")
             
-            # Filter Set 1: All strategies (top 3 by net_apr)
-            filtered_set1 = all_results.nlargest(3, 'net_apr')
+            # Determine which APR column to sort by — all calculators except recursive_lending
+            # historically used 'apr_net'; recursive_lending used 'net_apr'. After the fix in
+            # recursive_lending both exist, but fall back gracefully if only one is present.
+            _apr_col = 'apr_net' if 'apr_net' in all_results.columns else 'net_apr'
+            print(f"[DEBUG] Using APR sort column: {_apr_col}")
+
+            # Filter Set 1: All strategies (top 3 by APR)
+            filtered_set1 = all_results.nlargest(3, _apr_col)
             print(f"[DEBUG] Set 1 filtered: {len(filtered_set1)} strategies")
-            
+
             # Filter Set 2: USDC-only strategies (top 3)
             filtered_set2 = all_results[
                 (all_results['token1'] == 'USDC') &
                 (all_results['token2'] == 'USDC') &
                 (all_results['token3'] == 'USDC')
-            ].nlargest(3, 'net_apr')
+            ].nlargest(3, _apr_col)
             print(f"[DEBUG] Set 2 filtered: {len(filtered_set2)} strategies")
-            
+
             # Filter Set 3: Unlevered strategies (top 3)
             # Unlevered = simple lend/borrow with no recursion
             filtered_set3 = all_results[
                 all_results.get('is_levered', True) == False
-            ].nlargest(3, 'net_apr') if 'is_levered' in all_results.columns else pd.DataFrame()
+            ].nlargest(3, _apr_col) if 'is_levered' in all_results.columns else pd.DataFrame()
             print(f"[DEBUG] Set 3 filtered: {len(filtered_set3)} strategies")
             
             # Build formatted lines for Set 1
@@ -520,7 +538,12 @@ class SlackNotifier:
             True if successful
         """
         message = f"WARNING: Bot Error: {error_message}"
-        
+
+        # Variables for Slack Workflow webhooks
+        variables = {
+            "notification_text": f"⚠️ Bot Error: {error_message}"
+        }
+
         blocks = [
             {
                 "type": "header",
@@ -548,7 +571,7 @@ class SlackNotifier:
             }
         ]
         
-        return self.send_message(message, blocks)
+        return self.send_message(message, blocks, variables)
 
     def alert_position_rebalanced(
         self,

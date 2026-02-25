@@ -53,11 +53,12 @@ def build_perp_lookup(conn):
     Load all perp_margin_rates into a dict keyed by (hour_floor, token_contract).
 
     Returns:
-        dict: { (hour_floor_datetime, token_contract): (funding_rate_annual, base_token) }
+        dict: { (hour_floor_datetime, token_contract): (funding_rate_annual, base_token, avg_rate_8hr, avg_rate_24hr) }
     """
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT timestamp, token_contract, base_token, funding_rate_annual
+        SELECT timestamp, token_contract, base_token, funding_rate_annual,
+               avg_rate_8hr, avg_rate_24hr
         FROM perp_margin_rates
         WHERE protocol = 'Bluefin'
         ORDER BY timestamp ASC
@@ -66,12 +67,17 @@ def build_perp_lookup(conn):
     cursor.close()
 
     lookup = {}
-    for ts, token_contract, base_token, funding_rate_annual in rows:
+    for ts, token_contract, base_token, funding_rate_annual, avg_rate_8hr, avg_rate_24hr in rows:
         # perp_margin_rates timestamps are already hour-rounded by bluefin_reader.py
         hour_floor = ts.replace(minute=0, second=0, microsecond=0)
         key = (hour_floor, token_contract)
         # Keep the most recent rate if duplicates exist for same hour/token
-        lookup[key] = (float(funding_rate_annual), base_token)
+        lookup[key] = (
+            float(funding_rate_annual),
+            base_token,
+            float(avg_rate_8hr)  if avg_rate_8hr  is not None else None,
+            float(avg_rate_24hr) if avg_rate_24hr is not None else None,
+        )
 
     return lookup
 
@@ -196,7 +202,7 @@ def build_insert_rows(canonical_timestamps, perp_lookup, existing_perp, pnl_time
                 stats['no_perp_data'] += 1
                 continue
 
-            funding_rate_annual, _ = perp_lookup[key]
+            funding_rate_annual, _, avg_rate_8hr, avg_rate_24hr = perp_lookup[key]
 
             # Apply sign convention per Design Note #17:
             # Positive funding (longs pay shorts) → negate → shorts earn → stored negative
@@ -215,6 +221,10 @@ def build_insert_rows(canonical_timestamps, perp_lookup, existing_perp, pnl_time
                 'borrow_base_apr': stored_rate,
                 'borrow_reward_apr': 0.0,
                 'borrow_total_apr': stored_rate,
+                'avg8hr_lend_total_apr':    -avg_rate_8hr  if avg_rate_8hr  is not None else None,
+                'avg8hr_borrow_total_apr':  -avg_rate_8hr  if avg_rate_8hr  is not None else None,
+                'avg24hr_lend_total_apr':   -avg_rate_24hr if avg_rate_24hr is not None else None,
+                'avg24hr_borrow_total_apr': -avg_rate_24hr if avg_rate_24hr is not None else None,
                 'collateral_ratio': None,           # Perps have no collateral ratio
                 'liquidation_threshold': None,
                 'price_usd': DUMMY_PRICE,           # Placeholder, same as live path
@@ -267,7 +277,9 @@ def insert_rows(conn, rows):
                 borrow_fee, borrow_weight,
                 reward_token, reward_token_contract, reward_token_price_usd,
                 market, side,
-                use_for_pnl
+                use_for_pnl,
+                avg8hr_lend_total_apr, avg8hr_borrow_total_apr,
+                avg24hr_lend_total_apr, avg24hr_borrow_total_apr
             ) VALUES (
                 %(timestamp)s, %(protocol)s, %(token)s, %(token_contract)s,
                 %(lend_base_apr)s, %(lend_reward_apr)s, %(lend_total_apr)s,
@@ -278,7 +290,9 @@ def insert_rows(conn, rows):
                 %(borrow_fee)s, %(borrow_weight)s,
                 %(reward_token)s, %(reward_token_contract)s, %(reward_token_price_usd)s,
                 %(market)s, %(side)s,
-                %(use_for_pnl)s
+                %(use_for_pnl)s,
+                %(avg8hr_lend_total_apr)s, %(avg8hr_borrow_total_apr)s,
+                %(avg24hr_lend_total_apr)s, %(avg24hr_borrow_total_apr)s
             )
             ON CONFLICT (timestamp, protocol, token_contract) DO NOTHING
         """, batch)

@@ -85,6 +85,16 @@ class PerpLendingHistoryHandler(HistoryHandlerBase):
                 'borrow_total_apr_3B': leg_3b['borrow_total_apr'],
                 'price_3B':            leg_3b['price_usd'],
 
+                # Leg 3B rolling avg rates (Bluefin perp only — None for other protocols)
+                'borrow_avg8hr_apr_3B':  leg_3b.get('avg8hr_borrow_total_apr'),
+                'borrow_avg24hr_apr_3B': leg_3b.get('avg24hr_borrow_total_apr'),
+
+                # Per-leg raw rates for analysis tab display (no calculator impact)
+                'raw_lend_total_apr_1A':    leg_1a['lend_total_apr'],
+                'raw_perp_rate_3B':         leg_3b['borrow_total_apr'],
+                'raw_avg8hr_perp_rate_3B':  leg_3b.get('avg8hr_borrow_total_apr'),
+                'raw_avg24hr_perp_rate_3B': leg_3b.get('avg24hr_borrow_total_apr'),
+
                 # Optional config
                 'liquidation_distance': strategy.get('liquidation_distance', 0.20),
             }

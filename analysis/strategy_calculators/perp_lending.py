@@ -254,6 +254,13 @@ class PerpLendingCalculator(StrategyCalculatorBase):
         funding_rate_apr = b_b * borrow_total_apr_3B
         perp_fees_apr = b_b * 2.0 * settings.BLUEFIN_TAKER_FEE
 
+        # Time-adjusted APRs: upfront fee = perp entry + exit on b_b position
+        total_upfront_fee = perp_fees_apr  # b_b * 2 * BLUEFIN_TAKER_FEE
+        apr5  = gross_apr - total_upfront_fee * 365.0 / 5
+        apr30 = gross_apr - total_upfront_fee * 365.0 / 30
+        apr90 = gross_apr - total_upfront_fee * 365.0 / 90
+        days_to_breakeven = (total_upfront_fee * 365.0 / gross_apr) if gross_apr > 0 else float('inf')
+
         # Liquidation distances
         leverage = 1.0 / liquidation_distance
         liq_price_multiplier = 1.0 + (1.0 / leverage)
@@ -283,6 +290,10 @@ class PerpLendingCalculator(StrategyCalculatorBase):
             'spot_lending_apr': spot_lending_apr,
             'funding_rate_apr': funding_rate_apr,
             'perp_fees_apr': perp_fees_apr,
+            'apr5': apr5,
+            'apr30': apr30,
+            'apr90': apr90,
+            'days_to_breakeven': days_to_breakeven,
 
             # Risk metrics
             'liquidation_distance': liquidation_distance,

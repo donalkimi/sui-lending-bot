@@ -97,6 +97,10 @@ class RateTracker:
             else:
                 reward_rows = 0
             
+            # Fill perp rolling avg APR columns for Bluefin rows (same transaction, Design Note #17)
+            if self.use_cloud:
+                self._update_perp_avg_rates(conn, timestamp)
+
             # Commit
             conn.commit()
 
@@ -530,6 +534,100 @@ class RateTracker:
                     borrow_weight = EXCLUDED.borrow_weight,
                     use_for_pnl = EXCLUDED.use_for_pnl
             ''', values)
+
+    def patch_missing_perp_avg_rates(self) -> tuple:
+        """
+        Backfill avg_rate_8hr / avg_rate_24hr for any rows in perp_margin_rates
+        where those columns are NULL.
+
+        Safe to call at any time — only affects NULL rows.
+
+        Returns:
+            (rows_8hr, rows_24hr): count of rows updated for each column.
+        """
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            rows_8hr, rows_24hr = self._patch_missing_perp_avg_rates(cursor)
+            conn.commit()
+            return rows_8hr, rows_24hr
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def _patch_missing_perp_avg_rates(self, cursor) -> tuple:
+        """
+        Run the two rolling-average UPDATE statements on an open cursor.
+        Caller is responsible for commit/rollback.
+
+        Returns:
+            (rows_8hr, rows_24hr)
+        """
+        cursor.execute("""
+            UPDATE perp_margin_rates t
+            SET avg_rate_8hr = (
+                SELECT AVG(p.funding_rate_annual)
+                FROM (
+                    SELECT p2.funding_rate_annual
+                    FROM perp_margin_rates p2
+                    WHERE p2.protocol      = t.protocol
+                      AND p2.token_contract = t.token_contract
+                      AND p2.timestamp     <= t.timestamp
+                    ORDER BY p2.timestamp DESC
+                    LIMIT 8
+                ) p
+            )
+            WHERE t.avg_rate_8hr IS NULL
+        """)
+        rows_8hr = cursor.rowcount
+
+        cursor.execute("""
+            UPDATE perp_margin_rates t
+            SET avg_rate_24hr = (
+                SELECT AVG(p.funding_rate_annual)
+                FROM (
+                    SELECT p2.funding_rate_annual
+                    FROM perp_margin_rates p2
+                    WHERE p2.protocol      = t.protocol
+                      AND p2.token_contract = t.token_contract
+                      AND p2.timestamp     <= t.timestamp
+                    ORDER BY p2.timestamp DESC
+                    LIMIT 24
+                ) p
+            )
+            WHERE t.avg_rate_24hr IS NULL
+        """)
+        rows_24hr = cursor.rowcount
+
+        print(f"[PERP] avg patch: {rows_8hr} rows got avg_rate_8hr, {rows_24hr} rows got avg_rate_24hr")
+        return rows_8hr, rows_24hr
+
+    def _update_perp_avg_rates(self, conn, timestamp: datetime) -> None:
+        """
+        Fill avg rolling APR columns on Bluefin rows just saved to rates_snapshot.
+
+        Runs within the same transaction as the main INSERT (called from save_snapshot).
+        Sign convention per Design Note #17: stored_apr = -published_rate.
+        For perp rows lend and borrow avg APRs are equal (same funding rate, both negated).
+        """
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE rates_snapshot rs
+            SET
+                avg8hr_lend_total_apr   = -pmr.avg_rate_8hr,
+                avg8hr_borrow_total_apr = -pmr.avg_rate_8hr,
+                avg24hr_lend_total_apr  = -pmr.avg_rate_24hr,
+                avg24hr_borrow_total_apr = -pmr.avg_rate_24hr
+            FROM perp_margin_rates pmr
+            WHERE rs.timestamp      = %s
+              AND rs.protocol       = 'Bluefin'
+              AND rs.token_contract = pmr.token_contract
+              AND pmr.timestamp     = DATE_TRUNC('hour', rs.timestamp)
+              AND pmr.avg_rate_8hr IS NOT NULL
+        """, (timestamp,))
+        cursor.close()
 
     def _save_reward_prices(
         self,
@@ -1341,6 +1439,9 @@ class RateTracker:
                     """,
                     deduplicated_values
                 )
+
+                self._patch_missing_perp_avg_rates(cursor)
+
             else:
                 # SQLite: Batch INSERT using executemany
                 cursor.executemany(

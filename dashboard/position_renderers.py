@@ -48,6 +48,20 @@ def _safe_float(value, default=0.0):
         return default
 
 
+def get_token_precision(price: float, target_usd: float = 10.0) -> int:
+    """Calculate decimal places to show ~$10 worth of precision."""
+    import math
+    if price <= 0:
+        return 5
+    decimal_places = math.ceil(-math.log10(price / target_usd))
+    return max(5, min(8, decimal_places))
+
+
+def _modal_sf(strategy: dict, key: str, default: float = 0.0) -> float:
+    """Safe float from strategy dict — returns default when missing or NaN."""
+    return _safe_float(strategy.get(key, default), default)
+
+
 # ============================================================================
 # ABSTRACT BASE CLASS
 # ============================================================================
@@ -102,6 +116,20 @@ class StrategyRendererBase(ABC):
     def validate_position_data(position: pd.Series) -> bool:
         """Validate that position has required fields for this strategy."""
         pass
+
+    @staticmethod
+    def render_strategy_modal_table(strategy: dict, deployment_usd: float) -> None:
+        """
+        Render strategy-specific detail table in the strategy selection modal.
+
+        Args:
+            strategy: Strategy dict from analysis cache (all_results row)
+            deployment_usd: Hypothetical deployment amount in USD
+        """
+        raise NotImplementedError(
+            "render_strategy_modal_table not implemented for this renderer. "
+            "Add a render_strategy_modal_table() method to the renderer class."
+        )
 
 
 # ============================================================================
@@ -1316,6 +1344,137 @@ class RecursiveLendingRenderer(StrategyRendererBase):
         st.dataframe(detail_df, width="stretch")
 
     @staticmethod
+    def render_strategy_modal_table(strategy: dict, deployment_usd: float) -> None:
+        """Render 4-row detail table for recursive lending (modal view)."""
+        from analysis.position_calculator import PositionCalculator
+
+        l_a = _modal_sf(strategy, 'l_a')
+        b_a = _modal_sf(strategy, 'b_a')
+        l_b = _modal_sf(strategy, 'l_b')
+        b_b = _modal_sf(strategy, 'b_b')
+        P1_A = _modal_sf(strategy, 'P1_A', 1.0)
+        P2_A = _modal_sf(strategy, 'P2_A', 1.0)
+        P2_B = _modal_sf(strategy, 'P2_B', 1.0)
+        P3_B = _modal_sf(strategy, 'P3_B', 1.0)
+        borrow_fee_2a = _modal_sf(strategy, 'borrow_fee_2a')
+        borrow_fee_3b = _modal_sf(strategy, 'borrow_fee_3b')
+        borrow_weight_2a = _modal_sf(strategy, 'borrow_weight_2a', 1.0)
+        borrow_weight_3b = _modal_sf(strategy, 'borrow_weight_3b', 1.0)
+        lltv_1A = _modal_sf(strategy, 'liquidation_threshold_1a')
+        lltv_2B = _modal_sf(strategy, 'liquidation_threshold_2b')
+        collateral_ratio_1a = _modal_sf(strategy, 'collateral_ratio_1a')
+        collateral_ratio_2b = _modal_sf(strategy, 'collateral_ratio_2b')
+        available_borrow_2a = _modal_sf(strategy, 'available_borrow_2a')
+        available_borrow_3b = _modal_sf(strategy, 'available_borrow_3b')
+
+        entry_token_amount_1A = (l_a * deployment_usd) / P1_A if P1_A > 0 else 0
+        entry_token_amount_2 = (b_a * deployment_usd) / P2_A if P2_A > 0 else 0
+        entry_token_amount_2B = entry_token_amount_2
+        entry_token_amount_3B = (b_b * deployment_usd) / P3_B if P3_B > 0 else 0
+        position_size_1A = l_a * deployment_usd
+        position_size_2A = b_a * deployment_usd
+        position_size_2B = l_b * deployment_usd
+        position_size_3B = b_b * deployment_usd
+        fee_usd_2A = b_a * borrow_fee_2a * deployment_usd
+        fee_usd_3B = b_b * borrow_fee_3b * deployment_usd
+        precision_1A = get_token_precision(P1_A)
+        precision_2A = get_token_precision(P2_A)
+        precision_2B = get_token_precision(P2_B)
+        precision_3B = get_token_precision(P3_B)
+        effective_ltv_1A = (b_a / l_a) * borrow_weight_2a if l_a > 0 else 0.0
+        effective_ltv_2B = (b_b / l_b) * borrow_weight_3b if l_b > 0 else 0.0
+
+        calc = PositionCalculator()
+        liq1 = calc.calculate_liquidation_price(position_size_1A, position_size_2A, P1_A, P2_A, lltv_1A, 'lending', borrow_weight_2a)
+        liq2 = calc.calculate_liquidation_price(position_size_1A, position_size_2A, P1_A, P2_A, lltv_1A, 'borrowing', borrow_weight_2a)
+        liq3 = calc.calculate_liquidation_price(position_size_2B, position_size_3B, P2_B, P3_B, lltv_2B, 'lending', borrow_weight_3b)
+        liq4 = calc.calculate_liquidation_price(position_size_2B, position_size_3B, P2_B, P3_B, lltv_2B, 'borrowing', borrow_weight_3b)
+
+        def _lp(r):
+            p = r['liq_price']
+            return f"${p:.4f}" if p != float('inf') and p > 0 else "N/A"
+
+        def _ld(r):
+            p = r['liq_price']
+            return f"{r['pct_distance'] * 100:.2f}%" if p != float('inf') and p > 0 else "N/A"
+
+        detail_data = [
+            {
+                'Protocol': strategy.get('protocol_a', ''), 'Token': strategy.get('token1', ''), 'Action': 'Lend',
+                'maxCF': f"{collateral_ratio_1a:.2%}", 'LLTV': f"{lltv_1A:.2%}" if lltv_1A > 0 else "",
+                'Effective LTV': f"{effective_ltv_1A:.2%}", 'Borrow Weight': "-", 'Weight': f"{l_a:.4f}",
+                'Rate': f"{_modal_sf(strategy, 'lend_rate_1a') * 100:.2f}%",
+                'Token Amount': f"{entry_token_amount_1A:,.{precision_1A}f}", 'Size ($$$)': f"${position_size_1A:,.2f}",
+                'Price': f"${P1_A:.4f}", 'Fees (%)': "", 'Fees ($$$)': "",
+                'Liquidation Price': _lp(liq1), 'Liq Distance': _ld(liq1), 'Max Borrow': "",
+            },
+            {
+                'Protocol': strategy.get('protocol_a', ''), 'Token': strategy.get('token2', ''), 'Action': 'Borrow',
+                'maxCF': "-", 'LLTV': "-", 'Effective LTV': "-",
+                'Borrow Weight': f"{borrow_weight_2a:.2f}x", 'Weight': f"{b_a:.4f}",
+                'Rate': f"{_modal_sf(strategy, 'borrow_rate_2a') * 100:.2f}%",
+                'Token Amount': f"{entry_token_amount_2:,.{precision_2A}f}", 'Size ($$$)': f"${position_size_2A:,.2f}",
+                'Price': f"${P2_A:.4f}",
+                'Fees (%)': f"{borrow_fee_2a * 100:.2f}%" if borrow_fee_2a > 0 else "",
+                'Fees ($$$)': f"${fee_usd_2A:.2f}" if fee_usd_2A > 0 else "",
+                'Liquidation Price': _lp(liq2), 'Liq Distance': _ld(liq2),
+                'Max Borrow': f"${available_borrow_2a:,.2f}" if available_borrow_2a > 0 else "",
+            },
+            {
+                'Protocol': strategy.get('protocol_b', ''), 'Token': strategy.get('token2', ''), 'Action': 'Lend',
+                'maxCF': f"{collateral_ratio_2b:.2%}", 'LLTV': f"{lltv_2B:.2%}" if lltv_2B > 0 else "",
+                'Effective LTV': f"{effective_ltv_2B:.2%}", 'Borrow Weight': "-", 'Weight': f"{l_b:.4f}",
+                'Rate': f"{_modal_sf(strategy, 'lend_rate_2b') * 100:.2f}%",
+                'Token Amount': f"{entry_token_amount_2B:,.{precision_2B}f}", 'Size ($$$)': f"${position_size_2B:,.2f}",
+                'Price': f"${P2_B:.4f}", 'Fees (%)': "", 'Fees ($$$)': "",
+                'Liquidation Price': _lp(liq3), 'Liq Distance': _ld(liq3), 'Max Borrow': "",
+            },
+            {
+                'Protocol': strategy.get('protocol_b', ''), 'Token': strategy.get('token3', ''), 'Action': 'Borrow',
+                'maxCF': "-", 'LLTV': "-", 'Effective LTV': "-",
+                'Borrow Weight': f"{borrow_weight_3b:.2f}x", 'Weight': f"{b_b:.4f}",
+                'Rate': f"{_modal_sf(strategy, 'borrow_rate_3b') * 100:.2f}%",
+                'Token Amount': f"{entry_token_amount_3B:,.{precision_3B}f}", 'Size ($$$)': f"${position_size_3B:,.2f}",
+                'Price': f"${P3_B:.4f}",
+                'Fees (%)': f"{borrow_fee_3b * 100:.2f}%" if borrow_fee_3b > 0 else "",
+                'Fees ($$$)': f"${fee_usd_3B:.2f}" if fee_usd_3B > 0 else "",
+                'Liquidation Price': _lp(liq4), 'Liq Distance': _ld(liq4),
+                'Max Borrow': f"${available_borrow_3b:,.2f}" if available_borrow_3b > 0 else "",
+            },
+        ]
+
+        detail_df = pd.DataFrame(detail_data)
+
+        def _color_rate(val):
+            if isinstance(val, str) and '%' in val and val != "":
+                try:
+                    if float(val.replace('%', '')) > 0:
+                        return 'color: green'
+                except (ValueError, TypeError):
+                    pass
+            return ''
+
+        def _color_liq(val):
+            if isinstance(val, str):
+                if val == "N/A":
+                    return 'color: gray; font-style: italic'
+                elif '%' in val:
+                    try:
+                        n = abs(float(val.replace('%', '')))
+                        if n < 10:
+                            return 'color: red'
+                        elif n < 30:
+                            return 'color: orange'
+                        else:
+                            return 'color: green'
+                    except (ValueError, TypeError):
+                        pass
+            return ''
+
+        styled_df = detail_df.style.map(_color_rate, subset=['Rate']).map(_color_liq, subset=['Liq Distance'])
+        st.dataframe(styled_df, width='stretch', hide_index=True)
+
+    @staticmethod
     def _build_lend_leg_row(
         position: pd.Series,
         leg_id: str,
@@ -1799,6 +1958,10 @@ class FundRateArbRenderer(StrategyRendererBase):
             'token1': position.get('token1')
         })
 
+    @staticmethod
+    def render_strategy_modal_table(strategy: dict, deployment_usd: float) -> None:
+        st.info("🚧 Funding Rate Arbitrage detail table — coming soon!")
+
 
 # ============================================================================
 # MAIN POSITION EXPANDER
@@ -2038,6 +2201,27 @@ class StablecoinLendingRenderer(StrategyRendererBase):
         df = pd.DataFrame(detail_data)
         st.dataframe(df, use_container_width=True, hide_index=True)
 
+    @staticmethod
+    def render_strategy_modal_table(strategy: dict, deployment_usd: float) -> None:
+        """Render 1-row detail table for stablecoin lending (modal view)."""
+        l_a = _modal_sf(strategy, 'l_a')
+        P1_A = _modal_sf(strategy, 'P1_A', 1.0)
+        precision_1A = get_token_precision(P1_A)
+        token_amount = (l_a * deployment_usd) / P1_A if P1_A > 0 else 0
+        detail_data = [{
+            'Protocol': strategy.get('protocol_a', ''),
+            'Token': strategy.get('token1', ''),
+            'Action': 'Lend',
+            'Weight': f"{l_a:.4f}",
+            'Rate': f"{_modal_sf(strategy, 'lend_rate_1a') * 100:.2f}%",
+            'Token Amount': f"{token_amount:,.{precision_1A}f}",
+            'Size ($$$)': f"${l_a * deployment_usd:,.2f}",
+            'Price': f"${P1_A:.4f}",
+            'Fees (%)': "", 'Fees ($$$)': "",
+            'Liquidation Price': "N/A", 'Liq Distance': "N/A",
+        }]
+        st.dataframe(pd.DataFrame(detail_data), width='stretch', hide_index=True)
+
 
 # ============================================================================
 # NO-LOOP CROSS-PROTOCOL RENDERER (3-LEG)
@@ -2176,3 +2360,411 @@ class NoLoopCrossProtocolRenderer(StrategyRendererBase):
         # Render table
         df = pd.DataFrame(detail_data)
         st.dataframe(df, use_container_width=True, hide_index=True)
+
+    @staticmethod
+    def render_strategy_modal_table(strategy: dict, deployment_usd: float) -> None:
+        """Render 3-row detail table for no-loop cross-protocol lending (modal view)."""
+        from analysis.position_calculator import PositionCalculator
+
+        l_a = _modal_sf(strategy, 'l_a')
+        b_a = _modal_sf(strategy, 'b_a')
+        l_b = _modal_sf(strategy, 'l_b')
+        P1_A = _modal_sf(strategy, 'P1_A', 1.0)
+        P2_A = _modal_sf(strategy, 'P2_A', 1.0)
+        P2_B = _modal_sf(strategy, 'P2_B', 1.0)
+        borrow_fee_2a = _modal_sf(strategy, 'borrow_fee_2a')
+        borrow_weight_2a = _modal_sf(strategy, 'borrow_weight_2a', 1.0)
+        lltv_1A = _modal_sf(strategy, 'liquidation_threshold_1a')
+        collateral_ratio_1a = _modal_sf(strategy, 'collateral_ratio_1a')
+        collateral_ratio_2b = _modal_sf(strategy, 'collateral_ratio_2b')
+        available_borrow_2a = _modal_sf(strategy, 'available_borrow_2a')
+
+        precision_1A = get_token_precision(P1_A)
+        precision_2A = get_token_precision(P2_A)
+        precision_2B = get_token_precision(P2_B)
+        position_size_1A = l_a * deployment_usd
+        position_size_2A = b_a * deployment_usd
+        position_size_2B = l_b * deployment_usd
+        entry_token_amount_1A = position_size_1A / P1_A if P1_A > 0 else 0
+        entry_token_amount_2 = position_size_2A / P2_A if P2_A > 0 else 0
+        fee_usd_2A = b_a * borrow_fee_2a * deployment_usd
+        effective_ltv_1A = (b_a / l_a) * borrow_weight_2a if l_a > 0 else 0.0
+
+        calc = PositionCalculator()
+        liq1 = calc.calculate_liquidation_price(position_size_1A, position_size_2A, P1_A, P2_A, lltv_1A, 'lending', borrow_weight_2a)
+        liq2 = calc.calculate_liquidation_price(position_size_1A, position_size_2A, P1_A, P2_A, lltv_1A, 'borrowing', borrow_weight_2a)
+
+        def _lp(r):
+            p = r['liq_price']
+            return f"${p:.4f}" if p != float('inf') and p > 0 else "N/A"
+
+        def _ld(r):
+            p = r['liq_price']
+            return f"{r['pct_distance'] * 100:.2f}%" if p != float('inf') and p > 0 else "N/A"
+
+        detail_data = [
+            {
+                'Protocol': strategy.get('protocol_a', ''), 'Token': strategy.get('token1', ''), 'Action': 'Lend',
+                'maxCF': f"{collateral_ratio_1a:.2%}", 'LLTV': f"{lltv_1A:.2%}" if lltv_1A > 0 else "",
+                'Effective LTV': f"{effective_ltv_1A:.2%}", 'Borrow Weight': "-", 'Weight': f"{l_a:.4f}",
+                'Rate': f"{_modal_sf(strategy, 'lend_rate_1a') * 100:.2f}%",
+                'Token Amount': f"{entry_token_amount_1A:,.{precision_1A}f}", 'Size ($$$)': f"${position_size_1A:,.2f}",
+                'Price': f"${P1_A:.4f}", 'Fees (%)': "", 'Fees ($$$)': "",
+                'Liquidation Price': _lp(liq1), 'Liq Distance': _ld(liq1), 'Max Borrow': "",
+            },
+            {
+                'Protocol': strategy.get('protocol_a', ''), 'Token': strategy.get('token2', ''), 'Action': 'Borrow',
+                'maxCF': "-", 'LLTV': "-", 'Effective LTV': "-",
+                'Borrow Weight': f"{borrow_weight_2a:.2f}x", 'Weight': f"{b_a:.4f}",
+                'Rate': f"{_modal_sf(strategy, 'borrow_rate_2a') * 100:.2f}%",
+                'Token Amount': f"{entry_token_amount_2:,.{precision_2A}f}", 'Size ($$$)': f"${position_size_2A:,.2f}",
+                'Price': f"${P2_A:.4f}",
+                'Fees (%)': f"{borrow_fee_2a * 100:.2f}%" if borrow_fee_2a > 0 else "",
+                'Fees ($$$)': f"${fee_usd_2A:.2f}" if fee_usd_2A > 0 else "",
+                'Liquidation Price': _lp(liq2), 'Liq Distance': _ld(liq2),
+                'Max Borrow': f"${available_borrow_2a:,.2f}" if available_borrow_2a > 0 else "",
+            },
+            {
+                'Protocol': strategy.get('protocol_b', ''), 'Token': strategy.get('token2', ''), 'Action': 'Lend',
+                'maxCF': f"{collateral_ratio_2b:.2%}", 'LLTV': "", 'Effective LTV': "",
+                'Borrow Weight': "-", 'Weight': f"{l_b:.4f}",
+                'Rate': f"{_modal_sf(strategy, 'lend_rate_2b') * 100:.2f}%",
+                'Token Amount': f"{entry_token_amount_2:,.{precision_2B}f}", 'Size ($$$)': f"${position_size_2B:,.2f}",
+                'Price': f"${P2_B:.4f}", 'Fees (%)': "", 'Fees ($$$)': "",
+                'Liquidation Price': "N/A", 'Liq Distance': "N/A", 'Max Borrow': "",
+            },
+        ]
+
+        detail_df = pd.DataFrame(detail_data)
+
+        def _color_rate(val):
+            if isinstance(val, str) and '%' in val and val != "":
+                try:
+                    if float(val.replace('%', '')) > 0:
+                        return 'color: green'
+                except (ValueError, TypeError):
+                    pass
+            return ''
+
+        def _color_liq(val):
+            if isinstance(val, str):
+                if val == "N/A":
+                    return 'color: gray; font-style: italic'
+                elif '%' in val:
+                    try:
+                        n = abs(float(val.replace('%', '')))
+                        if n < 10:
+                            return 'color: red'
+                        elif n < 30:
+                            return 'color: orange'
+                        else:
+                            return 'color: green'
+                    except (ValueError, TypeError):
+                        pass
+            return ''
+
+        styled_df = detail_df.style.map(_color_rate, subset=['Rate']).map(_color_liq, subset=['Liq Distance'])
+        st.dataframe(styled_df, width='stretch', hide_index=True)
+
+
+# ============================================================================
+# PERP LENDING RENDERER (2-LEG: SPOT LEND + SHORT PERP)
+# ============================================================================
+
+@register_strategy_renderer('perp_lending')
+class PerpLendingRenderer(StrategyRendererBase):
+    """Renderer for 2-leg perp lending strategies (spot lend + short perp)."""
+
+    @staticmethod
+    def get_strategy_name() -> str:
+        return "Perp Lending"
+
+    @staticmethod
+    def build_token_flow_string(position: pd.Series) -> str:
+        token1 = position.get('token1', '')
+        token3 = position.get('token3', '')
+        return f"{token1} (Spot) ↔ {token3} (Short Perp)"
+
+    @staticmethod
+    def validate_position_data(position: pd.Series) -> bool:
+        required_fields = ['token1', 'token3', 'protocol_a', 'protocol_b', 'l_a', 'b_b']
+        return all(field in position.index for field in required_fields)
+
+    @staticmethod
+    def get_metrics_layout() -> List[str]:
+        return ['total_pnl', 'total_earnings', 'base_earnings', 'reward_earnings', 'total_fees']
+
+    @staticmethod
+    def render_detail_table(
+        position: pd.Series,
+        get_rate: Callable,
+        get_borrow_fee: Callable,
+        get_price_with_fallback: Callable,
+        rebalances: Optional[List] = None,
+        segment_type: str = 'live'
+    ) -> None:
+        st.info("🚧 Perp Lending position detail table — coming soon!")
+        st.caption("Position tracking for perp lending is not yet implemented.")
+
+    @staticmethod
+    def render_strategy_modal_table(strategy: dict, deployment_usd: float) -> None:
+        """Render 2-row detail table: Spot Lend + Short Perp."""
+        l_a = _modal_sf(strategy, 'l_a')
+        b_b = _modal_sf(strategy, 'b_b')
+        P1_A = _modal_sf(strategy, 'P1_A', 1.0)
+        P3_B = _modal_sf(strategy, 'P3_B', 1.0)
+        lend_rate_1a = _modal_sf(strategy, 'lend_rate_1a')
+        borrow_rate_3b = _modal_sf(strategy, 'borrow_rate_3b')
+        spot_lending_apr = _modal_sf(strategy, 'spot_lending_apr')
+        funding_rate_apr = _modal_sf(strategy, 'funding_rate_apr')
+        perp_fees_apr = _modal_sf(strategy, 'perp_fees_apr')
+        liq_price_multiplier = _modal_sf(strategy, 'liq_price_multiplier', 2.0)
+
+        precision_1A = get_token_precision(P1_A)
+        precision_3B = get_token_precision(P3_B)
+        token_amount_1A = (l_a * deployment_usd) / P1_A if P1_A > 0 else 0
+        token_amount_3B = (b_b * deployment_usd) / P3_B if P3_B > 0 else 0
+        size_1A = l_a * deployment_usd
+        size_3B = b_b * deployment_usd
+
+        perp_liq_price = P3_B * liq_price_multiplier
+        perp_liq_dist_pct = (perp_liq_price - P3_B) / P3_B * 100 if P3_B > 0 else 0
+        perp_fee_usd = perp_fees_apr * deployment_usd
+
+        detail_data = [
+            {
+                'Protocol': strategy.get('protocol_a', ''),
+                'Token': strategy.get('token1', ''),
+                'Action': 'Spot Lend',
+                'Weight': f"{l_a:.4f}",
+                'Rate': f"{lend_rate_1a * 100:.2f}%",
+                'APR Contrib': f"{spot_lending_apr * 100:.2f}%",
+                'Token Amount': f"{token_amount_1A:,.{precision_1A}f}",
+                'Size ($)': f"${size_1A:,.2f}",
+                'Price': f"${P1_A:.4f}",
+                'Fees (%)': "", 'Fees ($)': "",
+                'Liq Risk': "None", 'Liq Price': "N/A", 'Liq Distance': "N/A",
+            },
+            {
+                'Protocol': strategy.get('protocol_b', ''),
+                'Token': strategy.get('token3', ''),
+                'Action': 'Short Perp',
+                'Weight': f"{b_b:.4f}",
+                'Rate': f"{borrow_rate_3b * 100:.2f}% (funding)",
+                'APR Contrib': f"{-funding_rate_apr * 100:.2f}%",  # Negate: shorts earn when rate is negative
+                'Token Amount': f"{token_amount_3B:,.{precision_3B}f}",
+                'Size ($)': f"${size_3B:,.2f}",
+                'Price': f"${P3_B:.4f}",
+                'Fees (%)': f"{perp_fees_apr * 100:.2f}%",
+                'Fees ($)': f"${perp_fee_usd:,.2f}",
+                'Liq Risk': "Price UP",
+                'Liq Price': f"${perp_liq_price:,.4f}",
+                'Liq Distance': f"+{perp_liq_dist_pct:.2f}%",
+            },
+        ]
+
+        detail_df = pd.DataFrame(detail_data)
+
+        def _color_apr(val):
+            if isinstance(val, str) and '%' in val:
+                try:
+                    v = float(val.split('%')[0])
+                    if v > 0:
+                        return 'color: green'
+                    elif v < 0:
+                        return 'color: red'
+                except (ValueError, TypeError):
+                    pass
+            return ''
+
+        def _color_liq(val):
+            if isinstance(val, str):
+                if val == "N/A":
+                    return 'color: gray; font-style: italic'
+                elif '%' in val:
+                    try:
+                        n = abs(float(val.replace('+', '').replace('%', '')))
+                        if n < 10:
+                            return 'color: red'
+                        elif n < 30:
+                            return 'color: orange'
+                        else:
+                            return 'color: green'
+                    except (ValueError, TypeError):
+                        pass
+            return ''
+
+        styled_df = detail_df.style.map(_color_apr, subset=['APR Contrib']).map(_color_liq, subset=['Liq Distance'])
+        st.dataframe(styled_df, width='stretch', hide_index=True)
+
+
+# ============================================================================
+# PERP BORROWING RENDERER (3-LEG: STABLECOIN LEND + SPOT BORROW + LONG PERP)
+# ============================================================================
+
+@register_strategy_renderer('perp_borrowing')
+@register_strategy_renderer('perp_borrowing_recursive')
+class PerpBorrowingRenderer(StrategyRendererBase):
+    """Renderer for 3-leg perp borrowing strategies (stablecoin lend + spot borrow + long perp)."""
+
+    @staticmethod
+    def get_strategy_name() -> str:
+        return "Perp Borrowing"
+
+    @staticmethod
+    def build_token_flow_string(position: pd.Series) -> str:
+        token1 = position.get('token1', '')
+        token2 = position.get('token2', '')
+        token3 = position.get('token3', '')
+        return f"{token1} (Lend) → Borrow {token2} → {token3} (Long Perp)"
+
+    @staticmethod
+    def validate_position_data(position: pd.Series) -> bool:
+        required_fields = ['token1', 'token2', 'token3', 'protocol_a', 'protocol_b', 'l_a', 'b_a', 'l_b']
+        return all(field in position.index for field in required_fields)
+
+    @staticmethod
+    def get_metrics_layout() -> List[str]:
+        return ['total_pnl', 'total_earnings', 'base_earnings', 'reward_earnings', 'total_fees']
+
+    @staticmethod
+    def render_detail_table(
+        position: pd.Series,
+        get_rate: Callable,
+        get_borrow_fee: Callable,
+        get_price_with_fallback: Callable,
+        rebalances: Optional[List] = None,
+        segment_type: str = 'live'
+    ) -> None:
+        st.info("🚧 Perp Borrowing position detail table — coming soon!")
+        st.caption("Position tracking for perp borrowing is not yet implemented.")
+
+    @staticmethod
+    def render_strategy_modal_table(strategy: dict, deployment_usd: float) -> None:
+        """Render 3-row detail table: Stablecoin Lend + Spot Borrow + Long Perp."""
+        from analysis.position_calculator import PositionCalculator
+
+        l_a = _modal_sf(strategy, 'l_a')
+        b_a = _modal_sf(strategy, 'b_a')
+        l_b = _modal_sf(strategy, 'l_b')
+        P1_A = _modal_sf(strategy, 'P1_A', 1.0)
+        P2_A = _modal_sf(strategy, 'P2_A', 1.0)
+        P3_B = _modal_sf(strategy, 'P3_B', 1.0)
+        lend_rate_1a = _modal_sf(strategy, 'lend_rate_1a')
+        borrow_rate_2a = _modal_sf(strategy, 'borrow_rate_2a')
+        borrow_rate_3b = _modal_sf(strategy, 'borrow_rate_3b')
+        stablecoin_lending_apr = _modal_sf(strategy, 'stablecoin_lending_apr')
+        token2_borrow_apr = _modal_sf(strategy, 'token2_borrow_apr')
+        funding_rate_apr = _modal_sf(strategy, 'funding_rate_apr')
+        perp_fees_apr = _modal_sf(strategy, 'perp_fees_apr')
+        borrow_fee_2a = _modal_sf(strategy, 'borrow_fee_2a')
+        borrow_weight_2a = _modal_sf(strategy, 'borrow_weight_2a', 1.0)
+        lltv_1A = _modal_sf(strategy, 'liquidation_threshold_1a')
+        collateral_ratio_1a = _modal_sf(strategy, 'collateral_ratio_1a')
+        available_borrow_2a = _modal_sf(strategy, 'available_borrow_2a')
+        liquidation_distance = _modal_sf(strategy, 'liquidation_distance', 0.20)
+
+        precision_1A = get_token_precision(P1_A)
+        precision_2A = get_token_precision(P2_A)
+        precision_3B = get_token_precision(P3_B)
+        position_size_1A = l_a * deployment_usd
+        position_size_2A = b_a * deployment_usd
+        position_size_3B = l_b * deployment_usd
+        token_amount_1A = position_size_1A / P1_A if P1_A > 0 else 0
+        token_amount_2A = position_size_2A / P2_A if P2_A > 0 else 0
+        token_amount_3B = position_size_3B / P3_B if P3_B > 0 else 0
+        borrow_fee_usd = b_a * borrow_fee_2a * deployment_usd
+        perp_fee_usd = perp_fees_apr * deployment_usd
+        effective_ltv_1A = (b_a / l_a) * borrow_weight_2a if l_a > 0 else 0.0
+
+        calc = PositionCalculator()
+        liq1 = calc.calculate_liquidation_price(position_size_1A, position_size_2A, P1_A, P2_A, lltv_1A, 'lending', borrow_weight_2a)
+        liq2 = calc.calculate_liquidation_price(position_size_1A, position_size_2A, P1_A, P2_A, lltv_1A, 'borrowing', borrow_weight_2a)
+
+        def _lp(r):
+            p = r['liq_price']
+            return f"${p:.4f}" if p != float('inf') and p > 0 else "N/A"
+
+        def _ld(r):
+            p = r['liq_price']
+            return f"{r['pct_distance'] * 100:.2f}%" if p != float('inf') and p > 0 else "N/A"
+
+        perp_liq_price = P3_B * (1.0 - liquidation_distance)
+        perp_liq_dist_pct = -liquidation_distance * 100  # Negative: price needs to drop
+
+        detail_data = [
+            {
+                'Protocol': strategy.get('protocol_a', ''), 'Token': strategy.get('token1', ''),
+                'Action': 'Lend (Stablecoin)',
+                'maxCF': f"{collateral_ratio_1a:.2%}", 'LLTV': f"{lltv_1A:.2%}" if lltv_1A > 0 else "",
+                'Eff LTV': f"{effective_ltv_1A:.2%}", 'Weight': f"{l_a:.4f}",
+                'Rate': f"{lend_rate_1a * 100:.2f}%",
+                'APR Contrib': f"{stablecoin_lending_apr * 100:.2f}%",
+                'Token Amount': f"{token_amount_1A:,.{precision_1A}f}", 'Size ($)': f"${position_size_1A:,.2f}",
+                'Price': f"${P1_A:.4f}", 'Fees (%)': "", 'Fees ($)': "",
+                'Liq Risk': "Price UP", 'Liq Price': _lp(liq1), 'Liq Distance': _ld(liq1),
+                'Max Borrow': f"${available_borrow_2a:,.2f}" if available_borrow_2a > 0 else "",
+            },
+            {
+                'Protocol': strategy.get('protocol_a', ''), 'Token': strategy.get('token2', ''),
+                'Action': 'Borrow (Spot)',
+                'maxCF': "-", 'LLTV': "-", 'Eff LTV': "-", 'Weight': f"{b_a:.4f}",
+                'Rate': f"{borrow_rate_2a * 100:.2f}%",
+                'APR Contrib': f"{-token2_borrow_apr * 100:.2f}%",
+                'Token Amount': f"{token_amount_2A:,.{precision_2A}f}", 'Size ($)': f"${position_size_2A:,.2f}",
+                'Price': f"${P2_A:.4f}",
+                'Fees (%)': f"{borrow_fee_2a * 100:.2f}%" if borrow_fee_2a > 0 else "",
+                'Fees ($)': f"${borrow_fee_usd:,.2f}" if borrow_fee_usd > 0 else "",
+                'Liq Risk': "Price UP", 'Liq Price': _lp(liq2), 'Liq Distance': _ld(liq2),
+                'Max Borrow': "",
+            },
+            {
+                'Protocol': strategy.get('protocol_b', ''), 'Token': strategy.get('token3', ''),
+                'Action': 'Long Perp',
+                'maxCF': "-", 'LLTV': "-", 'Eff LTV': "-", 'Weight': f"{l_b:.4f}",
+                'Rate': f"{borrow_rate_3b * 100:.2f}% (funding)",
+                'APR Contrib': f"{funding_rate_apr * 100:.2f}%",
+                'Token Amount': f"{token_amount_3B:,.{precision_3B}f}", 'Size ($)': f"${position_size_3B:,.2f}",
+                'Price': f"${P3_B:.4f}",
+                'Fees (%)': f"{perp_fees_apr * 100:.2f}%",
+                'Fees ($)': f"${perp_fee_usd:,.2f}",
+                'Liq Risk': "Price DOWN",
+                'Liq Price': f"${perp_liq_price:,.4f}",
+                'Liq Distance': f"{perp_liq_dist_pct:.2f}%",
+                'Max Borrow': "",
+            },
+        ]
+
+        detail_df = pd.DataFrame(detail_data)
+
+        def _color_apr(val):
+            if isinstance(val, str) and '%' in val:
+                try:
+                    v = float(val.split('%')[0])
+                    if v > 0:
+                        return 'color: green'
+                    elif v < 0:
+                        return 'color: red'
+                except (ValueError, TypeError):
+                    pass
+            return ''
+
+        def _color_liq(val):
+            if isinstance(val, str):
+                if val == "N/A":
+                    return 'color: gray; font-style: italic'
+                elif '%' in val:
+                    try:
+                        n = abs(float(val.replace('+', '').replace('-', '').replace('%', '')))
+                        if n < 10:
+                            return 'color: red'
+                        elif n < 30:
+                            return 'color: orange'
+                        else:
+                            return 'color: green'
+                    except (ValueError, TypeError):
+                        pass
+            return ''
+
+        styled_df = detail_df.style.map(_color_apr, subset=['APR Contrib']).map(_color_liq, subset=['Liq Distance'])
+        st.dataframe(styled_df, width='stretch', hide_index=True)

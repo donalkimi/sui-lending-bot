@@ -2155,6 +2155,8 @@ CREATE TABLE perp_margin_rates (
     funding_rate_hourly DECIMAL(10,6),       -- Raw hourly rate (e.g., 0.00001)
     funding_rate_annual DECIMAL(10,6) NOT NULL,  -- Annualized: hourly × 24 × 365
     next_funding_time TIMESTAMP,             -- Next funding update (optional)
+    avg_rate_8hr NUMERIC(10,6),             -- Rolling avg of last 8 hourly observations (auto-computed on insert)
+    avg_rate_24hr NUMERIC(10,6),            -- Rolling avg of last 24 hourly observations (auto-computed on insert)
     PRIMARY KEY (timestamp, protocol, token_contract)
 );
 ```
@@ -2179,8 +2181,10 @@ ADD COLUMN perp_margin_rate DECIMAL(10,6) DEFAULT NULL;
 - **token**: `'BTC-USDC-PERP'` (human-readable)
 - **token_contract**: `'0xBTC-USDC-PERP_bluefin'` (proxy identifier)
 - **market**: `'BTC-PERP'` (Bluefin API naming)
-- **perp_margin_rate**: Annualized funding rate (decimal)
-- **All lending columns**: NULL (lend_total_apr, borrow_total_apr, etc.)
+- **lend_total_apr / borrow_total_apr**: `−funding_rate_annual` (negated per Design Note #17; lend == borrow for perps)
+- **avg8hr_lend_total_apr / avg8hr_borrow_total_apr**: `−avg_rate_8hr` from perp_margin_rates
+- **avg24hr_lend_total_apr / avg24hr_borrow_total_apr**: `−avg_rate_24hr` from perp_margin_rates
+- **All other lending columns** (collateral_ratio, utilization, etc.): NULL
 
 **Benefits**:
 - Unified queries: `SELECT * FROM rates_snapshot WHERE timestamp = ? ORDER BY protocol, token`

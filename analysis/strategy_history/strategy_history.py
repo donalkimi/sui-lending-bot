@@ -145,6 +145,33 @@ def calculate_apr_timeseries(
                 logger.warning(f"No APR returned for timestamp {timestamp}")
                 continue
 
+            # Compute avg8hr / avg24hr net APR by substituting perp leg avg rate and re-running.
+            # Works for perp_borrowing (lend_avg8hr_apr_3B) and perp_lending (borrow_avg8hr_apr_3B).
+            # For non-perp strategies these keys are absent so avg APRs remain None.
+            net_avg8hr_apr = None
+            net_avg24hr_apr = None
+
+            avg8hr_key = ('lend_avg8hr_apr_3B'   if 'lend_avg8hr_apr_3B'   in market_data else
+                          'borrow_avg8hr_apr_3B'  if 'borrow_avg8hr_apr_3B' in market_data else None)
+            avg24hr_key = ('lend_avg24hr_apr_3B'  if 'lend_avg24hr_apr_3B'  in market_data else
+                           'borrow_avg24hr_apr_3B' if 'borrow_avg24hr_apr_3B' in market_data else None)
+            spot_key = ('lend_total_apr_3B'  if 'lend_total_apr_3B'  in market_data else
+                        'borrow_total_apr_3B' if 'borrow_total_apr_3B' in market_data else None)
+
+            if avg8hr_key and spot_key and market_data.get(avg8hr_key) is not None:
+                try:
+                    r8 = calculator.analyze_strategy(**{**market_data, spot_key: market_data[avg8hr_key]})
+                    net_avg8hr_apr = r8.get('net_apr', r8.get('apr_net'))
+                except Exception:
+                    pass
+
+            if avg24hr_key and spot_key and market_data.get(avg24hr_key) is not None:
+                try:
+                    r24 = calculator.analyze_strategy(**{**market_data, spot_key: market_data[avg24hr_key]})
+                    net_avg24hr_apr = r24.get('net_apr', r24.get('apr_net'))
+                except Exception:
+                    pass
+
             # Extract token2 price for position charts (if token2 exists)
             token2_price = None
             if 'token2_contract' in strategy and strategy['token2_contract']:
@@ -153,10 +180,18 @@ def calculate_apr_timeseries(
                     token2_price = token2_rows.iloc[0]['price_usd']
 
             results.append({
-                'timestamp': timestamp,
-                'net_apr': net_apr,
-                'gross_apr': result.get('gross_apr', result.get('apr_gross')),
-                'token2_price': token2_price
+                'timestamp':            timestamp,
+                'net_apr':              net_apr,
+                'net_avg8hr_apr':       net_avg8hr_apr,
+                'net_avg24hr_apr':      net_avg24hr_apr,
+                'gross_apr':            result.get('gross_apr', result.get('apr_gross')),
+                'token2_price':         token2_price,
+                # Per-leg raw rates for analysis tab display
+                'lend_total_apr_1A':    market_data.get('raw_lend_total_apr_1A'),
+                'borrow_total_apr_2A':  market_data.get('raw_borrow_total_apr_2A'),
+                'perp_rate_3B':         market_data.get('raw_perp_rate_3B'),
+                'avg8hr_perp_rate_3B':  market_data.get('raw_avg8hr_perp_rate_3B'),
+                'avg24hr_perp_rate_3B': market_data.get('raw_avg24hr_perp_rate_3B'),
             })
 
         except Exception as e:
@@ -166,7 +201,12 @@ def calculate_apr_timeseries(
     # Build DataFrame
     if not results:
         logger.warning("No APR values calculated")
-        return pd.DataFrame(columns=['timestamp', 'net_apr', 'gross_apr', 'token2_price']).set_index('timestamp')
+        return pd.DataFrame(columns=[
+            'timestamp', 'net_apr', 'net_avg8hr_apr', 'net_avg24hr_apr',
+            'gross_apr', 'token2_price',
+            'lend_total_apr_1A', 'borrow_total_apr_2A',
+            'perp_rate_3B', 'avg8hr_perp_rate_3B', 'avg24hr_perp_rate_3B',
+        ]).set_index('timestamp')
 
     df = pd.DataFrame(results)
     df = df.set_index('timestamp')

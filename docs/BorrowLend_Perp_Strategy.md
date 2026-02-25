@@ -286,6 +286,10 @@ main_perp_refresh.py (hourly)
     │
     ▼
 perp_margin_rates table
+    funding_rate_annual                    (raw hourly rate × 24 × 365)
+    avg_rate_8hr                           (rolling avg of last 8 hourly observations)
+    avg_rate_24hr                          (rolling avg of last 24 hourly observations)
+    │  Auto-computed in save_perp_rates() via SQL window function on each insert
     │
     │  refresh_pipeline.py STEP 1: pre-fetch check
     │  if not present for current hour → fetch from Bluefin API
@@ -298,9 +302,14 @@ protocol_merger.py
     ▼
 rates_snapshot table
     protocol='Bluefin', token='SUI-USDC-PERP'
-    lend_total_apr  = −funding_rate_annual   (negated)
-    borrow_total_apr = −funding_rate_annual  (negated)
-    price_usd = 10.10101                    (placeholder — not used by perp generators)
+    lend_total_apr           = −funding_rate_annual   (negated, Design Note #17)
+    borrow_total_apr         = −funding_rate_annual   (negated)
+    avg8hr_lend_total_apr    = −avg_rate_8hr          (negated; lend == borrow for perps)
+    avg8hr_borrow_total_apr  = −avg_rate_8hr
+    avg24hr_lend_total_apr   = −avg_rate_24hr
+    avg24hr_borrow_total_apr = −avg_rate_24hr
+    price_usd = 10.10101                              (placeholder — not used by perp generators)
+    │  avg columns filled by rate_tracker._update_perp_avg_rates() in same transaction
 ```
 
 ### spot_perp_basis (directional prices)
@@ -521,9 +530,9 @@ BLUEFIN_AMM_USDC_AMOUNT_RAW = 100_000_000   # 100 USDC (6 decimals)
 |------|--------|
 | `perp_lending` history handler | **TODO** — plan at `/Users/donalmoore/.claude/plans/perp-lending-history-handler.md` |
 | `price_usd` in `rates_snapshot` for perp tokens | `10.10101` placeholder — real prices come from `spot_perp_basis` via `get_perp_price()` |
-| Backfill of `rates_snapshot` with perp data | Stub exists; not yet implemented |
+| Backfill of `rates_snapshot` with perp data | ✅ Done — `Scripts/backfill_perp_to_rates_snapshot.py` fully implemented |
 | Maker/taker fee optimisation | Uses worst-case taker fee for both entry and exit |
-| Funding rate forecasting | Uses current snapshot rate, no averaging or forecast |
+| Funding rate rolling averages | ✅ Done — 8hr and 24hr rolling averages stored in `perp_margin_rates` (`avg_rate_8hr`, `avg_rate_24hr`) and mirrored into `rates_snapshot` (`avg8hr_lend_total_apr`, `avg8hr_borrow_total_apr`, `avg24hr_lend_total_apr`, `avg24hr_borrow_total_apr`) |
 | Rebalance cost modelling | Not included in APR calculations |
 
 ---
