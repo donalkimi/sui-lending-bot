@@ -760,8 +760,8 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
             start_ts, end_ts = get_chart_time_range(time_range, timestamp_seconds)
 
             # Fetch history
-            from analysis.strategy_history.strategy_history import get_strategy_history
-            history_df = get_strategy_history(strategy_dict, start_ts, end_ts)
+            from analysis.strategy_history.strategy_history import get_strategy_history as _get_history_df
+            history_df = _get_history_df(strategy_dict, start_ts, end_ts)
 
             if history_df.empty:
                 st.warning("⚠️ No historical data available for this strategy.")
@@ -804,11 +804,11 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
             # Get liquidation distance from strategy
             liquidation_distance = strategy.get('liquidation_distance', 0.20)
 
-            # Get position multipliers from strategy history calculation
-            _, l_a, b_a, l_b, b_b = get_strategy_history(
-                strategy_row=strategy,
-                liquidation_distance=liquidation_distance
-            )
+            # Get position multipliers directly from strategy (computed by rate analyzer)
+            l_a = strategy['l_a']
+            b_a = strategy['b_a']
+            l_b = strategy['l_b']
+            b_b = strategy['b_b']
 
             # Build positions dict
             positions = {
