@@ -227,7 +227,11 @@ class PositionService:
         entry_token_amount_1a = (l_a * deployment_usd) / entry_price_1a if entry_price_1a > 0 else 0
         entry_token_amount_2a = (b_a * deployment_usd) / entry_price_2a if entry_price_2a > 0 else 0
         entry_token_amount_2b = (L_B * deployment_usd) / entry_price_2b if entry_price_2b > 0 else 0
-        entry_token_amount_3b = (b_b * deployment_usd) / entry_price_3b if b_b and entry_price_3b and entry_price_3b > 0 else 0
+        # For perp_borrowing the 3rd leg is the perp long, sized by l_b (not b_b which is 0)
+        if strategy_type in ('perp_borrowing', 'perp_borrowing_recursive'):
+            entry_token_amount_3b = (L_B * deployment_usd) / entry_price_3b if L_B and entry_price_3b and entry_price_3b > 0 else 0
+        else:
+            entry_token_amount_3b = (b_b * deployment_usd) / entry_price_3b if b_b and entry_price_3b and entry_price_3b > 0 else 0
 
         # Convert timestamp to datetime string for DB
         entry_timestamp_str = to_datetime_str(entry_timestamp)

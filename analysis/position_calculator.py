@@ -209,15 +209,12 @@ class PositionCalculator:
             Time-adjusted APR accounting for upfront fees (decimal)
 
         Formula:
-            APRx = net_apr - (b_a × f_2A + b_b × f_3B) × 365 / days
+            APR(N days) = (gross_apr × N/365 - total_fee_cost) × 365/N
+
+            Derivation: earn N days of gross APR, subtract the one-time upfront cost, annualise.
         """
-        # Total fee cost (decimal)
         total_fee_cost = b_a * borrow_fee_2A + b_b * borrow_fee_3B
-
-        # Time-adjusted fee impact (annualized, as decimal)
-        fee_impact = total_fee_cost * 365 / days
-
-        return net_apr - fee_impact
+        return (net_apr * days / 365 - total_fee_cost) * 365 / days
 
     def calculate_days_to_breakeven(
         self,

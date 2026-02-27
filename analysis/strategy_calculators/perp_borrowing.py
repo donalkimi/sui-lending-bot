@@ -57,16 +57,77 @@ class PerpBorrowingCalculator(StrategyCalculatorBase):
         costs    =  positions['b_a'] * rates['borrow_total_apr_2A']
         return earnings - costs
 
-    def calculate_net_apr(self, positions: Dict, rates: Dict, fees: Dict) -> float:
+    def calculate_net_apr(self, positions: Dict, rates: Dict, fees: Dict,
+                          basis_cost: float = 0.0) -> float:
         """
         net = gross
             − L_B × 2 × BLUEFIN_TAKER_FEE   (long perp entry + exit)
             − B_A × borrow_fee_2A             (upfront borrow fee at Protocol A)
+            − basis_cost                       (round-trip spot/perp spread × L_B)
         """
         gross      = self.calculate_gross_apr(positions, rates)
         perp_fees  = positions['l_b'] * 2.0 * settings.BLUEFIN_TAKER_FEE
         borrow_fee = (fees.get('borrow_fee_2A') or 0.0) * positions['b_a']
-        return gross - perp_fees - borrow_fee
+        return gross - perp_fees - borrow_fee - basis_cost
+
+    def calculate_price_pnl(
+        self,
+        positions: Dict[str, float],
+        entry_prices: Dict[str, float],
+        current_prices: Dict[str, float],
+        deployment_usd: float,
+        **kwargs
+    ) -> Dict[str, float]:
+        """
+        Calculate PnL from price movements (separate from yield).
+
+        Token count is anchored to the spot side (borrowed + sold short).
+        Perp long matches that token count exactly.
+
+        If there is a basis (spot_price ≠ perp_price), the USD values
+        will differ slightly — this is expected and acceptable.
+
+        Args:
+            positions: {'b_a': ..., 'l_b': ..., ...}
+            entry_prices: {'spot': price_2A_at_entry, 'perp': price_3B_at_entry}
+            current_prices: {'spot': current_price_2A, 'perp': current_price_3B}
+            deployment_usd: total deployment in USD
+
+        Returns:
+            {
+                'spot_pnl': ...,    # P&L on short spot leg (negative if price rises)
+                'perp_pnl': ...,    # P&L on long perp leg (positive if price rises)
+                'net_pnl': ...,     # Net (near-zero if hedged; residual from basis is ok)
+                'spot_tokens': ...,
+                'perp_tokens': ...
+            }
+        """
+        b_a = positions['b_a']
+
+        spot_entry_price   = entry_prices.get('spot', 0.0)
+        perp_entry_price   = entry_prices.get('perp', 0.0)
+        spot_current_price = current_prices.get('spot', 0.0)
+        perp_current_price = current_prices.get('perp', spot_current_price)
+
+        # Anchor: number of tokens borrowed and sold short
+        spot_tokens = (b_a * deployment_usd) / spot_entry_price if spot_entry_price > 0 else 0
+        perp_tokens = spot_tokens  # Match token count, not USD notional
+
+        # Spot: short position (borrowed and sold), direction = -1
+        spot_pnl = (spot_current_price - spot_entry_price) * spot_tokens * (-1.0)
+
+        # Perp: long position, direction = +1
+        perp_pnl = (perp_current_price - perp_entry_price) * perp_tokens * 1.0
+
+        net_pnl = spot_pnl + perp_pnl
+
+        return {
+            'spot_pnl': spot_pnl,
+            'perp_pnl': perp_pnl,
+            'net_pnl': net_pnl,
+            'spot_tokens': spot_tokens,
+            'perp_tokens': perp_tokens
+        }
 
     def analyze_strategy(
         self,
@@ -116,7 +177,6 @@ class PerpBorrowingCalculator(StrategyCalculatorBase):
 
         l_a, b_a, l_b = positions['l_a'], positions['b_a'], positions['l_b']
         gross_apr = self.calculate_gross_apr(positions, rates)
-        net_apr   = self.calculate_net_apr(positions, rates, fees)
 
         # Basis spread cost: round-trip bid/ask friction on the spot+perp hedge.
         # basis_spread = basis_ask - basis_bid from spot_perp_basis table.
@@ -125,13 +185,15 @@ class PerpBorrowingCalculator(StrategyCalculatorBase):
         basis_mid    = kwargs.get('basis_mid')
         basis_cost = l_b * basis_spread if basis_spread is not None else 0.0
 
-        # Time-adjusted APRs: borrow origination fee + perp taker fees + basis spread cost.
-        # Costs are one-time upfront payments; gross_apr is the ongoing daily earn rate.
+        net_apr = self.calculate_net_apr(positions, rates, fees, basis_cost=basis_cost)
+
+        # Time-adjusted APRs: earn N days of gross APR, subtract the one-time upfront cost, annualise.
+        # Formula: APR(N days) = (gross_apr × N/365 - total_upfront_fee) × 365/N
         perp_fee = l_b * 2.0 * settings.BLUEFIN_TAKER_FEE
         total_upfront_fee = b_a * borrow_fee_2A + perp_fee + basis_cost
-        apr5  = gross_apr - total_upfront_fee * 365.0 / 5
-        apr30 = gross_apr - total_upfront_fee * 365.0 / 30
-        apr90 = gross_apr - total_upfront_fee * 365.0 / 90
+        apr5  = (gross_apr * 5  / 365 - total_upfront_fee) * 365 / 5
+        apr30 = (gross_apr * 30 / 365 - total_upfront_fee) * 365 / 30
+        apr90 = (gross_apr * 90 / 365 - total_upfront_fee) * 365 / 90
         days_to_breakeven = (total_upfront_fee * 365.0 / gross_apr) if gross_apr > 0 else float('inf')
 
         max_size = (available_borrow / b_a) if (available_borrow and b_a > 0) else float('inf')
@@ -194,6 +256,15 @@ class PerpBorrowingCalculator(StrategyCalculatorBase):
             # Metadata
             'valid':         True,
             'strategy_type': self.get_strategy_type(),
+
+            # Backwards compat alias (create_position reads 'net_apr'; all other calculators use 'apr_net')
+            'net_apr': net_apr,
+
+            # Fields not applicable to perp_borrowing — store as NULL in DB
+            'collateral_ratio_2b': None,
+            'liquidation_threshold_2b': None,
+            'borrow_fee_3b': None,
+            'borrow_weight_3b': None,
         }
 
     def calculate_rebalance_amounts(self, position, current_prices,

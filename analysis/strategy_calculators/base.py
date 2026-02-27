@@ -53,7 +53,8 @@ class StrategyCalculatorBase(ABC):
     @abstractmethod
     def calculate_net_apr(self, positions: Dict[str, float],
                          rates: Dict[str, float],
-                         fees: Dict[str, float]) -> float:
+                         fees: Dict[str, float],
+                         basis_cost: float = 0.0) -> float:
         """
         Calculate net APR for this strategy.
 
@@ -61,6 +62,7 @@ class StrategyCalculatorBase(ABC):
             positions: Dict with l_a, b_a, l_b, b_b
             rates: Dict with lend_total_apr_*, borrow_total_apr_* (base + reward combined)
             fees: Dict with borrow_fee_* (nullable, may need fallback)
+            basis_cost: One-time round-trip spot/perp spread cost (decimal, default 0.0)
 
         Returns:
             Net APR as decimal (e.g., 0.0524 = 5.24%)
@@ -161,8 +163,9 @@ class StrategyCalculatorBase(ABC):
         are amortized over fewer days.
 
         Formula:
-            APR(X days) = gross_apr - (total_fee_cost × 365 / X)
+            APR(N days) = (gross_apr × N/365 - total_fee_cost) × 365/N
 
+            Derivation: earn N days of gross APR, subtract the one-time upfront cost, annualise.
             Where total_fee_cost = b_a × fee_2A + b_b × fee_3B
 
         Args:
@@ -178,12 +181,13 @@ class StrategyCalculatorBase(ABC):
 
         Example:
             gross_apr = 0.11 (11%), fees = 0.002 (0.2%), days = 5
-            → APR(5d) = 0.11 - (0.002 × 365 / 5) = 0.11 - 0.146 = -0.036 (-3.6%)
-            (Negative because fees are too high for 5-day horizon)
+            → earn 5d: 0.11 × 5/365 = 0.00151
+            → subtract fee: 0.00151 - 0.002 = -0.00049
+            → annualise: -0.00049 × 365/5 = -0.036 (-3.6%)
+            (Negative because fees exceed 5-day earnings)
         """
         total_fee_cost = b_a * borrow_fee_2A + b_b * borrow_fee_3B
-        fee_impact = total_fee_cost * 365.0 / days
-        return gross_apr - fee_impact
+        return (gross_apr * days / 365 - total_fee_cost) * 365 / days
 
     def calculate_days_to_breakeven(self,
                                     gross_apr: float,

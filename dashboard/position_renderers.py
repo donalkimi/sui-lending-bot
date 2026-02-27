@@ -1651,6 +1651,7 @@ class RecursiveLendingRenderer(StrategyRendererBase):
                 'Protocol': protocol,
                 'Token': token,
                 'Action': 'Lend',
+                'Weight': f"{weight:.2f}",
                 'Position Entry Rate (%)': f"{entry_rate * 100:.2f}" if safe_value(entry_rate) else "N/A",
                 'Entry Rate (%)': f"{segment_entry_rate * 100:.2f}" if safe_value(segment_entry_rate) else "N/A",
                 'Live Rate (%)': f"{live_rate * 100:.2f}" if safe_value(live_rate) else "N/A",
@@ -1671,6 +1672,7 @@ class RecursiveLendingRenderer(StrategyRendererBase):
                 'Protocol': protocol,
                 'Token': token,
                 'Action': 'Lend',
+                'Weight': f"{weight:.2f}",
                 'Position Entry Rate (%)': f"{entry_rate * 100:.2f}" if safe_value(entry_rate) else "N/A",
                 'Segment Entry Rate (%)': f"{segment_entry_rate * 100:.2f}" if safe_value(segment_entry_rate) else "N/A",
                 'Exit Rate (%)': f"{live_rate * 100:.2f}" if safe_value(live_rate) else "N/A",
@@ -1874,6 +1876,7 @@ class RecursiveLendingRenderer(StrategyRendererBase):
                 'Protocol': protocol,
                 'Token': token,
                 'Action': 'Borrow',
+                'Weight': f"{weight:.2f}",
                 'Position Entry Rate (%)': f"{entry_rate * 100:.2f}" if safe_value(entry_rate) else "N/A",
                 'Entry Rate (%)': f"{segment_entry_rate * 100:.2f}" if safe_value(segment_entry_rate) else "N/A",
                 'Live Rate (%)': f"{live_rate * 100:.2f}" if safe_value(live_rate) else "N/A",
@@ -1894,6 +1897,7 @@ class RecursiveLendingRenderer(StrategyRendererBase):
                 'Protocol': protocol,
                 'Token': token,
                 'Action': 'Borrow',
+                'Weight': f"{weight:.2f}",
                 'Position Entry Rate (%)': f"{entry_rate * 100:.2f}" if safe_value(entry_rate) else "N/A",
                 'Segment Entry Rate (%)': f"{segment_entry_rate * 100:.2f}" if safe_value(segment_entry_rate) else "N/A",
                 'Exit Rate (%)': f"{live_rate * 100:.2f}" if safe_value(live_rate) else "N/A",
@@ -2503,8 +2507,134 @@ class PerpLendingRenderer(StrategyRendererBase):
         rebalances: Optional[List] = None,
         segment_type: str = 'live'
     ) -> None:
-        st.info("🚧 Perp Lending position detail table — coming soon!")
-        st.caption("Position tracking for perp lending is not yet implemented.")
+        """Render 2-leg detail table: Spot Lend (1A) + Short Perp (3B)."""
+        deployment = position['deployment_usd']
+
+        # Build segment_data (same pattern as RecursiveLendingRenderer)
+        if not rebalances or len(rebalances) == 0:
+            segment_data = build_segment_data_from_position(position)
+        else:
+            segment_data = build_segment_data_from_rebalance(rebalances[-1])
+
+        is_live_segment = segment_data['is_live_segment']
+
+        detail_data = []
+
+        # ========== LEG 1: Protocol A - Spot Lend token1 ==========
+        # No borrow on this lend leg for perp lending → no liquidation distance
+        detail_data.append(RecursiveLendingRenderer._build_lend_leg_row(
+            position=position,
+            leg_id='leg_1a',
+            token=position['token1'],
+            protocol=position['protocol_a'],
+            weight=position['l_a'],
+            entry_rate=position['entry_lend_rate_1a'],
+            entry_price=position['entry_price_1a'],
+            get_rate=get_rate,
+            get_price_with_fallback=get_price_with_fallback,
+            deployment=deployment,
+            segment_data=segment_data,
+            segment_type=segment_type,
+            borrow_token=None,
+            borrow_price_live=None,
+            borrow_price_entry=None,
+            borrow_weight_value=None,
+            liquidation_threshold=None,
+            borrow_weight=1.0
+        ))
+
+        # ========== LEG 2: Protocol B - Short Perp token3 ==========
+        entry_rate_3b = position['entry_borrow_rate_3b']
+        entry_price_3b = position['entry_price_3b']
+
+        def safe_value(val):
+            """Check if value is valid (not None, not NaN). Allows zero values."""
+            if val is None:
+                return False
+            if isinstance(val, (pd.Series, pd.DataFrame)):
+                if len(val) == 0:
+                    return False
+                val = val.iloc[0] if isinstance(val, pd.Series) else val.iloc[0, 0]
+            if not pd.notna(val):
+                return False
+            try:
+                float(val)
+                return True
+            except (TypeError, ValueError):
+                return False
+
+        if is_live_segment:
+            live_rate_3b = get_rate(position['token3'], position['protocol_b'], 'borrow_apr')
+            live_price_3b = get_price_with_fallback(position['token3'], position['protocol_b'])
+            segment_entry_rate_3b = segment_data.get('opening_borrow_rate_3b')
+            segment_entry_price_3b = segment_data.get('opening_price_3b')
+        else:
+            segment_entry_rate_3b = segment_data.get('opening_borrow_rate_3b')
+            segment_entry_price_3b = segment_data.get('opening_price_3b')
+            live_rate_3b = float(segment_data.get('closing_borrow_rate_3b')) if segment_data.get('closing_borrow_rate_3b') is not None else None
+            live_price_3b = float(segment_data.get('closing_price_3b')) if segment_data.get('closing_price_3b') is not None else None
+
+        token_amount_3b = segment_data.get('opening_token_amount_3b')
+        perp_fee = get_borrow_fee(position['token3'], position['protocol_b'])
+
+        # Short perp liq: liquidated when price rises 2x (100% increase from current price)
+        PERP_LIQ_MULTIPLIER = 2.0
+        entry_liq_dist_str = "N/A"
+        live_liq_dist_str = "N/A"
+        liq_price_str = "N/A"
+
+        if safe_value(live_price_3b) and float(live_price_3b) > 0:
+            perp_liq_price = float(live_price_3b) * PERP_LIQ_MULTIPLIER
+            live_liq_dist_pct = (perp_liq_price - float(live_price_3b)) / float(live_price_3b)
+            live_liq_dist_str = f"{live_liq_dist_pct * 100:+.1f}%"
+            liq_price_str = f"${perp_liq_price:,.4f}"
+            if safe_value(segment_entry_price_3b) and float(segment_entry_price_3b) > 0:
+                entry_liq_dist_pct = (perp_liq_price - float(segment_entry_price_3b)) / float(segment_entry_price_3b)
+                entry_liq_dist_str = f"{entry_liq_dist_pct * 100:+.1f}%"
+
+        if is_live_segment:
+            perp_row = {
+                'Protocol': position['protocol_b'],
+                'Token': position['token3'],
+                'Action': 'Short Perp',
+                'Position Entry Rate (%)': f"{entry_rate_3b * 100:.2f}" if safe_value(entry_rate_3b) else "N/A",
+                'Entry Rate (%)': f"{float(segment_entry_rate_3b) * 100:.2f}" if safe_value(segment_entry_rate_3b) else "N/A",
+                'Live Rate (%)': f"{float(live_rate_3b) * 100:.2f}" if safe_value(live_rate_3b) else "N/A",
+                'Entry Price ($)': f"{float(segment_entry_price_3b):.4f}" if safe_value(segment_entry_price_3b) else "N/A",
+                'Live Price ($)': f"{float(live_price_3b):.4f}" if safe_value(live_price_3b) else "N/A",
+                'Liquidation Price ($)': liq_price_str,
+                'Token Amount': f"{float(token_amount_3b):,.5f}" if safe_value(token_amount_3b) else "N/A",
+                'Token Rebalance Required': "TBD",
+                'Fee Rate (%)': f"{perp_fee * 100:.4f}" if safe_value(perp_fee) else "N/A",
+                'Entry Liquidation Distance': entry_liq_dist_str,
+                'Live Liquidation Distance': live_liq_dist_str,
+                'Segment Earnings': "TBD",
+                'Segment Fees': "TBD",
+            }
+        else:
+            perp_row = {
+                'Protocol': position['protocol_b'],
+                'Token': position['token3'],
+                'Action': 'Short Perp',
+                'Position Entry Rate (%)': f"{entry_rate_3b * 100:.2f}" if safe_value(entry_rate_3b) else "N/A",
+                'Segment Entry Rate (%)': f"{float(segment_entry_rate_3b) * 100:.2f}" if safe_value(segment_entry_rate_3b) else "N/A",
+                'Exit Rate (%)': f"{float(live_rate_3b) * 100:.2f}" if safe_value(live_rate_3b) else "N/A",
+                'Segment Entry Price ($)': f"{float(segment_entry_price_3b):.4f}" if safe_value(segment_entry_price_3b) else "N/A",
+                'Exit Price ($)': f"{float(live_price_3b):.4f}" if safe_value(live_price_3b) else "N/A",
+                'Liquidation Price ($)': liq_price_str,
+                'Token Amount': f"{float(token_amount_3b):,.5f}" if safe_value(token_amount_3b) else "N/A",
+                'Token Rebalance Required': "TBD",
+                'Fee Rate (%)': f"{perp_fee * 100:.4f}" if safe_value(perp_fee) else "N/A",
+                'Segment Entry Liquidation Distance': entry_liq_dist_str,
+                'Exit Liquidation Distance': live_liq_dist_str,
+                'Segment Earnings': "TBD",
+                'Segment Fees': "TBD",
+            }
+
+        detail_data.append(perp_row)
+
+        detail_df = pd.DataFrame(detail_data)
+        st.dataframe(detail_df, width="stretch")
 
     @staticmethod
     def render_strategy_modal_table(strategy: dict, deployment_usd: float) -> None:
@@ -2636,8 +2766,164 @@ class PerpBorrowingRenderer(StrategyRendererBase):
         rebalances: Optional[List] = None,
         segment_type: str = 'live'
     ) -> None:
-        st.info("🚧 Perp Borrowing position detail table — coming soon!")
-        st.caption("Position tracking for perp borrowing is not yet implemented.")
+        """Render 3-leg detail table: Stablecoin Lend (1A) + Spot Borrow (2A) + Long Perp (3B)."""
+        deployment = position['deployment_usd']
+
+        # Build segment_data (same pattern as RecursiveLendingRenderer)
+        if not rebalances or len(rebalances) == 0:
+            segment_data = build_segment_data_from_position(position)
+        else:
+            segment_data = build_segment_data_from_rebalance(rebalances[-1])
+
+        is_live_segment = segment_data['is_live_segment']
+
+        # Get live prices for leg 1A/2A (needed for borrow leg liq calculation)
+        if segment_type == 'historical' and segment_data:
+            token2_price_live = float(segment_data.get('closing_price_2a')) if segment_data.get('closing_price_2a') is not None else None
+            token1_price_live = float(segment_data.get('closing_price_1a')) if segment_data.get('closing_price_1a') is not None else None
+        else:
+            token2_price_live = get_price_with_fallback(position['token2'], position['protocol_a'])
+            token1_price_live = get_price_with_fallback(position['token1'], position['protocol_a'])
+
+        detail_data = []
+
+        # ========== LEG 1: Protocol A - Lend Stablecoin (token1) ==========
+        detail_data.append(RecursiveLendingRenderer._build_lend_leg_row(
+            position=position,
+            leg_id='leg_1a',
+            token=position['token1'],
+            protocol=position['protocol_a'],
+            weight=position['l_a'],
+            entry_rate=position['entry_lend_rate_1a'],
+            entry_price=position['entry_price_1a'],
+            get_rate=get_rate,
+            get_price_with_fallback=get_price_with_fallback,
+            deployment=deployment,
+            segment_data=segment_data,
+            segment_type=segment_type,
+            borrow_token=position['token2'],
+            borrow_price_live=token2_price_live,
+            borrow_price_entry=position['entry_price_2a'],
+            borrow_weight_value=position['b_a'],
+            liquidation_threshold=position.get('entry_liquidation_threshold_1a', 0.0),
+            borrow_weight=position.get('entry_borrow_weight_2a', 1.0)
+        ))
+
+        # ========== LEG 2: Protocol A - Borrow Spot (token2) ==========
+        detail_data.append(RecursiveLendingRenderer._build_borrow_leg_row(
+            position=position,
+            leg_id='leg_2a',
+            token=position['token2'],
+            protocol=position['protocol_a'],
+            weight=position['b_a'],
+            entry_rate=position['entry_borrow_rate_2a'],
+            entry_price=position['entry_price_2a'],
+            collateral_ratio=position.get('entry_collateral_ratio_1a', 0.0),
+            liquidation_threshold=position.get('entry_liquidation_threshold_1a', 0.0),
+            get_rate=get_rate,
+            get_borrow_fee=get_borrow_fee,
+            get_price_with_fallback=get_price_with_fallback,
+            deployment=deployment,
+            segment_data=segment_data,
+            segment_type=segment_type,
+            collateral_token=position['token1'],
+            collateral_price_live=token1_price_live,
+            collateral_price_entry=position['entry_price_1a'],
+            borrow_weight=position.get('entry_borrow_weight_2a', 1.0)
+        ))
+
+        # ========== LEG 3: Protocol B - Long Perp (token3) ==========
+        def safe_value(val):
+            """Check if value is valid (not None, not NaN). Allows zero values."""
+            if val is None:
+                return False
+            if isinstance(val, (pd.Series, pd.DataFrame)):
+                if len(val) == 0:
+                    return False
+                val = val.iloc[0] if isinstance(val, pd.Series) else val.iloc[0, 0]
+            if not pd.notna(val):
+                return False
+            try:
+                float(val)
+                return True
+            except (TypeError, ValueError):
+                return False
+
+        entry_rate_3b = position['entry_borrow_rate_3b']  # Funding rate (positive = longs pay shorts)
+        entry_price_3b = position['entry_price_3b']
+
+        if is_live_segment:
+            live_rate_3b = get_rate(position['token3'], position['protocol_b'], 'borrow_apr')
+            live_price_3b = get_price_with_fallback(position['token3'], position['protocol_b'])
+            segment_entry_rate_3b = segment_data.get('opening_borrow_rate_3b')
+            segment_entry_price_3b = segment_data.get('opening_price_3b')
+        else:
+            segment_entry_rate_3b = segment_data.get('opening_borrow_rate_3b')
+            segment_entry_price_3b = segment_data.get('opening_price_3b')
+            live_rate_3b = float(segment_data.get('closing_borrow_rate_3b')) if segment_data.get('closing_borrow_rate_3b') is not None else None
+            live_price_3b = float(segment_data.get('closing_price_3b')) if segment_data.get('closing_price_3b') is not None else None
+
+        token_amount_3b = segment_data.get('opening_token_amount_3b')
+        perp_fee = get_borrow_fee(position['token3'], position['protocol_b'])
+
+        # Long perp liq: liquidated when price drops 20% below current price
+        PERP_LIQ_DISTANCE = 0.20
+        entry_liq_dist_str = "N/A"
+        live_liq_dist_str = "N/A"
+        liq_price_str = "N/A"
+
+        if safe_value(live_price_3b) and float(live_price_3b) > 0:
+            perp_liq_price = float(live_price_3b) * (1.0 - PERP_LIQ_DISTANCE)
+            live_liq_dist_pct = -PERP_LIQ_DISTANCE  # Negative: price must drop
+            live_liq_dist_str = f"{live_liq_dist_pct * 100:+.1f}%"
+            liq_price_str = f"${perp_liq_price:,.4f}"
+            if safe_value(segment_entry_price_3b) and float(segment_entry_price_3b) > 0:
+                entry_liq_dist_pct = (perp_liq_price - float(segment_entry_price_3b)) / float(segment_entry_price_3b)
+                entry_liq_dist_str = f"{entry_liq_dist_pct * 100:+.1f}%"
+
+        if is_live_segment:
+            perp_row = {
+                'Protocol': position['protocol_b'],
+                'Token': position['token3'],
+                'Action': 'Long Perp',
+                'Position Entry Rate (%)': f"{entry_rate_3b * 100:.2f}" if safe_value(entry_rate_3b) else "N/A",
+                'Entry Rate (%)': f"{float(segment_entry_rate_3b) * 100:.2f}" if safe_value(segment_entry_rate_3b) else "N/A",
+                'Live Rate (%)': f"{float(live_rate_3b) * 100:.2f}" if safe_value(live_rate_3b) else "N/A",
+                'Entry Price ($)': f"{float(segment_entry_price_3b):.4f}" if safe_value(segment_entry_price_3b) else "N/A",
+                'Live Price ($)': f"{float(live_price_3b):.4f}" if safe_value(live_price_3b) else "N/A",
+                'Liquidation Price ($)': liq_price_str,
+                'Token Amount': f"{float(token_amount_3b):,.5f}" if safe_value(token_amount_3b) else "N/A",
+                'Token Rebalance Required': "TBD",
+                'Fee Rate (%)': f"{perp_fee * 100:.4f}" if safe_value(perp_fee) else "N/A",
+                'Entry Liquidation Distance': entry_liq_dist_str,
+                'Live Liquidation Distance': live_liq_dist_str,
+                'Segment Earnings': "TBD",
+                'Segment Fees': "TBD",
+            }
+        else:
+            perp_row = {
+                'Protocol': position['protocol_b'],
+                'Token': position['token3'],
+                'Action': 'Long Perp',
+                'Position Entry Rate (%)': f"{entry_rate_3b * 100:.2f}" if safe_value(entry_rate_3b) else "N/A",
+                'Segment Entry Rate (%)': f"{float(segment_entry_rate_3b) * 100:.2f}" if safe_value(segment_entry_rate_3b) else "N/A",
+                'Exit Rate (%)': f"{float(live_rate_3b) * 100:.2f}" if safe_value(live_rate_3b) else "N/A",
+                'Segment Entry Price ($)': f"{float(segment_entry_price_3b):.4f}" if safe_value(segment_entry_price_3b) else "N/A",
+                'Exit Price ($)': f"{float(live_price_3b):.4f}" if safe_value(live_price_3b) else "N/A",
+                'Liquidation Price ($)': liq_price_str,
+                'Token Amount': f"{float(token_amount_3b):,.5f}" if safe_value(token_amount_3b) else "N/A",
+                'Token Rebalance Required': "TBD",
+                'Fee Rate (%)': f"{perp_fee * 100:.4f}" if safe_value(perp_fee) else "N/A",
+                'Segment Entry Liquidation Distance': entry_liq_dist_str,
+                'Exit Liquidation Distance': live_liq_dist_str,
+                'Segment Earnings': "TBD",
+                'Segment Fees': "TBD",
+            }
+
+        detail_data.append(perp_row)
+
+        detail_df = pd.DataFrame(detail_data)
+        st.dataframe(detail_df, width="stretch")
 
     @staticmethod
     def render_strategy_modal_table(strategy: dict, deployment_usd: float) -> None:

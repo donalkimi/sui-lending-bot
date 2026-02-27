@@ -98,7 +98,8 @@ class PerpLendingCalculator(StrategyCalculatorBase):
         self,
         positions: Dict[str, float],
         rates: Dict[str, float],
-        fees: Dict[str, float]
+        fees: Dict[str, float],
+        basis_cost: float = 0.0
     ) -> float:
         """
         Calculate net APR for perp lending (after fees).
@@ -107,27 +108,23 @@ class PerpLendingCalculator(StrategyCalculatorBase):
         Price PnL is tracked separately and NOT included in APR calculation.
 
         Formula:
-            net_apr = gross_apr - (B_B × perp_fees)
+            net_apr = gross_apr - (B_B × perp_fees) - basis_cost
 
         Args:
             positions: Dict with l_a, b_b
             rates: Dict with lend_total_apr_1A, borrow_total_apr_3B (funding rate)
             fees: Dict (not used, perp fees are fixed in settings)
+            basis_cost: One-time round-trip spot/perp spread cost (decimal, default 0.0)
 
         Returns:
             Net APR as decimal (e.g., 0.0524 = 5.24%)
         """
-        # Calculate gross APR
         gross_apr = self.calculate_gross_apr(positions, rates)
 
-        # Costs (perp entry/exit fees amortized over 1 year)
         b_b = positions['b_b']
-        perp_fee_pct = 2.0 * settings.BLUEFIN_TAKER_FEE  # Entry + exit
-        upfront_fees_amortized = b_b * perp_fee_pct  # Already annualized
+        perp_fee = b_b * 2.0 * settings.BLUEFIN_TAKER_FEE  # One-time $$$ cost: fee_rate × B_B
 
-        net_apr = gross_apr - upfront_fees_amortized
-
-        return net_apr
+        return gross_apr - perp_fee - basis_cost
 
     def calculate_price_pnl(
         self,
@@ -244,7 +241,6 @@ class PerpLendingCalculator(StrategyCalculatorBase):
 
         # Calculate APRs
         gross_apr = self.calculate_gross_apr(positions=positions, rates=rates)
-        net_apr = self.calculate_net_apr(positions=positions, rates=rates, fees={})
 
         # Calculate APR breakdown components for display
         l_a = positions['l_a']
@@ -252,21 +248,26 @@ class PerpLendingCalculator(StrategyCalculatorBase):
 
         spot_lending_apr = l_a * lend_total_apr_1A
         funding_rate_apr = b_b * borrow_total_apr_3B
-        perp_fees_apr = b_b * 2.0 * settings.BLUEFIN_TAKER_FEE
+
+        # One-time $$$ costs (as fraction of deployment_usd)
+        perp_fee   = b_b * 2.0 * settings.BLUEFIN_TAKER_FEE  # fee_rate × B_B
 
         # Basis spread cost: round-trip bid/ask friction on the spot+perp hedge.
         # basis_spread = basis_ask - basis_bid from spot_perp_basis table.
         # None when basis data is unavailable; cost treated as 0 in that case.
         basis_spread = kwargs.get('basis_spread')
         basis_mid    = kwargs.get('basis_mid')
-        basis_cost = b_b * basis_spread if basis_spread is not None else 0.0
+        basis_cost   = b_b * basis_spread if basis_spread is not None else 0.0  # basis_spread × B_B
 
-        # Time-adjusted APRs: upfront fee = perp taker fees + basis spread cost.
-        # Costs are one-time upfront payments; gross_apr is the ongoing daily earn rate.
-        total_upfront_fee = perp_fees_apr + basis_cost
-        apr5  = gross_apr - total_upfront_fee * 365.0 / 5
-        apr30 = gross_apr - total_upfront_fee * 365.0 / 30
-        apr90 = gross_apr - total_upfront_fee * 365.0 / 90
+        net_apr = self.calculate_net_apr(positions=positions, rates=rates, fees={},
+                                         basis_cost=basis_cost)
+
+        # Time-adjusted APRs: earn N days of gross APR, subtract the one-time upfront cost, annualise.
+        # Formula: APR(N days) = (gross_apr × N/365 - total_upfront_fee) × 365/N
+        total_upfront_fee = perp_fee + basis_cost
+        apr5  = (gross_apr * 5  / 365 - total_upfront_fee) * 365 / 5
+        apr30 = (gross_apr * 30 / 365 - total_upfront_fee) * 365 / 30
+        apr90 = (gross_apr * 90 / 365 - total_upfront_fee) * 365 / 90
         days_to_breakeven = (total_upfront_fee * 365.0 / gross_apr) if gross_apr > 0 else float('inf')
 
         # Liquidation distances
@@ -297,7 +298,7 @@ class PerpLendingCalculator(StrategyCalculatorBase):
             'apr_gross': gross_apr,
             'spot_lending_apr': spot_lending_apr,
             'funding_rate_apr': funding_rate_apr,
-            'perp_fees_apr': perp_fees_apr,
+            'perp_fees_apr': perp_fee,
             'basis_spread': basis_spread,
             'basis_mid': basis_mid,
             'basis_cost': basis_cost,
@@ -330,6 +331,21 @@ class PerpLendingCalculator(StrategyCalculatorBase):
 
             # Validation
             'valid': True,
+            'strategy_type': self.get_strategy_type(),
+
+            # Backwards compat alias (create_position reads 'net_apr'; all other calculators use 'apr_net')
+            'net_apr': net_apr,
+
+            # Fields not applicable to perp_lending — store as NULL in DB
+            'collateral_ratio_1a': None,
+            'liquidation_threshold_1a': None,
+            'borrow_fee_2a': None,
+            'available_borrow_2a': None,
+            'borrow_weight_2a': None,
+            'collateral_ratio_2b': None,
+            'liquidation_threshold_2b': None,
+            'borrow_fee_3b': None,
+            'borrow_weight_3b': None,
 
             # Note: Price PnL calculated separately via calculate_price_pnl()
         }

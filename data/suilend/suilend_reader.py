@@ -11,13 +11,14 @@ import sys
 from pathlib import Path
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
-from config.settings import SUI_RPC_URL
+from config.settings import SUI_RPC_URL, SUI_FALLBACK_RPC_URL
 
 
 @dataclass
 class SuilendReaderConfig:
     node_script_path: str  # e.g. "data/suilend_reader-sdk.mjs"
     rpc_url: str = SUI_RPC_URL
+    fallback_rpc_url: str = SUI_FALLBACK_RPC_URL
 
 
 class SuilendReader:
@@ -129,6 +130,7 @@ class SuilendReader:
     def _get_all_reserves(self) -> List[Dict[str, Any]]:
         env = os.environ.copy()
         env["SUI_RPC_URL"] = self.config.rpc_url
+        env["SUI_FALLBACK_RPC_URL"] = self.config.fallback_rpc_url
 
         try:
             res = subprocess.run(

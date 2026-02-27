@@ -433,6 +433,7 @@ def display_strategies_table(
             strategy_display = 'Unknown'
 
         #print(row)
+        basis_spread = row.get('basis_spread') if 'basis_spread' in row.index else None
         table_data.append({
             '_idx': idx,  # Hidden index for selection
             'Strategy Type': strategy_display,
@@ -442,6 +443,7 @@ def display_strategies_table(
             'Net APR': row['apr_net'] * 100,  # Convert decimal to percentage
             'APR 5d': row.get('apr5', 0) * 100,  # APR if exit after 5 days
             'APR 30d': row.get('apr30', 0) * 100,  # 30-day average
+            'Basis (bps)': basis_spread * 10000 if basis_spread is not None else None,
             'Days to Breakeven': row.get('days_to_breakeven', 0),  # Days to recover fees
             'Max Size': row.get('max_size', 0),  # Max position size
         })
@@ -465,7 +467,7 @@ def display_strategies_table(
             "Net APR": st.column_config.NumberColumn(
                 "Net APR",
                 format="%.2f%%",
-                help="Current instantaneous APR after all fees"
+                help="Annual return if held 1 year, after all fees including basis spread cost. Blank basis = basis not included."
             ),
             "APR 5d": st.column_config.NumberColumn(
                 "APR 5d",
@@ -476,6 +478,11 @@ def display_strategies_table(
                 "APR 30d",
                 format="%.2f%%",
                 help="Annualized return if you exit after 30 days (includes upfront fees)"
+            ),
+            "Basis (bps)": st.column_config.NumberColumn(
+                "Basis (bps)",
+                format="%.1f",
+                help="Round-trip bid/ask spread between spot and perp (entry + exit), in basis points. Blank = no data — basis cost excluded from all APR figures."
             ),
             "Days to Breakeven": st.column_config.NumberColumn(
                 "Days to Breakeven",
@@ -570,6 +577,79 @@ def calculate_position_returns(strategy: Dict, deployment_usd: float) -> Dict:
         'yearly_return_usd': yearly_return_usd,
         'total_fees_usd': total_fees_usd,
         'days_to_breakeven': days_to_breakeven
+    }
+
+
+def _build_preview_position(strategy: dict, deployment_usd: float) -> dict:
+    """
+    Build a mock position dict from a strategy dict for modal preview.
+
+    Converts strategy analysis fields into the position-like format expected by
+    render_detail_table(). Entry and live values are both set to current market
+    rates/prices, representing what the position looks like immediately after deployment.
+
+    Args:
+        strategy: Strategy dict from all_results (contains current market rates/prices)
+        deployment_usd: Hypothetical deployment amount in USD
+
+    Returns:
+        dict suitable for pd.Series() and passing to render_detail_table()
+    """
+    p1a = strategy['P1_A']
+    p2a = strategy.get('P2_A')
+    p2b = strategy.get('P2_B')
+    p3b = strategy.get('P3_B')
+    l_a = strategy['l_a']
+    b_a = _safe_float(strategy.get('b_a', 0.0))
+    l_b = _safe_float(strategy.get('l_b', 0.0))
+    b_b = _safe_float(strategy.get('b_b', 0.0))
+    strategy_type = strategy.get('strategy_type', '')
+
+    # Token amounts: weight × deployment / price
+    # For perp_borrowing, l_b is the long perp weight (the 3rd leg)
+    # For all others, b_b is the 4th leg borrow weight
+    ta_1a = (l_a * deployment_usd / p1a) if p1a and p1a > 0 else 0.0
+    ta_2a = (b_a * deployment_usd / p2a) if p2a and p2a > 0 and b_a > 0 else 0.0
+    ta_2b = (l_b * deployment_usd / p2b) if p2b and p2b > 0 and l_b > 0 else 0.0
+    if strategy_type in ('perp_borrowing', 'perp_borrowing_recursive'):
+        ta_3b = (l_b * deployment_usd / p3b) if p3b and p3b > 0 and l_b > 0 else 0.0
+    else:
+        ta_3b = (b_b * deployment_usd / p3b) if p3b and p3b > 0 and b_b > 0 else 0.0
+
+    return {
+        'deployment_usd': deployment_usd,
+        'l_a': l_a, 'b_a': b_a, 'l_b': l_b, 'b_b': b_b,
+        'strategy_type': strategy_type,
+        'token1': strategy['token1'],
+        'token2': strategy.get('token2'),
+        'token3': strategy.get('token3'),
+        'token1_contract': strategy.get('token1_contract'),
+        'token2_contract': strategy.get('token2_contract'),
+        'token3_contract': strategy.get('token3_contract'),
+        'protocol_a': strategy['protocol_a'],
+        'protocol_b': strategy.get('protocol_b'),
+        # Entry rates = current market rates (preview: entering at current market)
+        'entry_lend_rate_1a': _safe_float(strategy.get('lend_rate_1a', 0.0)),
+        'entry_borrow_rate_2a': _safe_float(strategy.get('borrow_rate_2a', 0.0)),
+        'entry_lend_rate_2b': _safe_float(strategy.get('lend_rate_2b', 0.0)),
+        'entry_borrow_rate_3b': _safe_float(strategy.get('borrow_rate_3b', 0.0)),
+        # Entry prices = current market prices
+        'entry_price_1a': p1a,
+        'entry_price_2a': p2a if p2a is not None else 1.0,
+        'entry_price_2b': p2b if p2b is not None else 1.0,
+        'entry_price_3b': p3b if p3b is not None else 1.0,
+        # Risk params from strategy
+        'entry_liquidation_threshold_1a': _safe_float(strategy.get('liquidation_threshold_1a', 0.0)),
+        'entry_collateral_ratio_1a': _safe_float(strategy.get('collateral_ratio_1a', 0.0)),
+        'entry_liquidation_threshold_2b': _safe_float(strategy.get('liquidation_threshold_2b', 0.0)),
+        'entry_collateral_ratio_2b': _safe_float(strategy.get('collateral_ratio_2b', 0.0)),
+        'entry_borrow_weight_2a': _safe_float(strategy.get('borrow_weight_2a', 1.0)),
+        'entry_borrow_weight_3b': _safe_float(strategy.get('borrow_weight_3b', 1.0)),
+        # Token amounts computed from deployment
+        'entry_token_amount_1a': ta_1a,
+        'entry_token_amount_2a': ta_2a,
+        'entry_token_amount_2b': ta_2b,
+        'entry_token_amount_3b': ta_3b,
     }
 
 
@@ -697,9 +777,52 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
 
     try:
         renderer_cls = get_strategy_renderer(strategy_type)
-        renderer_cls.render_strategy_modal_table(strategy, deployment_usd)
+
+        # Build mock position and rate helpers for preview (same format as Positions tab)
+        mock_position = pd.Series(_build_preview_position(strategy, deployment_usd))
+
+        _t1 = strategy['token1']
+        _t2 = strategy.get('token2')
+        _t3 = strategy.get('token3')
+        _pa = strategy['protocol_a']
+        _pb = strategy.get('protocol_b')
+
+        _rate_map = {
+            (_t1, _pa): {'lend_apr': _safe_float(strategy.get('lend_rate_1a', 0.0)), 'borrow_apr': 0.0},
+            (_t2, _pa): {'lend_apr': 0.0, 'borrow_apr': _safe_float(strategy.get('borrow_rate_2a', 0.0))},
+            (_t2, _pb): {'lend_apr': _safe_float(strategy.get('lend_rate_2b', 0.0)), 'borrow_apr': 0.0},
+            (_t3, _pb): {'lend_apr': 0.0, 'borrow_apr': _safe_float(strategy.get('borrow_rate_3b', 0.0))},
+        }
+        _price_map = {
+            (_t1, _pa): strategy['P1_A'],
+            (_t2, _pa): strategy.get('P2_A'),
+            (_t2, _pb): strategy.get('P2_B'),
+            (_t3, _pb): strategy.get('P3_B'),
+        }
+        _fee_map = {
+            (_t2, _pa): _safe_float(strategy.get('borrow_fee_2a', 0.0)),
+            (_t3, _pb): _safe_float(strategy.get('borrow_fee_3b', 0.0)),
+        }
+
+        def _get_rate(token, protocol, rate_type):
+            return _rate_map.get((token, protocol), {}).get(rate_type, 0.0)
+
+        def _get_borrow_fee(token, protocol):
+            return _fee_map.get((token, protocol), 0.0)
+
+        def _get_price(token, protocol):
+            return _price_map.get((token, protocol))
+
+        renderer_cls.render_detail_table(
+            mock_position, _get_rate, _get_borrow_fee, _get_price,
+            rebalances=None, segment_type='live'
+        )
     except (ValueError, NotImplementedError) as e:
         st.warning(f"No detail table renderer registered for strategy type: `{strategy_type}` ({e})")
+    except KeyError as e:
+        st.warning(f"Missing strategy field for detail table: {e}")
+        print(f"⚠️  [MODAL] KeyError building preview for {strategy_type}: {e}")
+        print(f"    Available strategy keys: {list(strategy.keys())}")
 
     st.markdown("")  # Tighter spacing instead of divider
 
@@ -818,7 +941,7 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
                 'b_b': b_b
             }
 
-            # Create position (all strategies are 4-leg levered)
+            # Create position
             position_id = service.create_position(
                 strategy_row=pd.Series(strategy) if isinstance(strategy, dict) else strategy,
                 positions=positions,
@@ -831,6 +954,7 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
                 protocol_a=strategy['protocol_a'],
                 protocol_b=strategy['protocol_b'],
                 deployment_usd=deployment_usd,
+                strategy_type=strategy.get('strategy_type', 'recursive_lending'),
                 is_paper_trade=True,
                 notes=""
             )

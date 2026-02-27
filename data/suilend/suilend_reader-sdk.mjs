@@ -10,8 +10,10 @@ import { execSync } from "child_process";
 const LENDING_MARKET_ID = "0x84030d26d85eaa7035084a057f2f11f701b7e2e4eda87551becbc7c97505ece1";
 const LENDING_MARKET_TYPE = "0xf95b06141ed4a174f239417323bde3f209b972f5930d8521ea38a52aff3a6ddf::suilend::MAIN_POOL";
 const RPC_URL = process.env.SUI_RPC_URL || "https://rpc.mainnet.sui.io";
+const FALLBACK_RPC_URL = process.env.SUI_FALLBACK_RPC_URL || "https://sui-rpc.publicnode.com";
+const RPC_URLS = [...new Set([RPC_URL, FALLBACK_RPC_URL])];
 const MS_PER_YEAR = 365 * 24 * 60 * 60 * 1000;
-const MAX_RETRIES = 1;  // Only retry once
+const MAX_RETRIES = 2;  // Retry up to 2 times (3 total attempts)
 const RETRY_DELAY_MS = 2000;
 
 function sleep(ms) {
@@ -21,9 +23,13 @@ function sleep(ms) {
 async function main() {
   for (let attempt = 1; attempt <= MAX_RETRIES + 1; attempt++) {
     try {
+      const currentUrl = RPC_URLS[Math.min(attempt - 1, RPC_URLS.length - 1)];
+      if (attempt > 1 && currentUrl !== RPC_URLS[attempt - 2]) {
+        console.error(`[Suilend] Switching to fallback RPC: ${currentUrl}`);
+      }
       console.error(`[Suilend] Fetching market data (attempt ${attempt}/${MAX_RETRIES + 1})`);
 
-      const suiClient = new SuiClient({ url: RPC_URL });
+      const suiClient = new SuiClient({ url: currentUrl });
       const suilendClient = await SuilendClient.initialize(
         LENDING_MARKET_ID,
         LENDING_MARKET_TYPE,
@@ -221,15 +227,9 @@ async function main() {
       return;
 
     } catch (err) {
-      const isRateLimitOrUnavailable =
-        err.status === 503 || err.status === 429 ||
-        err.message?.includes('503') || err.message?.includes('429') ||
-        err.message?.includes('WebSocket') ||
-        err.message?.includes('Stream is closed');
-
       const isLastAttempt = attempt === MAX_RETRIES + 1;
 
-      if (isRateLimitOrUnavailable && !isLastAttempt) {
+      if (!isLastAttempt) {
         console.error(`[Suilend] Fetch failed (${err.message}). Retrying in ${RETRY_DELAY_MS}ms...`);
         await sleep(RETRY_DELAY_MS);
         continue;

@@ -30,8 +30,9 @@ def get_bool_env(key: str, default: bool = False) -> bool:
 USE_CLOUD_DB = get_bool_env('USE_CLOUD_DB', default=True)
 SUPABASE_URL = os.getenv('SUPABASE_URL')  # PostgreSQL connection string
 
-# RPC Configuration  
-SUI_RPC_URL = os.getenv('SUI_RPC_URL', 'https://side-flashy-isle.sui-mainnet.quiknode.pro/6acae20a62b8a6842e8d407b4f6d7f98372dc8bb/')
+# RPC Configuration
+SUI_RPC_URL = os.getenv('SUI_RPC_URL', 'https://rpc.mainnet.sui.io')
+SUI_FALLBACK_RPC_URL = os.getenv('SUI_FALLBACK_RPC_URL', 'https://sui-rpc.publicnode.com')
 
 # Alert Configuration
 SLACK_WEBHOOK_URL = os.getenv('SLACK_WEBHOOK_URL', 'https://hooks.slack.com/triggers/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')

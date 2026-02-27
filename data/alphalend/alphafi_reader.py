@@ -11,13 +11,14 @@ import sys
 from pathlib import Path
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
-from config.settings import SUI_RPC_URL
+from config.settings import SUI_RPC_URL, SUI_FALLBACK_RPC_URL
 
 
 @dataclass
 class AlphaFiReaderConfig:
     node_script_path: str  # e.g. "data/alphalend/alphalend_reader-sdk.mjs" or absolute path
     rpc_url: str = SUI_RPC_URL
+    fallback_rpc_url: str = SUI_FALLBACK_RPC_URL
     network: str = "mainnet"
 
 
@@ -148,6 +149,7 @@ class AlphaFiReader:
     def _get_all_markets(self) -> List[Dict[str, Any]]:
         env = os.environ.copy()
         env["SUI_RPC_URL"] = self.config.rpc_url
+        env["SUI_FALLBACK_RPC_URL"] = self.config.fallback_rpc_url
         env["ALPHAFI_NETWORK"] = self.config.network
 
         try:
