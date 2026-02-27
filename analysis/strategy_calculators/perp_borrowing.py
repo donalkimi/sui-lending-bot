@@ -183,6 +183,7 @@ class PerpBorrowingCalculator(StrategyCalculatorBase):
         # None when basis data is unavailable; cost treated as 0 in that case.
         basis_spread = kwargs.get('basis_spread')
         basis_mid    = kwargs.get('basis_mid')
+        basis_ask    = kwargs.get('basis_ask')   # entry-side basis for perp_borrowing (long perp at ask)
         basis_cost = l_b * basis_spread if basis_spread is not None else 0.0
 
         net_apr = self.calculate_net_apr(positions, rates, fees, basis_cost=basis_cost)
@@ -197,6 +198,8 @@ class PerpBorrowingCalculator(StrategyCalculatorBase):
         days_to_breakeven = (total_upfront_fee * 365.0 / gross_apr) if gross_apr > 0 else float('inf')
 
         max_size = (available_borrow / b_a) if (available_borrow and b_a > 0) else float('inf')
+
+        _t2_a = b_a / price_2A if price_2A > 0 else 0.0
 
         return {
             # Identity
@@ -218,6 +221,7 @@ class PerpBorrowingCalculator(StrategyCalculatorBase):
             'perp_fees_apr':          l_b * 2.0 * settings.BLUEFIN_TAKER_FEE,
             'basis_spread':           basis_spread,
             'basis_mid':              basis_mid,
+            'basis_ask':              basis_ask,
             'basis_cost':             basis_cost,
             'total_upfront_fee':      total_upfront_fee,
             'basis_cost_included':    basis_spread is not None,
@@ -237,6 +241,12 @@ class PerpBorrowingCalculator(StrategyCalculatorBase):
             'P2_A': price_2A,
             'P2_B': price_2A,   # token2 not on Bluefin spot; reuse same price
             'P3_B': price_3B,
+
+            # Token amounts (tokens per $1 deployed) — token-count matching for perp leg
+            'T1_A': l_a / price_1A if price_1A > 0 else 0.0,
+            'T2_A': _t2_a,
+            'T2_B': 0.0,  # tokens were sold, not transferred to Protocol B
+            'T3_B': _t2_a,  # perp = borrowed token count
 
             # Rates
             'lend_rate_1a':   lend_total_apr_1A,

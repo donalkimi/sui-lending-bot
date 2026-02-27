@@ -190,6 +190,12 @@ class StablecoinLendingCalculator(StrategyCalculatorBase):
             'P2_B': price_1A,
             'P3_B': price_1A,
 
+            # Token amounts (tokens per $1 deployed)
+            'T1_A': 1.0 / price_1A if price_1A > 0 else 0.0,
+            'T2_A': 0.0,
+            'T2_B': 0.0,
+            'T3_B': 0.0,
+
             # Rates (required by dashboard)
             'lend_rate_1a': lend_total_apr_1A,
             'borrow_rate_2a': 0.0,  # No borrowing

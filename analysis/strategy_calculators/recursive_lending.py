@@ -343,6 +343,8 @@ class RecursiveLendingCalculator(StrategyCalculatorBase):
             apr90 = net_apr
             days_to_breakeven = 0.0
 
+            _t2_a = positions['b_a'] / price_2A if price_2A > 0 else 0.0
+
             return {
                 # Position multipliers
                 'l_a': positions['l_a'],
@@ -361,6 +363,18 @@ class RecursiveLendingCalculator(StrategyCalculatorBase):
                 # Risk metrics
                 'liquidation_distance': self.liq_dist_input,
                 'max_size': max_size,
+
+                # Prices (required by dashboard)
+                'P1_A': price_1A,
+                'P2_A': price_2A,
+                'P2_B': price_2B,
+                'P3_B': price_3B,
+
+                # Token amounts (tokens per $1 deployed)
+                'T1_A': positions['l_a'] / price_1A if price_1A > 0 else 0.0,
+                'T2_A': _t2_a,
+                'T2_B': _t2_a,  # same tokens as T2_A
+                'T3_B': positions['b_b'] / price_3B if price_3B > 0 else 0.0,
 
                 # Metadata
                 'valid': True,

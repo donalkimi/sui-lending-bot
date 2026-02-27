@@ -444,6 +444,67 @@ class RateAnalyzer:
             return None
         return float(ask) - float(bid)
 
+    def get_basis_bid(self, perp_proxy: str, spot_contract: str) -> float | None:
+        """Return basis_bid for a given pair, or None if unavailable."""
+        if self.perp_basis.empty or 'basis_bid' not in self.perp_basis.columns:
+            return None
+        mask = (
+            (self.perp_basis['perp_proxy'] == perp_proxy) &
+            (self.perp_basis['spot_contract'] == spot_contract)
+        )
+        rows = self.perp_basis[mask]
+        if rows.empty:
+            return None
+        val = rows.iloc[0]['basis_bid']
+        return float(val) if val is not None and not pd.isna(val) else None
+
+    def get_basis_ask(self, perp_proxy: str, spot_contract: str) -> float | None:
+        """Return basis_ask for a given pair, or None if unavailable."""
+        if self.perp_basis.empty or 'basis_ask' not in self.perp_basis.columns:
+            return None
+        mask = (
+            (self.perp_basis['perp_proxy'] == perp_proxy) &
+            (self.perp_basis['spot_contract'] == spot_contract)
+        )
+        rows = self.perp_basis[mask]
+        if rows.empty:
+            return None
+        val = rows.iloc[0]['basis_ask']
+        return float(val) if val is not None and not pd.isna(val) else None
+
+    def get_latest_basis(self, spot_contract: str) -> dict | None:
+        """
+        Return the latest basis data for a given spot_contract.
+
+        Args:
+            spot_contract: On-chain contract address of the spot token
+
+        Returns:
+            Dict with basis_bid, basis_ask, basis_mid, basis_spread, or None if unavailable.
+        """
+        if self.perp_basis.empty:
+            return None
+        required_cols = {'basis_bid', 'basis_ask'}
+        if not required_cols.issubset(self.perp_basis.columns):
+            return None
+        mask = self.perp_basis['spot_contract'] == spot_contract
+        rows = self.perp_basis[mask]
+        if rows.empty:
+            return None
+        row = rows.iloc[0]
+        bid = row['basis_bid']
+        ask = row['basis_ask']
+        if bid is None or ask is None or pd.isna(bid) or pd.isna(ask):
+            return None
+        bid = float(bid)
+        ask = float(ask)
+        return {
+            'basis_bid': bid,
+            'basis_ask': ask,
+            'basis_mid': (bid + ask) / 2.0,
+            'basis_spread': ask - bid,
+        }
+
     def _get_protocol_pairs(self) -> List[Tuple[str, str]]:
         """
         Get all valid protocol pairs.
@@ -970,6 +1031,8 @@ class RateAnalyzer:
                     # Round-trip basis spread and mid (None if no basis data available)
                     basis_spread = self.get_basis_spread(perp_contract_key, spot_contract)
                     basis_mid    = self.get_basis_mid(perp_contract_key, spot_contract)
+                    basis_bid    = self.get_basis_bid(perp_contract_key, spot_contract)
+                    basis_ask    = self.get_basis_ask(perp_contract_key, spot_contract)
 
                     # Call calculator
                     result = calculator.analyze_strategy(
@@ -986,7 +1049,9 @@ class RateAnalyzer:
                         liquidation_distance=self.liquidation_distance,
                         timestamp=self.timestamp,
                         basis_spread=basis_spread,
-                        basis_mid=basis_mid
+                        basis_mid=basis_mid,
+                        basis_bid=basis_bid,
+                        basis_ask=basis_ask
                     )
 
                     if result.get('valid', False):
@@ -1090,6 +1155,8 @@ class RateAnalyzer:
                         # Round-trip basis spread and mid (None if no basis data available)
                         basis_spread = self.get_basis_spread(perp_key, spot_contract)
                         basis_mid    = self.get_basis_mid(perp_key, spot_contract)
+                        basis_bid    = self.get_basis_bid(perp_key, spot_contract)
+                        basis_ask    = self.get_basis_ask(perp_key, spot_contract)
 
                         result = calculator.analyze_strategy(
                             token1=token1,
@@ -1114,7 +1181,9 @@ class RateAnalyzer:
                             liquidation_distance=self.liquidation_distance,
                             timestamp=self.timestamp,
                             basis_spread=basis_spread,
-                            basis_mid=basis_mid
+                            basis_mid=basis_mid,
+                            basis_bid=basis_bid,
+                            basis_ask=basis_ask
                         )
                         if result.get('valid', False):
                             results.append(result)

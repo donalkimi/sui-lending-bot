@@ -280,6 +280,8 @@ class NoLoopCrossProtocolCalculator(StrategyCalculatorBase):
         token1_contract = kwargs.get('token1_contract')
         token2_contract = kwargs.get('token2_contract')
 
+        _t2_a = positions['b_a'] / price_2A if price_2A > 0 else 0.0
+
         return {
             # Token and protocol info
             'token1': token1,
@@ -315,6 +317,12 @@ class NoLoopCrossProtocolCalculator(StrategyCalculatorBase):
             'P2_A': price_2A,
             'P2_B': price_2B,
             'P3_B': price_2B,  # Same as P2_B since token3 = token2
+
+            # Token amounts (tokens per $1 deployed)
+            'T1_A': positions['l_a'] / price_1A if price_1A > 0 else 0.0,
+            'T2_A': _t2_a,
+            'T2_B': _t2_a,  # same tokens as T2_A
+            'T3_B': 0.0,  # no 4th leg
 
             # Rates (required by dashboard)
             'lend_rate_1a': lend_total_apr_1A,

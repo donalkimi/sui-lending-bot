@@ -371,13 +371,13 @@ CREATE TABLE IF NOT EXISTS positions (
     entry_token_amount_2B DECIMAL(30, 10),  -- Token amount for Leg 2B (lend)
     entry_token_amount_3B DECIMAL(30, 10),  -- Token amount for Leg 3B (borrow, nullable)
 
-    -- Entry Collateral Ratios
-    entry_collateral_ratio_1A DECIMAL(10, 6) NOT NULL,
-    entry_collateral_ratio_2B DECIMAL(10, 6) NOT NULL,
+    -- Entry Collateral Ratios (NULL for perp strategies where the leg has no collateral ratio)
+    entry_collateral_ratio_1A DECIMAL(10, 6),
+    entry_collateral_ratio_2B DECIMAL(10, 6),
 
-    -- Entry Liquidation Thresholds
-    entry_liquidation_threshold_1A DECIMAL(10, 6) NOT NULL,
-    entry_liquidation_threshold_2B DECIMAL(10, 6) NOT NULL,
+    -- Entry Liquidation Thresholds (NULL for perp strategies where the leg has no threshold)
+    entry_liquidation_threshold_1A DECIMAL(10, 6),
+    entry_liquidation_threshold_2B DECIMAL(10, 6),
 
     -- Entry Strategy APRs (fee-adjusted for different time horizons)
     entry_net_apr DECIMAL(10, 6) NOT NULL,
@@ -396,6 +396,13 @@ CREATE TABLE IF NOT EXISTS positions (
     entry_borrow_weight_2A DECIMAL(10, 6),
     entry_borrow_weight_3B DECIMAL(10, 6),
 
+    -- Entry Basis (perp strategies only, NULL for non-perp)
+    -- entry_basis: the direction-specific entry-side basis
+    --   perp_lending:   entry_basis = basis_BID  (short perp at bid + buy spot at ask)
+    --   perp_borrowing: entry_basis = basis_ASK  (long perp at ask + sell spot at bid)
+    entry_basis        DECIMAL(10, 8),   -- entry-side basis (bid for lending, ask for borrowing)
+    entry_basis_spread DECIMAL(10, 8),   -- round-trip spread cost = basis_ask - basis_bid
+    
     -- Slippage Placeholders (for Phase 2)
     expected_slippage_bps DECIMAL(10, 2),
     actual_slippage_bps DECIMAL(10, 2),
@@ -488,13 +495,13 @@ CREATE TABLE IF NOT EXISTS position_rebalances (
     closing_price_2B DECIMAL(20, 10) NOT NULL,
     closing_price_3B DECIMAL(20, 10) NOT NULL,
 
-    -- Collateral Ratios
-    collateral_ratio_1A DECIMAL(10, 6) NOT NULL,
-    collateral_ratio_2B DECIMAL(10, 6) NOT NULL,
+    -- Collateral Ratios (NULL for perp strategies where the leg has no collateral ratio)
+    collateral_ratio_1A DECIMAL(10, 6),
+    collateral_ratio_2B DECIMAL(10, 6),
 
-    -- Liquidation Thresholds
-    liquidation_threshold_1A DECIMAL(10, 6) NOT NULL,
-    liquidation_threshold_2B DECIMAL(10, 6) NOT NULL,
+    -- Liquidation Thresholds (NULL for perp strategies where the leg has no threshold)
+    liquidation_threshold_1A DECIMAL(10, 6),
+    liquidation_threshold_2B DECIMAL(10, 6),
 
     -- Rebalance Actions (text descriptions)
     entry_action_1A TEXT,

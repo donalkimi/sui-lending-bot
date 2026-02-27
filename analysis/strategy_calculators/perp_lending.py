@@ -257,6 +257,7 @@ class PerpLendingCalculator(StrategyCalculatorBase):
         # None when basis data is unavailable; cost treated as 0 in that case.
         basis_spread = kwargs.get('basis_spread')
         basis_mid    = kwargs.get('basis_mid')
+        basis_bid    = kwargs.get('basis_bid')   # entry-side basis for perp_lending (short perp at bid)
         basis_cost   = b_b * basis_spread if basis_spread is not None else 0.0  # basis_spread × B_B
 
         net_apr = self.calculate_net_apr(positions=positions, rates=rates, fees={},
@@ -273,6 +274,8 @@ class PerpLendingCalculator(StrategyCalculatorBase):
         # Liquidation distances
         leverage = 1.0 / liquidation_distance
         liq_price_multiplier = 1.0 + (1.0 / leverage)
+
+        _t1_a = l_a / price_1A if price_1A > 0 else 0.0
 
         return {
             # Token and protocol info
@@ -301,6 +304,7 @@ class PerpLendingCalculator(StrategyCalculatorBase):
             'perp_fees_apr': perp_fee,
             'basis_spread': basis_spread,
             'basis_mid': basis_mid,
+            'basis_bid': basis_bid,
             'basis_cost': basis_cost,
             'total_upfront_fee': total_upfront_fee,
             'basis_cost_included': basis_spread is not None,
@@ -322,6 +326,12 @@ class PerpLendingCalculator(StrategyCalculatorBase):
             'P2_A': 1.0,  # USDC price
             'P2_B': 1.0,  # USDC price
             'P3_B': price_3B,  # Perp price
+
+            # Token amounts (tokens per $1 deployed) — token-count matching for perp leg
+            'T1_A': _t1_a,
+            'T2_A': 0.0,
+            'T2_B': 0.0,
+            'T3_B': _t1_a,  # perp = spot tokens
 
             # Rates (required by dashboard)
             'lend_rate_1a': lend_total_apr_1A,

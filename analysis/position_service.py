@@ -134,7 +134,9 @@ class PositionService:
         wallet_address: Optional[str] = None,
         transaction_hash_open: Optional[str] = None,
         on_chain_position_id: Optional[str] = None,
-        portfolio_id: Optional[str] = None
+        portfolio_id: Optional[str] = None,
+        entry_basis: float = None,        # direction-specific: basis_bid for lending, basis_ask for borrowing
+        entry_basis_spread: float = None  # round-trip spread cost = basis_ask - basis_bid
     ) -> str:
         """
         Create a new position (Phase 1: paper trade, Phase 2: real capital)
@@ -227,9 +229,11 @@ class PositionService:
         entry_token_amount_1a = (l_a * deployment_usd) / entry_price_1a if entry_price_1a > 0 else 0
         entry_token_amount_2a = (b_a * deployment_usd) / entry_price_2a if entry_price_2a > 0 else 0
         entry_token_amount_2b = (L_B * deployment_usd) / entry_price_2b if entry_price_2b > 0 else 0
-        # For perp_borrowing the 3rd leg is the perp long, sized by l_b (not b_b which is 0)
+        # For perp strategies, perp token count = spot token count (token-count matching)
         if strategy_type in ('perp_borrowing', 'perp_borrowing_recursive'):
-            entry_token_amount_3b = (L_B * deployment_usd) / entry_price_3b if L_B and entry_price_3b and entry_price_3b > 0 else 0
+            entry_token_amount_3b = entry_token_amount_2a   # perp = borrowed/sold tokens
+        elif strategy_type == 'perp_lending':
+            entry_token_amount_3b = entry_token_amount_1a   # perp = spot bought tokens
         else:
             entry_token_amount_3b = (b_b * deployment_usd) / entry_price_3b if b_b and entry_price_3b and entry_price_3b > 0 else 0
 
@@ -239,7 +243,7 @@ class PositionService:
         # Insert position
         cursor = self.conn.cursor()
         ph = self._get_placeholder()
-        placeholders = ', '.join([ph] * 52)  # 52 values (added portfolio_id + 4 token amounts)
+        placeholders = ', '.join([ph] * 54)  # 54 values (added entry_basis + entry_basis_spread)
 
         try:
             cursor.execute(f"""
@@ -260,7 +264,8 @@ class PositionService:
                     entry_max_size_usd, entry_borrow_fee_2a, entry_borrow_fee_3b,
                     entry_borrow_weight_2a, entry_borrow_weight_3b,
                     notes, wallet_address, transaction_hash_open, on_chain_position_id,
-                    portfolio_id
+                    portfolio_id,
+                    entry_basis, entry_basis_spread
                 ) VALUES ({placeholders})
             """, (
                 position_id, 'active', strategy_type,  # Use parameter instead of hardcoded value
@@ -302,7 +307,9 @@ class PositionService:
                 self._to_native_type(entry_borrow_weight_2a),
                 self._to_native_type(entry_borrow_weight_3b),
                 notes, wallet_address, transaction_hash_open, on_chain_position_id,
-                portfolio_id
+                portfolio_id,
+                self._to_native_type(entry_basis),
+                self._to_native_type(entry_basis_spread)
             ))
 
             self.conn.commit()
@@ -319,7 +326,12 @@ class PositionService:
             entry_token_amount_1a = (l_a * deployment_usd) / entry_price_1a if entry_price_1a > 0 else 0
             entry_token_amount_2a = (b_a * deployment_usd) / entry_price_2a if entry_price_2a > 0 else 0
             entry_token_amount_2b = (L_B * deployment_usd) / entry_price_2b if entry_price_2b > 0 else 0
-            entry_token_amount_3b = (b_b * deployment_usd) / entry_price_3b if b_b and entry_price_3b and entry_price_3b > 0 else 0
+            if strategy_type in ('perp_borrowing', 'perp_borrowing_recursive'):
+                entry_token_amount_3b = entry_token_amount_2a   # perp = borrowed/sold tokens
+            elif strategy_type == 'perp_lending':
+                entry_token_amount_3b = entry_token_amount_1a   # perp = spot bought tokens
+            else:
+                entry_token_amount_3b = (b_b * deployment_usd) / entry_price_3b if b_b and entry_price_3b and entry_price_3b > 0 else 0
 
             # Calculate entry size USD: weight * deployment
             entry_size_usd_1a = l_a * deployment_usd
@@ -2310,7 +2322,13 @@ class PositionService:
                 entry_token_amount_1a = (l_a * deployment_usd) / entry_price_1a if entry_price_1a > 0 else 0
                 entry_token_amount_2a = (b_a * deployment_usd) / entry_price_2a if entry_price_2a > 0 else 0
                 entry_token_amount_2b = entry_token_amount_2a  # Same tokens moved from A to B
-                entry_token_amount_3b = (b_b * deployment_usd) / entry_price_3b if entry_price_3b > 0 else 0
+                _st = position['strategy_type']
+                if _st in ('perp_borrowing', 'perp_borrowing_recursive'):
+                    entry_token_amount_3b = entry_token_amount_2a   # perp = borrowed/sold tokens
+                elif _st == 'perp_lending':
+                    entry_token_amount_3b = entry_token_amount_1a   # perp = spot bought tokens
+                else:
+                    entry_token_amount_3b = (b_b * deployment_usd) / entry_price_3b if entry_price_3b > 0 else 0
 
                 # Calculate baseline liquidation distances if needed
                 if use_entry_calc:

@@ -1367,10 +1367,14 @@ class RecursiveLendingRenderer(StrategyRendererBase):
         available_borrow_2a = _modal_sf(strategy, 'available_borrow_2a')
         available_borrow_3b = _modal_sf(strategy, 'available_borrow_3b')
 
-        entry_token_amount_1A = (l_a * deployment_usd) / P1_A if P1_A > 0 else 0
-        entry_token_amount_2 = (b_a * deployment_usd) / P2_A if P2_A > 0 else 0
-        entry_token_amount_2B = entry_token_amount_2
-        entry_token_amount_3B = (b_b * deployment_usd) / P3_B if P3_B > 0 else 0
+        T1_A = _modal_sf(strategy, 'T1_A')
+        T2_A = _modal_sf(strategy, 'T2_A')
+        T2_B = _modal_sf(strategy, 'T2_B')
+        T3_B = _modal_sf(strategy, 'T3_B')
+        entry_token_amount_1A = T1_A * deployment_usd
+        entry_token_amount_2 = T2_A * deployment_usd
+        entry_token_amount_2B = T2_B * deployment_usd
+        entry_token_amount_3B = T3_B * deployment_usd
         position_size_1A = l_a * deployment_usd
         position_size_2A = b_a * deployment_usd
         position_size_2B = l_b * deployment_usd
@@ -2211,7 +2215,8 @@ class StablecoinLendingRenderer(StrategyRendererBase):
         l_a = _modal_sf(strategy, 'l_a')
         P1_A = _modal_sf(strategy, 'P1_A', 1.0)
         precision_1A = get_token_precision(P1_A)
-        token_amount = (l_a * deployment_usd) / P1_A if P1_A > 0 else 0
+        T1_A = _modal_sf(strategy, 'T1_A')
+        token_amount = T1_A * deployment_usd
         detail_data = [{
             'Protocol': strategy.get('protocol_a', ''),
             'Token': strategy.get('token1', ''),
@@ -2389,8 +2394,10 @@ class NoLoopCrossProtocolRenderer(StrategyRendererBase):
         position_size_1A = l_a * deployment_usd
         position_size_2A = b_a * deployment_usd
         position_size_2B = l_b * deployment_usd
-        entry_token_amount_1A = position_size_1A / P1_A if P1_A > 0 else 0
-        entry_token_amount_2 = position_size_2A / P2_A if P2_A > 0 else 0
+        T1_A = _modal_sf(strategy, 'T1_A')
+        T2_A = _modal_sf(strategy, 'T2_A')
+        entry_token_amount_1A = T1_A * deployment_usd
+        entry_token_amount_2 = T2_A * deployment_usd
         fee_usd_2A = b_a * borrow_fee_2a * deployment_usd
         effective_ltv_1A = (b_a / l_a) * borrow_weight_2a if l_a > 0 else 0.0
 
@@ -2505,7 +2512,8 @@ class PerpLendingRenderer(StrategyRendererBase):
         get_borrow_fee: Callable,
         get_price_with_fallback: Callable,
         rebalances: Optional[List] = None,
-        segment_type: str = 'live'
+        segment_type: str = 'live',
+        get_basis: Optional[Callable] = None
     ) -> None:
         """Render 2-leg detail table: Spot Lend (1A) + Short Perp (3B)."""
         deployment = position['deployment_usd']
@@ -2577,20 +2585,25 @@ class PerpLendingRenderer(StrategyRendererBase):
         token_amount_3b = segment_data.get('opening_token_amount_3b')
         perp_fee = get_borrow_fee(position['token3'], position['protocol_b'])
 
-        # Short perp liq: liquidated when price rises 2x (100% increase from current price)
-        PERP_LIQ_MULTIPLIER = 2.0
+        # Short perp liq: price must RISE by liq_dist to liquidate.
+        # Liq price is fixed at entry: entry_price * (1 + liq_dist).
+        # Entry liq dist: always = +liq_dist (by definition).
+        # Live liq dist: (fixed_liq_price - live_price) / live_price.
+        liq_dist = position.get('entry_liquidation_distance', 0.20)
         entry_liq_dist_str = "N/A"
         live_liq_dist_str = "N/A"
         liq_price_str = "N/A"
 
-        if safe_value(live_price_3b) and float(live_price_3b) > 0:
-            perp_liq_price = float(live_price_3b) * PERP_LIQ_MULTIPLIER
-            live_liq_dist_pct = (perp_liq_price - float(live_price_3b)) / float(live_price_3b)
-            live_liq_dist_str = f"{live_liq_dist_pct * 100:+.1f}%"
+        if safe_value(segment_entry_price_3b) and float(segment_entry_price_3b) > 0:
+            perp_liq_price = float(segment_entry_price_3b) * (1.0 + liq_dist)
             liq_price_str = f"${perp_liq_price:,.4f}"
-            if safe_value(segment_entry_price_3b) and float(segment_entry_price_3b) > 0:
-                entry_liq_dist_pct = (perp_liq_price - float(segment_entry_price_3b)) / float(segment_entry_price_3b)
-                entry_liq_dist_str = f"{entry_liq_dist_pct * 100:+.1f}%"
+            entry_liq_dist_str = f"{liq_dist * 100:+.1f}%"
+            if safe_value(live_price_3b) and float(live_price_3b) > 0:
+                live_liq_dist_pct = (perp_liq_price - float(live_price_3b)) / float(live_price_3b)
+                live_liq_dist_str = f"{live_liq_dist_pct * 100:+.1f}%"
+
+        entry_basis = position.get('entry_basis')
+        entry_basis_str = f"{entry_basis * 100:.3f}%" if safe_value(entry_basis) else "N/A"
 
         if is_live_segment:
             perp_row = {
@@ -2600,6 +2613,7 @@ class PerpLendingRenderer(StrategyRendererBase):
                 'Position Entry Rate (%)': f"{entry_rate_3b * 100:.2f}" if safe_value(entry_rate_3b) else "N/A",
                 'Entry Rate (%)': f"{float(segment_entry_rate_3b) * 100:.2f}" if safe_value(segment_entry_rate_3b) else "N/A",
                 'Live Rate (%)': f"{float(live_rate_3b) * 100:.2f}" if safe_value(live_rate_3b) else "N/A",
+                'Entry Basis': entry_basis_str,
                 'Entry Price ($)': f"{float(segment_entry_price_3b):.4f}" if safe_value(segment_entry_price_3b) else "N/A",
                 'Live Price ($)': f"{float(live_price_3b):.4f}" if safe_value(live_price_3b) else "N/A",
                 'Liquidation Price ($)': liq_price_str,
@@ -2619,6 +2633,7 @@ class PerpLendingRenderer(StrategyRendererBase):
                 'Position Entry Rate (%)': f"{entry_rate_3b * 100:.2f}" if safe_value(entry_rate_3b) else "N/A",
                 'Segment Entry Rate (%)': f"{float(segment_entry_rate_3b) * 100:.2f}" if safe_value(segment_entry_rate_3b) else "N/A",
                 'Exit Rate (%)': f"{float(live_rate_3b) * 100:.2f}" if safe_value(live_rate_3b) else "N/A",
+                'Entry Basis': entry_basis_str,
                 'Segment Entry Price ($)': f"{float(segment_entry_price_3b):.4f}" if safe_value(segment_entry_price_3b) else "N/A",
                 'Exit Price ($)': f"{float(live_price_3b):.4f}" if safe_value(live_price_3b) else "N/A",
                 'Liquidation Price ($)': liq_price_str,
@@ -2648,18 +2663,25 @@ class PerpLendingRenderer(StrategyRendererBase):
         spot_lending_apr = _modal_sf(strategy, 'spot_lending_apr')
         funding_rate_apr = _modal_sf(strategy, 'funding_rate_apr')
         perp_fees_apr = _modal_sf(strategy, 'perp_fees_apr')
-        liq_price_multiplier = _modal_sf(strategy, 'liq_price_multiplier', 2.0)
+        if 'liq_price_multiplier' not in strategy:
+            raise KeyError("perp_lending strategy missing required field 'liq_price_multiplier'")
+        liq_price_multiplier = _modal_sf(strategy, 'liq_price_multiplier')
 
         precision_1A = get_token_precision(P1_A)
         precision_3B = get_token_precision(P3_B)
-        token_amount_1A = (l_a * deployment_usd) / P1_A if P1_A > 0 else 0
-        token_amount_3B = (b_b * deployment_usd) / P3_B if P3_B > 0 else 0
+        T1_A = _modal_sf(strategy, 'T1_A')
+        T3_B = _modal_sf(strategy, 'T3_B')
+        token_amount_1A = T1_A * deployment_usd
+        token_amount_3B = T3_B * deployment_usd
         size_1A = l_a * deployment_usd
-        size_3B = b_b * deployment_usd
+        size_3B = token_amount_3B * P3_B  # actual USD exposure of perp
 
         perp_liq_price = P3_B * liq_price_multiplier
         perp_liq_dist_pct = (perp_liq_price - P3_B) / P3_B * 100 if P3_B > 0 else 0
         perp_fee_usd = perp_fees_apr * deployment_usd
+
+        basis_bid = _modal_sf(strategy, 'basis_bid')
+        basis_bid_str = f"{basis_bid * 100:.3f}%" if basis_bid is not None else "N/A"
 
         detail_data = [
             {
@@ -2669,6 +2691,7 @@ class PerpLendingRenderer(StrategyRendererBase):
                 'Weight': f"{l_a:.4f}",
                 'Rate': f"{lend_rate_1a * 100:.2f}%",
                 'APR Contrib': f"{spot_lending_apr * 100:.2f}%",
+                'Entry Basis': "—",
                 'Token Amount': f"{token_amount_1A:,.{precision_1A}f}",
                 'Size ($)': f"${size_1A:,.2f}",
                 'Price': f"${P1_A:.4f}",
@@ -2682,6 +2705,7 @@ class PerpLendingRenderer(StrategyRendererBase):
                 'Weight': f"{b_b:.4f}",
                 'Rate': f"{borrow_rate_3b * 100:.2f}% (funding)",
                 'APR Contrib': f"{-funding_rate_apr * 100:.2f}%",  # Negate: shorts earn when rate is negative
+                'Entry Basis': basis_bid_str,
                 'Token Amount': f"{token_amount_3B:,.{precision_3B}f}",
                 'Size ($)': f"${size_3B:,.2f}",
                 'Price': f"${P3_B:.4f}",
@@ -2764,7 +2788,8 @@ class PerpBorrowingRenderer(StrategyRendererBase):
         get_borrow_fee: Callable,
         get_price_with_fallback: Callable,
         rebalances: Optional[List] = None,
-        segment_type: str = 'live'
+        segment_type: str = 'live',
+        get_basis: Optional[Callable] = None
     ) -> None:
         """Render 3-leg detail table: Stablecoin Lend (1A) + Spot Borrow (2A) + Long Perp (3B)."""
         deployment = position['deployment_usd']
@@ -2866,20 +2891,25 @@ class PerpBorrowingRenderer(StrategyRendererBase):
         token_amount_3b = segment_data.get('opening_token_amount_3b')
         perp_fee = get_borrow_fee(position['token3'], position['protocol_b'])
 
-        # Long perp liq: liquidated when price drops 20% below current price
-        PERP_LIQ_DISTANCE = 0.20
+        # Long perp liq: price must DROP by liq_dist to liquidate.
+        # Liq price is fixed at entry: entry_price * (1 - liq_dist).
+        # Entry liq dist: always = -liq_dist (by definition).
+        # Live liq dist: (fixed_liq_price - live_price) / live_price.
+        liq_dist = position.get('entry_liquidation_distance', 0.20)
         entry_liq_dist_str = "N/A"
         live_liq_dist_str = "N/A"
         liq_price_str = "N/A"
 
-        if safe_value(live_price_3b) and float(live_price_3b) > 0:
-            perp_liq_price = float(live_price_3b) * (1.0 - PERP_LIQ_DISTANCE)
-            live_liq_dist_pct = -PERP_LIQ_DISTANCE  # Negative: price must drop
-            live_liq_dist_str = f"{live_liq_dist_pct * 100:+.1f}%"
+        if safe_value(segment_entry_price_3b) and float(segment_entry_price_3b) > 0:
+            perp_liq_price = float(segment_entry_price_3b) * (1.0 - liq_dist)
             liq_price_str = f"${perp_liq_price:,.4f}"
-            if safe_value(segment_entry_price_3b) and float(segment_entry_price_3b) > 0:
-                entry_liq_dist_pct = (perp_liq_price - float(segment_entry_price_3b)) / float(segment_entry_price_3b)
-                entry_liq_dist_str = f"{entry_liq_dist_pct * 100:+.1f}%"
+            entry_liq_dist_str = f"{-liq_dist * 100:+.1f}%"
+            if safe_value(live_price_3b) and float(live_price_3b) > 0:
+                live_liq_dist_pct = (perp_liq_price - float(live_price_3b)) / float(live_price_3b)
+                live_liq_dist_str = f"{live_liq_dist_pct * 100:+.1f}%"
+
+        entry_basis = position.get('entry_basis')
+        entry_basis_str = f"{entry_basis * 100:.3f}%" if safe_value(entry_basis) else "N/A"
 
         if is_live_segment:
             perp_row = {
@@ -2889,6 +2919,7 @@ class PerpBorrowingRenderer(StrategyRendererBase):
                 'Position Entry Rate (%)': f"{entry_rate_3b * 100:.2f}" if safe_value(entry_rate_3b) else "N/A",
                 'Entry Rate (%)': f"{float(segment_entry_rate_3b) * 100:.2f}" if safe_value(segment_entry_rate_3b) else "N/A",
                 'Live Rate (%)': f"{float(live_rate_3b) * 100:.2f}" if safe_value(live_rate_3b) else "N/A",
+                'Entry Basis': entry_basis_str,
                 'Entry Price ($)': f"{float(segment_entry_price_3b):.4f}" if safe_value(segment_entry_price_3b) else "N/A",
                 'Live Price ($)': f"{float(live_price_3b):.4f}" if safe_value(live_price_3b) else "N/A",
                 'Liquidation Price ($)': liq_price_str,
@@ -2908,6 +2939,7 @@ class PerpBorrowingRenderer(StrategyRendererBase):
                 'Position Entry Rate (%)': f"{entry_rate_3b * 100:.2f}" if safe_value(entry_rate_3b) else "N/A",
                 'Segment Entry Rate (%)': f"{float(segment_entry_rate_3b) * 100:.2f}" if safe_value(segment_entry_rate_3b) else "N/A",
                 'Exit Rate (%)': f"{float(live_rate_3b) * 100:.2f}" if safe_value(live_rate_3b) else "N/A",
+                'Entry Basis': entry_basis_str,
                 'Segment Entry Price ($)': f"{float(segment_entry_price_3b):.4f}" if safe_value(segment_entry_price_3b) else "N/A",
                 'Exit Price ($)': f"{float(live_price_3b):.4f}" if safe_value(live_price_3b) else "N/A",
                 'Liquidation Price ($)': liq_price_str,
@@ -2953,12 +2985,15 @@ class PerpBorrowingRenderer(StrategyRendererBase):
         precision_1A = get_token_precision(P1_A)
         precision_2A = get_token_precision(P2_A)
         precision_3B = get_token_precision(P3_B)
+        T1_A = _modal_sf(strategy, 'T1_A')
+        T2_A = _modal_sf(strategy, 'T2_A')
+        T3_B = _modal_sf(strategy, 'T3_B')
+        token_amount_1A = T1_A * deployment_usd
+        token_amount_2A = T2_A * deployment_usd
+        token_amount_3B = T3_B * deployment_usd
         position_size_1A = l_a * deployment_usd
         position_size_2A = b_a * deployment_usd
-        position_size_3B = l_b * deployment_usd
-        token_amount_1A = position_size_1A / P1_A if P1_A > 0 else 0
-        token_amount_2A = position_size_2A / P2_A if P2_A > 0 else 0
-        token_amount_3B = position_size_3B / P3_B if P3_B > 0 else 0
+        position_size_3B = token_amount_3B * P3_B  # actual USD exposure of perp
         borrow_fee_usd = b_a * borrow_fee_2a * deployment_usd
         perp_fee_usd = perp_fees_apr * deployment_usd
         effective_ltv_1A = (b_a / l_a) * borrow_weight_2a if l_a > 0 else 0.0
@@ -2978,6 +3013,9 @@ class PerpBorrowingRenderer(StrategyRendererBase):
         perp_liq_price = P3_B * (1.0 - liquidation_distance)
         perp_liq_dist_pct = -liquidation_distance * 100  # Negative: price needs to drop
 
+        basis_ask = _modal_sf(strategy, 'basis_ask')
+        basis_ask_str = f"{basis_ask * 100:.3f}%" if basis_ask is not None else "N/A"
+
         detail_data = [
             {
                 'Protocol': strategy.get('protocol_a', ''), 'Token': strategy.get('token1', ''),
@@ -2986,6 +3024,7 @@ class PerpBorrowingRenderer(StrategyRendererBase):
                 'Eff LTV': f"{effective_ltv_1A:.2%}", 'Weight': f"{l_a:.4f}",
                 'Rate': f"{lend_rate_1a * 100:.2f}%",
                 'APR Contrib': f"{stablecoin_lending_apr * 100:.2f}%",
+                'Entry Basis': "—",
                 'Token Amount': f"{token_amount_1A:,.{precision_1A}f}", 'Size ($)': f"${position_size_1A:,.2f}",
                 'Price': f"${P1_A:.4f}", 'Fees (%)': "", 'Fees ($)': "",
                 'Liq Risk': "Price UP", 'Liq Price': _lp(liq1), 'Liq Distance': _ld(liq1),
@@ -2997,6 +3036,7 @@ class PerpBorrowingRenderer(StrategyRendererBase):
                 'maxCF': "-", 'LLTV': "-", 'Eff LTV': "-", 'Weight': f"{b_a:.4f}",
                 'Rate': f"{borrow_rate_2a * 100:.2f}%",
                 'APR Contrib': f"{-token2_borrow_apr * 100:.2f}%",
+                'Entry Basis': "—",
                 'Token Amount': f"{token_amount_2A:,.{precision_2A}f}", 'Size ($)': f"${position_size_2A:,.2f}",
                 'Price': f"${P2_A:.4f}",
                 'Fees (%)': f"{borrow_fee_2a * 100:.2f}%" if borrow_fee_2a > 0 else "",
@@ -3010,6 +3050,7 @@ class PerpBorrowingRenderer(StrategyRendererBase):
                 'maxCF': "-", 'LLTV': "-", 'Eff LTV': "-", 'Weight': f"{l_b:.4f}",
                 'Rate': f"{borrow_rate_3b * 100:.2f}% (funding)",
                 'APR Contrib': f"{funding_rate_apr * 100:.2f}%",
+                'Entry Basis': basis_ask_str,
                 'Token Amount': f"{token_amount_3B:,.{precision_3B}f}", 'Size ($)': f"${position_size_3B:,.2f}",
                 'Price': f"${P3_B:.4f}",
                 'Fees (%)': f"{perp_fees_apr * 100:.2f}%",

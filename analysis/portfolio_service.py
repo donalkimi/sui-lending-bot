@@ -221,6 +221,7 @@ class PortfolioService:
                 }
 
                 # Create position with portfolio_id link
+                _st = strategy_row.get('strategy_type', '')
                 position_id = position_service.create_position(
                     strategy_row=strategy_row,
                     positions=positions_dict,
@@ -237,7 +238,13 @@ class PortfolioService:
                     execution_time=entry_timestamp,
                     user_id=user_id,
                     notes=f"Portfolio: {portfolio_name}",
-                    portfolio_id=portfolio_id  # Link to portfolio
+                    portfolio_id=portfolio_id,  # Link to portfolio
+                    entry_basis=(
+                        strategy_row.get('basis_bid') if _st == 'perp_lending'
+                        else strategy_row.get('basis_ask') if _st in ('perp_borrowing', 'perp_borrowing_recursive')
+                        else None
+                    ),
+                    entry_basis_spread=strategy_row.get('basis_spread')
                 )
                 created_positions.append(position_id)
 

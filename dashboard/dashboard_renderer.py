@@ -605,16 +605,23 @@ def _build_preview_position(strategy: dict, deployment_usd: float) -> dict:
     b_b = _safe_float(strategy.get('b_b', 0.0))
     strategy_type = strategy.get('strategy_type', '')
 
-    # Token amounts: weight × deployment / price
-    # For perp_borrowing, l_b is the long perp weight (the 3rd leg)
-    # For all others, b_b is the 4th leg borrow weight
-    ta_1a = (l_a * deployment_usd / p1a) if p1a and p1a > 0 else 0.0
-    ta_2a = (b_a * deployment_usd / p2a) if p2a and p2a > 0 and b_a > 0 else 0.0
-    ta_2b = (l_b * deployment_usd / p2b) if p2b and p2b > 0 and l_b > 0 else 0.0
-    if strategy_type in ('perp_borrowing', 'perp_borrowing_recursive'):
-        ta_3b = (l_b * deployment_usd / p3b) if p3b and p3b > 0 and l_b > 0 else 0.0
-    else:
-        ta_3b = (b_b * deployment_usd / p3b) if p3b and p3b > 0 and b_b > 0 else 0.0
+    # Token amounts — use T-fields from strategy dict (tokens per $1 deployed × deployment).
+    # T-fields are the single source of truth computed by each strategy calculator:
+    #   T2_B = T2_A  for noloop/recursive (same physical tokens move A → B)
+    #   T2_B = 0     for perp (tokens sold, none transferred to Protocol B)
+    #   T3_B = T2_A  for perp_borrowing (perp = borrowed token count)
+    #   T3_B = T1_A  for perp_lending   (perp = spot bought token count)
+    def _tf(key):
+        v = strategy.get(key, 0.0)
+        try:
+            return float(v) if v is not None else 0.0
+        except (TypeError, ValueError):
+            return 0.0
+
+    ta_1a = _tf('T1_A') * deployment_usd
+    ta_2a = _tf('T2_A') * deployment_usd
+    ta_2b = _tf('T2_B') * deployment_usd
+    ta_3b = _tf('T3_B') * deployment_usd
 
     return {
         'deployment_usd': deployment_usd,
@@ -650,6 +657,13 @@ def _build_preview_position(strategy: dict, deployment_usd: float) -> dict:
         'entry_token_amount_2a': ta_2a,
         'entry_token_amount_2b': ta_2b,
         'entry_token_amount_3b': ta_3b,
+        # Basis (perp strategies only)
+        'entry_basis': (
+            strategy.get('basis_bid') if strategy_type == 'perp_lending'
+            else strategy.get('basis_ask') if strategy_type in ('perp_borrowing', 'perp_borrowing_recursive')
+            else None
+        ),
+        'entry_basis_spread': strategy.get('basis_spread'),
     }
 
 
@@ -813,9 +827,32 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
         def _get_price(token, protocol):
             return _price_map.get((token, protocol))
 
+        # Build get_basis callback: returns current basis data from strategy dict
+        _strategy_type = strategy.get('strategy_type', '')
+        def _get_basis(token3_contract, token3):
+            if _strategy_type == 'perp_lending':
+                bid = strategy.get('basis_bid')
+                ask = strategy.get('basis_ask')
+                mid = strategy.get('basis_mid')
+                spread = strategy.get('basis_spread')
+                if bid is None and mid is None:
+                    return None
+                return {'basis_bid': bid, 'basis_ask': ask, 'basis_mid': mid, 'basis_spread': spread}
+            elif _strategy_type in ('perp_borrowing', 'perp_borrowing_recursive'):
+                bid = strategy.get('basis_bid')
+                ask = strategy.get('basis_ask')
+                mid = strategy.get('basis_mid')
+                spread = strategy.get('basis_spread')
+                if ask is None and mid is None:
+                    return None
+                return {'basis_bid': bid, 'basis_ask': ask, 'basis_mid': mid, 'basis_spread': spread}
+            return None
+
+        _is_perp = _strategy_type in ('perp_lending', 'perp_borrowing', 'perp_borrowing_recursive')
         renderer_cls.render_detail_table(
             mock_position, _get_rate, _get_borrow_fee, _get_price,
-            rebalances=None, segment_type='live'
+            rebalances=None, segment_type='live',
+            **({'get_basis': _get_basis} if _is_perp else {})
         )
     except (ValueError, NotImplementedError) as e:
         st.warning(f"No detail table renderer registered for strategy type: `{strategy_type}` ({e})")
@@ -942,6 +979,7 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
             }
 
             # Create position
+            _st = strategy.get('strategy_type', '')
             position_id = service.create_position(
                 strategy_row=pd.Series(strategy) if isinstance(strategy, dict) else strategy,
                 positions=positions,
@@ -954,9 +992,15 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
                 protocol_a=strategy['protocol_a'],
                 protocol_b=strategy['protocol_b'],
                 deployment_usd=deployment_usd,
-                strategy_type=strategy.get('strategy_type', 'recursive_lending'),
+                strategy_type=_st or 'recursive_lending',
                 is_paper_trade=True,
-                notes=""
+                notes="",
+                entry_basis=(
+                    strategy.get('basis_bid') if _st == 'perp_lending'
+                    else strategy.get('basis_ask') if _st in ('perp_borrowing', 'perp_borrowing_recursive')
+                    else None
+                ),
+                entry_basis_spread=strategy.get('basis_spread')
             )
 
             conn.close()
