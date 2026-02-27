@@ -72,16 +72,29 @@ def calculate_position_statistics(
     l_b = position['l_b']
     b_b = position['b_b']
 
-    # 2. Check for rebalances
+    # 2. Check for rebalances.
+    # get_rebalance_history returns ALL records including the initial open segment
+    # (closing_timestamp = NULL). We need to find the last CLOSED segment to determine
+    # the live segment start and its opening token amounts.
     rebalances = service.get_rebalance_history(position_id)
-    has_rebalances = not rebalances.empty
 
-    # 3. Calculate live segment (entry or last rebalance → timestamp)
+    # Separate closed segments (closing_timestamp is set) from the open segment.
+    if not rebalances.empty:
+        closed_mask = rebalances['closing_timestamp'].notna()
+        closed_rebalances = rebalances[closed_mask]
+    else:
+        closed_rebalances = rebalances  # empty
+
+    has_rebalances = not closed_rebalances.empty
+
+    # 3. Calculate live segment (entry or last rebalance → timestamp).
+    # The live segment starts at the closing_timestamp of the last CLOSED rebalance,
+    # which equals the opening_timestamp of the current open segment.
     if has_rebalances:
-        segment_start_ts = to_seconds(rebalances.iloc[-1]['closing_timestamp'])
-        last_rebalance = rebalances.iloc[-1]
+        last_rebalance = closed_rebalances.iloc[-1]
+        segment_start_ts = to_seconds(last_rebalance['closing_timestamp'])
 
-        # Use exit token amounts from last rebalance as starting point for live segment
+        # Use exit token amounts from last closed rebalance as starting point for live segment
         live_position = pd.Series({
             'deployment_usd': position['deployment_usd'],
             'l_a': position['l_a'], 'b_a': position['b_a'],
@@ -97,9 +110,10 @@ def calculate_position_statistics(
             'entry_token_amount_3b': last_rebalance['exit_token_amount_3b']
         })
     else:
+        # No closed rebalances — position is in its initial state.
+        # Live segment started at entry_ts; use position's entry token amounts.
         segment_start_ts = entry_ts
         last_rebalance = None
-        # Use position's entry token amounts
         live_position = position
 
     # Calculate base and reward earnings for all 4 legs (live segment)
@@ -147,8 +161,8 @@ def calculate_position_statistics(
     rebalanced_fees = 0.0
 
     if has_rebalances:
-        # Iterate through all rebalance segments
-        for _, rebal in rebalances.iterrows():
+        # Iterate through all CLOSED rebalance segments only (open segment has no closing data)
+        for _, rebal in closed_rebalances.iterrows():
             # Get the segment boundaries
             opening_ts_rebal = to_seconds(rebal['opening_timestamp'])
             closing_ts_rebal = to_seconds(rebal['closing_timestamp'])

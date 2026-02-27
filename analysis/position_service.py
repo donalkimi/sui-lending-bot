@@ -1850,9 +1850,14 @@ class PositionService:
         position = self.get_position_by_id(position_id)
         sequence_number = (position.get('rebalance_count') or 0) + 1
 
-        # Convert timestamps to datetime strings for DB
+        # Convert timestamps to datetime strings for DB.
+        # closing_timestamp is NULL for the initial deployment record (segment still open).
         opening_timestamp_str = to_datetime_str(snapshot['opening_timestamp'])
-        closing_timestamp_str = to_datetime_str(snapshot['closing_timestamp'])
+        closing_timestamp_str = (
+            to_datetime_str(snapshot['closing_timestamp'])
+            if snapshot['closing_timestamp'] is not None
+            else None
+        )
 
         # Convert all numeric values to native Python types to avoid PostgreSQL errors
         # PostgreSQL doesn't understand numpy types (np.float64, etc.)
@@ -1921,38 +1926,52 @@ class PositionService:
                 rebalance_reason, rebalance_notes
                 ))
 
-            # Update positions table
+            # Update positions table.
+            # For a true rebalance (closing_timestamp set): advance the "current segment entry"
+            # state to the closing values so the next live segment starts from them.
+            # For the initial deployment record (closing_timestamp = None): only update
+            # rebalance_count — the entry rates/prices were set at position creation and
+            # must NOT be overwritten with NULL.
             current_accumulated_pnl = position.get('accumulated_realised_pnl') or 0
             ph = self._get_placeholder()
-            cursor.execute(f"""
-                UPDATE positions
-                SET accumulated_realised_pnl = {ph},
-                    rebalance_count = {ph},
-                    last_rebalance_timestamp = {ph},
-                    entry_lend_rate_1a = {ph},
-                    entry_borrow_rate_2a = {ph},
-                    entry_lend_rate_2b = {ph},
-                    entry_borrow_rate_3b = {ph},
-                    entry_price_1a = {ph},
-                    entry_price_2a = {ph},
-                    entry_price_2b = {ph},
-                    entry_price_3b = {ph},
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE position_id = {ph}
-            """, (
-                self._to_native_type(current_accumulated_pnl + convert_value('realised_pnl')),
-                sequence_number,
-                closing_timestamp_str,
-                convert_value('closing_lend_rate_1a'),
-                convert_value('closing_borrow_rate_2a'),
-                convert_value('closing_lend_rate_2b'),
-                convert_value('closing_borrow_rate_3b'),
-                convert_value('closing_price_1a'),
-                convert_value('closing_price_2a'),
-                convert_value('closing_price_2b'),
-                convert_value('closing_price_3b'),
-                position_id
-            ))
+            if closing_timestamp_str is not None:
+                cursor.execute(f"""
+                    UPDATE positions
+                    SET accumulated_realised_pnl = {ph},
+                        rebalance_count = {ph},
+                        last_rebalance_timestamp = {ph},
+                        entry_lend_rate_1a = {ph},
+                        entry_borrow_rate_2a = {ph},
+                        entry_lend_rate_2b = {ph},
+                        entry_borrow_rate_3b = {ph},
+                        entry_price_1a = {ph},
+                        entry_price_2a = {ph},
+                        entry_price_2b = {ph},
+                        entry_price_3b = {ph},
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE position_id = {ph}
+                """, (
+                    self._to_native_type(current_accumulated_pnl + convert_value('realised_pnl')),
+                    sequence_number,
+                    closing_timestamp_str,
+                    convert_value('closing_lend_rate_1a'),
+                    convert_value('closing_borrow_rate_2a'),
+                    convert_value('closing_lend_rate_2b'),
+                    convert_value('closing_borrow_rate_3b'),
+                    convert_value('closing_price_1a'),
+                    convert_value('closing_price_2a'),
+                    convert_value('closing_price_2b'),
+                    convert_value('closing_price_3b'),
+                    position_id
+                ))
+            else:
+                # Initial deployment: only increment rebalance_count.
+                cursor.execute(f"""
+                    UPDATE positions
+                    SET rebalance_count = {ph},
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE position_id = {ph}
+                """, (sequence_number, position_id))
 
             self.conn.commit()
 

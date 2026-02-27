@@ -678,9 +678,13 @@ def build_segment_data_from_rebalance(rebalance: Dict) -> Dict:
         Dict with opening_token_amount_*, opening_price_*, opening_*_rate,
         and closing_price_* fields (for historical segments)
     """
+    # A segment is still live if it has no closing_timestamp (initial deployment or open segment).
+    ct = rebalance.get('closing_timestamp')
+    _is_live = ct is None or (isinstance(ct, float) and ct != ct)  # None or NaN
+
     segment_data = {
         # REQUIRED: Explicit flag for segment type detection
-        'is_live_segment': False,
+        'is_live_segment': _is_live,
 
         # Token amounts from rebalance entry
         'opening_token_amount_1a': rebalance.get('entry_token_amount_1a'),
@@ -2962,32 +2966,34 @@ class PerpBorrowingRenderer(StrategyRendererBase):
         """Render 3-row detail table: Stablecoin Lend + Spot Borrow + Long Perp."""
         from analysis.position_calculator import PositionCalculator
 
-        l_a = _modal_sf(strategy, 'l_a')
-        b_a = _modal_sf(strategy, 'b_a')
-        l_b = _modal_sf(strategy, 'l_b')
-        P1_A = _modal_sf(strategy, 'P1_A', 1.0)
-        P2_A = _modal_sf(strategy, 'P2_A', 1.0)
-        P3_B = _modal_sf(strategy, 'P3_B', 1.0)
-        lend_rate_1a = _modal_sf(strategy, 'lend_rate_1a')
-        borrow_rate_2a = _modal_sf(strategy, 'borrow_rate_2a')
-        borrow_rate_3b = _modal_sf(strategy, 'borrow_rate_3b')
-        stablecoin_lending_apr = _modal_sf(strategy, 'stablecoin_lending_apr')
-        token2_borrow_apr = _modal_sf(strategy, 'token2_borrow_apr')
-        funding_rate_apr = _modal_sf(strategy, 'funding_rate_apr')
-        perp_fees_apr = _modal_sf(strategy, 'perp_fees_apr')
-        borrow_fee_2a = _modal_sf(strategy, 'borrow_fee_2a')
-        borrow_weight_2a = _modal_sf(strategy, 'borrow_weight_2a', 1.0)
-        lltv_1A = _modal_sf(strategy, 'liquidation_threshold_1a')
-        collateral_ratio_1a = _modal_sf(strategy, 'collateral_ratio_1a')
-        available_borrow_2a = _modal_sf(strategy, 'available_borrow_2a')
-        liquidation_distance = _modal_sf(strategy, 'liquidation_distance', 0.20)
+        # Required fields — direct access per design note #16 (fail loudly if missing)
+        l_a   = float(strategy['l_a'])
+        b_a   = float(strategy['b_a'])
+        l_b   = float(strategy['l_b'])
+        P1_A  = float(strategy['P1_A'])
+        P2_A  = float(strategy['P2_A'])
+        P3_B  = float(strategy['P3_B'])
+        lend_rate_1a         = float(strategy['lend_rate_1a'])
+        borrow_rate_2a       = float(strategy['borrow_rate_2a'])
+        borrow_rate_3b       = float(strategy['borrow_rate_3b'])
+        stablecoin_lending_apr = float(strategy['stablecoin_lending_apr'])
+        token2_borrow_apr    = float(strategy['token2_borrow_apr'])
+        funding_rate_apr     = float(strategy['funding_rate_apr'])
+        perp_fees_apr        = float(strategy['perp_fees_apr'])
+        borrow_fee_2a        = float(strategy['borrow_fee_2a'])
+        borrow_weight_2a     = float(strategy['borrow_weight_2a'])
+        lltv_1A              = float(strategy['liquidation_threshold_1a'])
+        collateral_ratio_1a  = float(strategy['collateral_ratio_1a'])
+        liquidation_distance = float(strategy['liquidation_distance'])
+        T1_A = float(strategy['T1_A'])
+        T2_A = float(strategy['T2_A'])
+        T3_B = float(strategy['T3_B'])
+        # Optional fields — None is valid (liquidity cap may be unknown)
+        available_borrow_2a  = _modal_sf(strategy, 'available_borrow_2a')
 
         precision_1A = get_token_precision(P1_A)
         precision_2A = get_token_precision(P2_A)
         precision_3B = get_token_precision(P3_B)
-        T1_A = _modal_sf(strategy, 'T1_A')
-        T2_A = _modal_sf(strategy, 'T2_A')
-        T3_B = _modal_sf(strategy, 'T3_B')
         token_amount_1A = T1_A * deployment_usd
         token_amount_2A = T2_A * deployment_usd
         token_amount_3B = T3_B * deployment_usd
@@ -3027,7 +3033,7 @@ class PerpBorrowingRenderer(StrategyRendererBase):
                 'Entry Basis': "—",
                 'Token Amount': f"{token_amount_1A:,.{precision_1A}f}", 'Size ($)': f"${position_size_1A:,.2f}",
                 'Price': f"${P1_A:.4f}", 'Fees (%)': "", 'Fees ($)': "",
-                'Liq Risk': "Price UP", 'Liq Price': _lp(liq1), 'Liq Distance': _ld(liq1),
+                'Liq Risk': "Price DOWN", 'Liq Price': _lp(liq1), 'Liq Distance': _ld(liq1),
                 'Max Borrow': f"${available_borrow_2a:,.2f}" if available_borrow_2a > 0 else "",
             },
             {

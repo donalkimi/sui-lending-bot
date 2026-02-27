@@ -646,6 +646,7 @@ def _build_preview_position(strategy: dict, deployment_usd: float) -> dict:
         'entry_price_2b': p2b if p2b is not None else 1.0,
         'entry_price_3b': p3b if p3b is not None else 1.0,
         # Risk params from strategy
+        'entry_liquidation_distance': float(strategy['liquidation_distance']),
         'entry_liquidation_threshold_1a': _safe_float(strategy.get('liquidation_threshold_1a', 0.0)),
         'entry_collateral_ratio_1a': _safe_float(strategy.get('collateral_ratio_1a', 0.0)),
         'entry_liquidation_threshold_2b': _safe_float(strategy.get('liquidation_threshold_2b', 0.0)),

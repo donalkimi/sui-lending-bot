@@ -561,15 +561,30 @@ class BluefinReader:
                 # Return empty DataFrames with correct columns
                 return self._empty_dataframes()
 
+            # Fetch real perp mid prices from spot_perp_basis (perp_bid/ask are identical
+            # across all spot_contract rows for a given perp_proxy, so any row suffices)
+            price_query = f"""
+                SELECT perp_proxy, perp_bid, perp_ask
+                FROM spot_perp_basis
+                WHERE timestamp = (
+                    SELECT MAX(timestamp) FROM spot_perp_basis WHERE timestamp <= {ph}
+                )
+            """
+            cursor.execute(price_query, (rates_hour_str,))
+            perp_prices = {}
+            for perp_proxy, perp_bid, perp_ask in cursor.fetchall():
+                if perp_bid is not None and perp_ask is not None:
+                    perp_prices[perp_proxy] = (float(perp_bid) + float(perp_ask)) / 2.0
+
             # Build DataFrames
             lend_rows = []
             borrow_rows = []
             collateral_rows = []
 
-            dummy_price = 10.10101  # Placeholder — real perp prices come from spot_perp_basis via rate_analyzer
-
             for token_contract, base_token, funding_rate_annual in rows:
-                price = dummy_price
+                price = perp_prices.get(token_contract)
+                if price is None:
+                    print(f"\t\t  WARNING: No spot_perp_basis price for {token_contract} ({base_token}) — price_usd will be NULL in rates_snapshot")
                 symbol = f"{base_token}-USDC-PERP"
 
                 # CRITICAL: Sign convention

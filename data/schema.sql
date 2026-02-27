@@ -343,9 +343,6 @@ CREATE TABLE IF NOT EXISTS positions (
     -- Entry Timestamp (references rates_snapshot timestamp)
     entry_timestamp TIMESTAMP NOT NULL,
 
-    -- Execution tracking (Unix seconds as integer)
-    execution_time INTEGER NOT NULL DEFAULT -1,  -- -1 = pending execution, Unix timestamp = executed on-chain
-
     -- Position Sizing (normalized multipliers, scale by deployment_usd for USD amounts)
     deployment_usd DECIMAL(20, 10) NOT NULL,
     L_A DECIMAL(10, 6) NOT NULL,  -- Lend multiplier at Protocol A
@@ -364,12 +361,6 @@ CREATE TABLE IF NOT EXISTS positions (
     entry_price_2A DECIMAL(20, 10) NOT NULL,
     entry_price_2B DECIMAL(20, 10) NOT NULL,
     entry_price_3B DECIMAL(20, 10) NOT NULL,
-
-    -- Entry Token Amounts (calculated at position creation: deployment_usd * weight / price)
-    entry_token_amount_1A DECIMAL(30, 10),  -- Token amount for Leg 1A (lend)
-    entry_token_amount_2A DECIMAL(30, 10),  -- Token amount for Leg 2A (borrow)
-    entry_token_amount_2B DECIMAL(30, 10),  -- Token amount for Leg 2B (lend)
-    entry_token_amount_3B DECIMAL(30, 10),  -- Token amount for Leg 3B (borrow, nullable)
 
     -- Entry Collateral Ratios (NULL for perp strategies where the leg has no collateral ratio)
     entry_collateral_ratio_1A DECIMAL(10, 6),
@@ -396,13 +387,6 @@ CREATE TABLE IF NOT EXISTS positions (
     entry_borrow_weight_2A DECIMAL(10, 6),
     entry_borrow_weight_3B DECIMAL(10, 6),
 
-    -- Entry Basis (perp strategies only, NULL for non-perp)
-    -- entry_basis: the direction-specific entry-side basis
-    --   perp_lending:   entry_basis = basis_BID  (short perp at bid + buy spot at ask)
-    --   perp_borrowing: entry_basis = basis_ASK  (long perp at ask + sell spot at bid)
-    entry_basis        DECIMAL(10, 8),   -- entry-side basis (bid for lending, ask for borrowing)
-    entry_basis_spread DECIMAL(10, 8),   -- round-trip spread cost = basis_ask - basis_bid
-    
     -- Slippage Placeholders (for Phase 2)
     expected_slippage_bps DECIMAL(10, 2),
     actual_slippage_bps DECIMAL(10, 2),
@@ -420,9 +404,6 @@ CREATE TABLE IF NOT EXISTS positions (
     -- User Notes
     notes TEXT,
 
-    -- Portfolio Linking (NULL = standalone position, UUID = part of portfolio)
-    portfolio_id TEXT DEFAULT NULL,
-
     -- Phase 2 Placeholders (for real capital deployment)
     wallet_address TEXT,
     transaction_hash_open TEXT,
@@ -431,7 +412,29 @@ CREATE TABLE IF NOT EXISTS positions (
 
     -- Timestamps
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    -- Execution tracking (Unix seconds as integer; -1 = pending execution)
+    execution_time INTEGER NOT NULL DEFAULT -1,
+
+    -- Portfolio Linking (NULL = standalone position, UUID = part of portfolio)
+    portfolio_id TEXT DEFAULT NULL,
+
+    -- Entry Token Amounts (calculated at position creation: deployment_usd * weight / price)
+    entry_token_amount_1A DECIMAL(30, 10),  -- Token amount for Leg 1A (lend)
+    entry_token_amount_2A DECIMAL(30, 10),  -- Token amount for Leg 2A (borrow)
+    entry_token_amount_2B DECIMAL(30, 10),  -- Token amount for Leg 2B (lend)
+    entry_token_amount_3B DECIMAL(30, 10),  -- Token amount for Leg 3B (borrow, nullable)
+
+    -- Entry Basis (perp strategies only, NULL for non-perp)
+    -- entry_basis: the direction-specific entry-side basis
+    --   perp_lending:   entry_basis = basis_BID  (short perp at bid + buy spot at ask)
+    --   perp_borrowing: entry_basis = basis_ASK  (long perp at ask + sell spot at bid)
+    entry_basis        DECIMAL(10, 8),   -- entry-side basis (bid for lending, ask for borrowing)
+    entry_basis_spread DECIMAL(10, 8),   -- round-trip spread cost = basis_ask - basis_bid
+
+    CONSTRAINT positions_pkey PRIMARY KEY (position_id),
+    CONSTRAINT fk_positions_portfolio FOREIGN KEY (portfolio_id) REFERENCES portfolios(portfolio_id) ON DELETE SET NULL
 );
 
 -- Indexes for positions
@@ -441,6 +444,7 @@ CREATE INDEX IF NOT EXISTS idx_positions_user ON positions(user_id);
 CREATE INDEX IF NOT EXISTS idx_positions_protocols ON positions(protocol_A, protocol_B);
 CREATE INDEX IF NOT EXISTS idx_positions_tokens ON positions(token1, token2, token3);
 CREATE INDEX IF NOT EXISTS idx_positions_is_paper ON positions(is_paper_trade);
+CREATE INDEX IF NOT EXISTS idx_positions_execution_pending ON positions(execution_time) WHERE execution_time = -1;
 CREATE INDEX IF NOT EXISTS idx_positions_portfolio ON positions(portfolio_id);
 
 -- RLS Policies for positions
@@ -460,13 +464,13 @@ USING (true);
 -- Follows event sourcing pattern: records are immutable historical truth
 CREATE TABLE IF NOT EXISTS position_rebalances (
     -- Rebalance Identification
-    rebalance_id TEXT PRIMARY KEY,
+    rebalance_id TEXT,
     position_id TEXT NOT NULL,
     sequence_number INTEGER NOT NULL,
 
     -- Timing
     opening_timestamp TIMESTAMP NOT NULL,
-    closing_timestamp TIMESTAMP NOT NULL,
+    closing_timestamp TIMESTAMP,   -- NULL while segment is still open (initial deployment or active rebalance)
 
     -- Position State (multipliers - constant during segment)
     deployment_usd DECIMAL(20, 10) NOT NULL,
@@ -485,23 +489,23 @@ CREATE TABLE IF NOT EXISTS position_rebalances (
     opening_price_2B DECIMAL(20, 10) NOT NULL,
     opening_price_3B DECIMAL(20, 10) NOT NULL,
 
-    -- Closing State (rates, prices)
-    closing_lend_rate_1A DECIMAL(10, 6) NOT NULL,
-    closing_borrow_rate_2A DECIMAL(10, 6) NOT NULL,
-    closing_lend_rate_2B DECIMAL(10, 6) NOT NULL,
-    closing_borrow_rate_3B DECIMAL(10, 6) NOT NULL,
-    closing_price_1A DECIMAL(20, 10) NOT NULL,
-    closing_price_2A DECIMAL(20, 10) NOT NULL,
-    closing_price_2B DECIMAL(20, 10) NOT NULL,
-    closing_price_3B DECIMAL(20, 10) NOT NULL,
+    -- Closing State (rates, prices — NULL while segment is still open)
+    closing_lend_rate_1A DECIMAL(10, 6),
+    closing_borrow_rate_2A DECIMAL(10, 6),
+    closing_lend_rate_2B DECIMAL(10, 6),
+    closing_borrow_rate_3B DECIMAL(10, 6),
+    closing_price_1A DECIMAL(20, 10),
+    closing_price_2A DECIMAL(20, 10),
+    closing_price_2B DECIMAL(20, 10),
+    closing_price_3B DECIMAL(20, 10),
 
     -- Collateral Ratios (NULL for perp strategies where the leg has no collateral ratio)
-    collateral_ratio_1A DECIMAL(10, 6),
-    collateral_ratio_2B DECIMAL(10, 6),
+    collateral_ratio_1A DECIMAL(10, 6) NOT NULL,
+    collateral_ratio_2B DECIMAL(10, 6),             -- NULL for perp strategies (Bluefin has no collateral ratio)
 
     -- Liquidation Thresholds (NULL for perp strategies where the leg has no threshold)
-    liquidation_threshold_1A DECIMAL(10, 6),
-    liquidation_threshold_2B DECIMAL(10, 6),
+    liquidation_threshold_1A DECIMAL(10, 6) NOT NULL,
+    liquidation_threshold_2B DECIMAL(10, 6),         -- NULL for perp strategies (Bluefin has no liquidation threshold)
 
     -- Rebalance Actions (text descriptions)
     entry_action_1A TEXT,
@@ -518,20 +522,20 @@ CREATE TABLE IF NOT EXISTS position_rebalances (
     entry_token_amount_2A DECIMAL(20, 10) NOT NULL,
     entry_token_amount_2B DECIMAL(20, 10) NOT NULL,
     entry_token_amount_3B DECIMAL(20, 10) NOT NULL,
-    exit_token_amount_1A DECIMAL(20, 10) NOT NULL,
-    exit_token_amount_2A DECIMAL(20, 10) NOT NULL,
-    exit_token_amount_2B DECIMAL(20, 10) NOT NULL,
-    exit_token_amount_3B DECIMAL(20, 10) NOT NULL,
+    exit_token_amount_1A DECIMAL(20, 10),   -- NULL while segment is still open
+    exit_token_amount_2A DECIMAL(20, 10),
+    exit_token_amount_2B DECIMAL(20, 10),
+    exit_token_amount_3B DECIMAL(20, 10),
 
     -- USD Sizes
     entry_size_usd_1A DECIMAL(20, 10) NOT NULL,
     entry_size_usd_2A DECIMAL(20, 10) NOT NULL,
     entry_size_usd_2B DECIMAL(20, 10) NOT NULL,
     entry_size_usd_3B DECIMAL(20, 10) NOT NULL,
-    exit_size_usd_1A DECIMAL(20, 10) NOT NULL,
-    exit_size_usd_2A DECIMAL(20, 10) NOT NULL,
-    exit_size_usd_2B DECIMAL(20, 10) NOT NULL,
-    exit_size_usd_3B DECIMAL(20, 10) NOT NULL,
+    exit_size_usd_1A DECIMAL(20, 10),   -- NULL while segment is still open
+    exit_size_usd_2A DECIMAL(20, 10),
+    exit_size_usd_2B DECIMAL(20, 10),
+    exit_size_usd_3B DECIMAL(20, 10),
 
     -- Realised Metrics (calculated once at rebalance time)
     realised_fees DECIMAL(20, 10) NOT NULL,
@@ -544,8 +548,19 @@ CREATE TABLE IF NOT EXISTS position_rebalances (
     rebalance_notes TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 
-    FOREIGN KEY (position_id) REFERENCES positions(position_id) ON DELETE CASCADE,
-    UNIQUE (position_id, sequence_number)
+    -- Closing Liquidation State (NULL while segment is still open)
+    closing_liq_price_1A REAL,
+    closing_liq_price_2A REAL,
+    closing_liq_price_2B REAL,
+    closing_liq_price_3B REAL,
+    closing_liq_dist_1A  REAL,
+    closing_liq_dist_2A  REAL,
+    closing_liq_dist_2B  REAL,
+    closing_liq_dist_3B  REAL,
+
+    CONSTRAINT position_rebalances_pkey PRIMARY KEY (rebalance_id),
+    CONSTRAINT position_rebalances_position_id_sequence_number_key UNIQUE (position_id, sequence_number),
+    CONSTRAINT position_rebalances_position_id_fkey FOREIGN KEY (position_id) REFERENCES positions(position_id) ON DELETE CASCADE
 );
 
 -- Indexes for position_rebalances
