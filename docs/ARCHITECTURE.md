@@ -686,11 +686,66 @@ All classes live in `analysis/strategy_calculators/` and are registered at modul
 3. Add `_generate_my_new_strategies(calculator)` to `RateAnalyzer`
 4. Add `elif strategy_type == 'my_new_strategy':` dispatch in `analyze_all_combinations()`
 5. Add history handler in `analysis/strategy_history/` and register it
+6. Create renderer class in `dashboard/position_renderers.py` decorated with `@register_strategy_renderer('my_new_strategy')`, implementing at minimum `render_detail_table()`, `render_apr_summary_table()`, `build_token_flow_string()`, `validate_position_data()`, `get_metrics_layout()`
 
 **File References:**
-- **Base Class + Registry**: [analysis/strategy_calculators/__init__.py](../analysis/strategy_calculators/__init__.py)
+- **Calculator Registry**: [analysis/strategy_calculators/__init__.py](../analysis/strategy_calculators/__init__.py)
 - **Strategy generator dispatch**: [analysis/rate_analyzer.py](../analysis/rate_analyzer.py) — `analyze_all_combinations()`
+- **Renderer Registry**: [dashboard/position_renderers.py](../dashboard/position_renderers.py) — `@register_strategy_renderer` decorator
+- **Renderer patterns**: [docs/Strategy_Position_Decorator_Reference.md](Strategy_Position_Decorator_Reference.md)
 - **Perp strategy detail**: [docs/BorrowLend_Perp_Strategy.md](BorrowLend_Perp_Strategy.md)
+
+### Position Renderer Registry
+
+Parallel to the calculator registry, every strategy type has a **renderer class** registered in `dashboard/position_renderers.py`. This controls how strategy data is displayed in all dashboard contexts.
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ RENDERER REGISTRY (dashboard/position_renderers.py)         │
+└─────────────────────────────────────────────────────────────┘
+
+_STRATEGY_RENDERERS = {}   ← global dict populated at module load
+
+@register_strategy_renderer('recursive_lending')
+class RecursiveLendingRenderer(StrategyRendererBase)
+
+@register_strategy_renderer('stablecoin_lending')
+class StablecoinLendingRenderer(StrategyRendererBase)
+
+@register_strategy_renderer('noloop_cross_protocol_lending')
+class NoLoopCrossProtocolRenderer(StrategyRendererBase)
+
+@register_strategy_renderer('perp_lending')
+class PerpLendingRenderer(StrategyRendererBase)
+
+@register_strategy_renderer('perp_borrowing')
+@register_strategy_renderer('perp_borrowing_recursive')
+class PerpBorrowingRenderer(StrategyRendererBase)
+```
+
+**`StrategyRendererBase` abstract contract:**
+
+| Method | Required | Purpose |
+|--------|----------|---------|
+| `get_strategy_name()` | ✅ | Display name string |
+| `validate_position_data(position)` | ✅ | Check required fields |
+| `get_metrics_layout()` | ✅ | Which summary metric tiles to show |
+| `build_token_flow_string(position)` | ✅ | "T1 → T2 → T1" label |
+| `render_detail_table(...)` | ✅ | Leg-by-leg table in Positions/Portfolio/modal |
+| `render_apr_summary_table(strategy, ts)` | ✅ | Single-row APR overview in All Strategies modal |
+| `render_strategy_modal_table(strategy, usd)` | optional | Leg table in Analysis tab |
+
+**Rendering contexts:**
+
+| Context | Method called | Data source |
+|---------|--------------|-------------|
+| All Strategies modal — APR row | `render_apr_summary_table()` | analysis_cache strategy dict |
+| All Strategies modal — leg detail | `render_detail_table()` | mock position from strategy dict |
+| Positions tab — leg detail | `render_detail_table()` | real DB position record |
+| Portfolio tab — leg detail | `render_detail_table()` | real DB position record |
+| Analysis tab — leg detail | `render_strategy_modal_table()` | strategy dict + deployment_usd |
+
+**Reference**: [docs/Strategy_Position_Decorator_Reference.md](Strategy_Position_Decorator_Reference.md)
 
 ---
 
@@ -2867,6 +2922,13 @@ This will be added in a future update to complete the architecture map.
 - [dashboard/dashboard_renderer.py](../dashboard/dashboard_renderer.py) - UI rendering logic
   - `render_dashboard()` - Main render function
   - Strategy tables, charts, position tracking
+  - `show_strategy_modal()` - All Strategies row-click popup (uses renderer registry)
+- [dashboard/position_renderers.py](../dashboard/position_renderers.py) - Strategy renderer registry
+  - `StrategyRendererBase` - Abstract base class
+  - `@register_strategy_renderer` - Decorator for registering renderer classes
+  - Per-strategy renderer classes: `RecursiveLendingRenderer`, `StablecoinLendingRenderer`,
+    `NoLoopCrossProtocolRenderer`, `PerpLendingRenderer`, `PerpBorrowingRenderer`
+  - See [docs/Strategy_Position_Decorator_Reference.md](Strategy_Position_Decorator_Reference.md)
 
 ---
 

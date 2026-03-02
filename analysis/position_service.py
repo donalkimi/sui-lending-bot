@@ -1117,6 +1117,10 @@ class PositionService:
 
     def _get_token_contract_for_leg(self, position: pd.Series, leg: str) -> str:
         """Get token contract address for a specific leg."""
+        # For perp_borrowing, leg 2B is the Bluefin long perp whose contract is
+        # token3_contract (proxy "0xBTC-USDC-PERP_bluefin"), not token2_contract (spot BTC).
+        if leg == '2b' and position.get('strategy_type') in ('perp_borrowing', 'perp_borrowing_recursive'):
+            return position['token3_contract']
         leg_token_contract_map = {
             '1a': 'token1_contract',
             '2a': 'token2_contract',

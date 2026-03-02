@@ -36,35 +36,9 @@ from dashboard.position_renderers import (
 )
 
 
-def format_days_to_breakeven(days: float) -> str:
-    """
-    Format days to breakeven for display
-
-    Args:
-        days: Days to breakeven (can be float('inf'), 0, or positive number)
-
-    Returns:
-        Formatted string for display
-    """
-    if days is None:
-        return "N/A"
-
-    # Handle infinity (never breaks even)
-    if days == float('inf') or days > 99999:
-        return "Never"
-
-    # Handle zero fees (instant breakeven)
-    if days == 0:
-        return "0.0"
-
-    # Handle very large values
-    if days > 999:
-        return ">999"
-
-    # Normal case: display with 1 decimal place
-    return f"{days:.1f}"
 from dashboard.dashboard_utils import (
     format_usd_abbreviated,
+    format_days_to_breakeven,
     get_db_connection,
     get_strategy_history,
     create_strategy_history_chart
@@ -706,55 +680,50 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
     # ========================================
     # APR SUMMARY TABLE
     # ========================================
-    # Calculate upfront fees percentage
-    if is_perp:
-        # perp_fees_apr = position_weight * 2 * BLUEFIN_TAKER_FEE (entry + exit, one-time cost)
-        upfront_fees_pct = _safe_float(strategy.get('perp_fees_apr', 0))
-    else:
+    try:
+        renderer_cls = get_strategy_renderer(strategy_type)
+        renderer_cls.render_apr_summary_table(strategy, timestamp_seconds)
+    except NotImplementedError:
+        # Fallback inline for strategy types not yet migrated to renderer
         upfront_fees_pct = (
             _safe_float(strategy.get('b_a', 0)) * _safe_float(strategy.get('borrow_fee_2a', 0)) +
             _safe_float(strategy.get('b_b', 0)) * _safe_float(strategy.get('borrow_fee_3b', 0))
         )
+        try:
+            renderer_cls_fb = get_strategy_renderer(strategy_type)
+            token_flow = renderer_cls_fb.build_token_flow_string(pd.Series(strategy))
+        except (ValueError, NotImplementedError):
+            token_flow = f"{strategy['token1']} → {strategy.get('token2', '')} → {strategy.get('token3', '')}"
+        protocol_pair = f"{strategy['protocol_a']} ↔ {strategy['protocol_b']}"
 
-    # Build display strings — use renderer's token flow if available
-    try:
-        renderer_cls = get_strategy_renderer(strategy_type)
-        token_flow = renderer_cls.build_token_flow_string(pd.Series(strategy))
-    except (ValueError, NotImplementedError):
-        token_flow = f"{strategy['token1']} → {strategy.get('token2', '')} → {strategy.get('token3', '')}"
-    protocol_pair = f"{strategy['protocol_a']} ↔ {strategy['protocol_b']}"
+        summary_data = [{
+            'Time': to_datetime_str(timestamp_seconds),
+            'Token Flow': token_flow,
+            'Protocols': protocol_pair,
+            'Net APR': f"{strategy['apr_net'] * 100:.2f}%",
+            'APR 5d': f"{strategy['apr5'] * 100:.2f}%",
+            'APR 30d': f"{strategy['apr30'] * 100:.2f}%",
+            'Liq Dist': f"{strategy['liquidation_distance'] * 100:.2f}%",
+            'Upfront Fees (%)': f"{upfront_fees_pct * 100:.2f}%",
+            'Days to Breakeven': format_days_to_breakeven(strategy.get('days_to_breakeven')),
+            'Max Liquidity': "N/A" if strategy['max_size'] == float('inf') else f"${strategy['max_size']:,.2f}",
+        }]
+        summary_df = pd.DataFrame(summary_data)
 
-    # Create summary table
-    summary_data = [{
-        'Time': to_datetime_str(timestamp_seconds),
-        'Token Flow': token_flow,
-        'Protocols': protocol_pair,
-        'Net APR': f"{strategy['apr_net'] * 100:.2f}%",
-        'APR 5d': f"{strategy['apr5'] * 100:.2f}%",
-        'APR 30d': f"{strategy['apr30'] * 100:.2f}%",
-        'Liq Dist': f"{strategy['liquidation_distance'] * 100:.2f}%",
-        'Upfront Fees (%)': f"{upfront_fees_pct * 100:.2f}%",
-        'Days to Breakeven': format_days_to_breakeven(strategy.get('days_to_breakeven')),
-        'Max Liquidity': "N/A" if strategy['max_size'] == float('inf') else f"${strategy['max_size']:,.2f}",
-    }]
-    summary_df = pd.DataFrame(summary_data)
+        def color_apr(val):
+            if isinstance(val, str) and '%' in val:
+                try:
+                    numeric_val = float(val.replace('%', ''))
+                    if numeric_val > 0:
+                        return 'color: green'
+                    elif numeric_val < 0:
+                        return 'color: red'
+                except (ValueError, TypeError):
+                    pass
+            return ''
 
-    # Apply color formatting to APR columns
-    def color_apr(val):
-        """Color positive APRs green, negative red"""
-        if isinstance(val, str) and '%' in val:
-            try:
-                numeric_val = float(val.replace('%', ''))
-                if numeric_val > 0:
-                    return 'color: green'
-                elif numeric_val < 0:
-                    return 'color: red'
-            except (ValueError, TypeError):
-                pass
-        return ''
-
-    styled_summary_df = summary_df.style.map(color_apr, subset=['Net APR', 'APR 5d', 'APR 30d'])
-    st.dataframe(styled_summary_df, width='stretch', hide_index=True)
+        styled_summary_df = summary_df.style.map(color_apr, subset=['Net APR', 'APR 5d', 'APR 30d'])
+        st.dataframe(styled_summary_df, width='stretch', hide_index=True)
 
     st.markdown("")  # Tighter spacing instead of divider
 

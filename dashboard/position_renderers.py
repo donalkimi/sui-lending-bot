@@ -18,6 +18,7 @@ import pandas as pd
 from abc import ABC, abstractmethod
 from typing import Dict, List, Optional, Callable, Tuple
 from utils.time_helpers import to_seconds, to_datetime_str
+from dashboard.dashboard_utils import format_days_to_breakeven
 
 
 # ============================================================================
@@ -129,6 +130,24 @@ class StrategyRendererBase(ABC):
         raise NotImplementedError(
             "render_strategy_modal_table not implemented for this renderer. "
             "Add a render_strategy_modal_table() method to the renderer class."
+        )
+
+    @staticmethod
+    def render_apr_summary_table(strategy: dict, timestamp_seconds: int) -> None:
+        """
+        Render APR overview table in the strategy selection modal.
+
+        Displayed above the position details table. Replaces the inline APR
+        summary block in show_strategy_modal(). Strategy-specific so each
+        strategy type can show relevant fee breakdown columns.
+
+        Args:
+            strategy: Strategy dict from analysis cache (all_results row)
+            timestamp_seconds: Dashboard-selected timestamp (Unix seconds)
+        """
+        raise NotImplementedError(
+            "render_apr_summary_table not implemented for this renderer. "
+            "Add a render_apr_summary_table() method to the renderer class."
         )
 
 
@@ -261,16 +280,20 @@ def create_rate_helpers(
 
     def get_price_with_fallback(token, protocol):
         """3-tier fallback: protocol -> oracle -> None."""
+        # 10.10101 is the historical placeholder stored in rates_snapshot for Bluefin
+        # perp tokens before real prices were plumbed in from spot_perp_basis.
+        _placeholder = 10.10101
+
         key = (protocol, token)
         rates = rate_lookup.get(key, {})
         price = rates.get('price')
 
-        if price is not None and price > 0:
+        if price is not None and price > 0 and price != _placeholder:
             return price
 
         # Fallback to oracle
         oracle_price = oracle_prices.get(token)
-        if oracle_price is not None and oracle_price > 0:
+        if oracle_price is not None and oracle_price > 0 and oracle_price != _placeholder:
             return oracle_price
 
         return None
@@ -726,11 +749,68 @@ def build_segment_data_from_rebalance(rebalance: Dict) -> Dict:
 # CORE RENDERING FUNCTIONS (Strategy-Agnostic)
 # ============================================================================
 
+def compute_basis_adjusted_current_apr(
+    position: pd.Series,
+    stats: Optional[Dict],
+    get_price_with_fallback,
+    timestamp: int
+) -> float:
+    """
+    Compute current_apr adjusted for unrealised basis PnL.
+
+    For perp strategies, the spot/perp prices have diverged since entry.
+    basis_pnl captures that unrealised gain/loss as a one-time dollar amount.
+    Adding basis_pnl / deployment_usd converts it to an APR adjustment
+    (no time-scaling — basis_pnl is a fraction of capital, same as basis_cost).
+
+    Non-perp: returns current_apr unchanged.
+    """
+    strategy_type = position.get('strategy_type', '')
+    current_apr = _safe_float(stats.get('current_apr', 0.0)) if stats else 0.0
+
+    if strategy_type not in ('perp_lending', 'perp_borrowing', 'perp_borrowing_recursive'):
+        return current_apr
+
+    deployment_usd = _safe_float(position.get('deployment_usd', 0.0))
+    if deployment_usd <= 0:
+        return current_apr
+
+    if strategy_type == 'perp_lending':
+        spot_tokens      = _safe_float(position.get('entry_token_amount_1a', 0.0))
+        perp_tokens      = _safe_float(position.get('entry_token_amount_3b', 0.0))
+        entry_spot_price = _safe_float(position.get('entry_price_1a', 0.0))
+        entry_perp_price = _safe_float(position.get('entry_price_3b', 0.0))
+        live_spot_price  = get_price_with_fallback(position['token1'], position['protocol_a'])
+        live_perp_price  = get_price_with_fallback(position['token3'], position['protocol_b'])
+        if live_spot_price is None or live_perp_price is None:
+            return current_apr
+        basis_pnl = ((live_spot_price - entry_spot_price) * spot_tokens
+                   - (live_perp_price - entry_perp_price) * perp_tokens)
+    else:  # perp_borrowing / perp_borrowing_recursive
+        # Leg 2B = long perp (weight l_b). entry_token_amount_2b and entry_price_2b
+        # are the correct fields — NOT 3b (which has b_b=0 for perp_borrowing).
+        # get_price_with_fallback(token2, bluefin) misses rate_lookup and falls back
+        # to oracle_prices['BTC'] = real price from lending protocol rows.
+        spot_tokens      = _safe_float(position.get('entry_token_amount_2a', 0.0))
+        perp_tokens      = _safe_float(position.get('entry_token_amount_2b', 0.0))
+        entry_spot_price = _safe_float(position.get('entry_price_2a', 0.0))
+        entry_perp_price = _safe_float(position.get('entry_price_2b', 0.0))
+        live_spot_price  = get_price_with_fallback(position['token2'], position['protocol_a'])
+        live_perp_price  = get_price_with_fallback(position['token2'], position['protocol_b'])
+        if live_spot_price is None or live_perp_price is None:
+            return current_apr
+        basis_pnl = ((live_perp_price - entry_perp_price) * perp_tokens
+                   - (live_spot_price - entry_spot_price) * spot_tokens)
+
+    return current_apr + basis_pnl / deployment_usd
+
+
 def build_position_expander_title(
     position: pd.Series,
     stats: Optional[Dict],
     strategy_type: str,
-    include_timestamp: bool = True
+    include_timestamp: bool = True,
+    current_apr_incl_basis: Optional[float] = None
 ) -> str:
     """
     Build expander title for a position.
@@ -783,11 +863,17 @@ def build_position_expander_title(
         entry_ts_str = to_datetime_str(to_seconds(position['entry_timestamp']))
         title_parts.append(entry_ts_str)
 
+    _perp_strategies = ('perp_lending', 'perp_borrowing', 'perp_borrowing_recursive')
+    if strategy_type in _perp_strategies and current_apr_incl_basis is not None:
+        current_apr_str = f"Current {current_apr:.2f}% | Basis-adj {current_apr_incl_basis * 100:.2f}%"
+    else:
+        current_apr_str = f"Current {current_apr:.2f}%"
+
     title_parts.extend([
         token_flow,
         protocol_pair,
         f"Entry {entry_apr:.2f}%",
-        f"Current {current_apr:.2f}%",
+        current_apr_str,
         f"Net APR {realized_apr:.2f}%",
         f"Value \\${current_value:,.2f}",
         f"PnL \\${total_pnl:,.2f}",
@@ -1201,6 +1287,66 @@ class RecursiveLendingRenderer(StrategyRendererBase):
         """Standard 5-metric layout for recursive lending."""
         return ['total_pnl', 'total_earnings', 'base_earnings',
                 'reward_earnings', 'total_fees']
+
+    @staticmethod
+    def render_apr_summary_table(strategy: dict, timestamp_seconds: int) -> None:
+        """
+        Render APR overview table for recursive_lending in the strategy selection modal.
+
+        Columns: Token Flow, Protocols, Net APR, APR 5d, APR 30d, Liq Dist,
+                 Fees (%), Days to BE, Max Liquidity.
+        No basis columns — non-perp strategies have no spot/perp spread.
+        Note: borrow_fee_2a / borrow_fee_3b are not stored in the recursive_lending
+        result dict, so Fees (%) shows 0.00% (same as the existing inline fallback).
+        """
+        apr_net  = _modal_sf(strategy, 'apr_net')
+        apr5     = _modal_sf(strategy, 'apr5')
+        apr30    = _modal_sf(strategy, 'apr30')
+        liq_dist = strategy.get('liquidation_distance', 0.0)
+        b_a      = _modal_sf(strategy, 'b_a')
+        b_b      = _modal_sf(strategy, 'b_b')
+        fees_pct = (b_a * _modal_sf(strategy, 'borrow_fee_2a')
+                  + b_b * _modal_sf(strategy, 'borrow_fee_3b'))
+        days_to_be = strategy.get('days_to_breakeven')
+        max_size   = float(strategy.get('max_size', float('inf')))
+
+        token_flow    = RecursiveLendingRenderer.build_token_flow_string(pd.Series(strategy))
+        protocol_pair = f"{strategy.get('protocol_a', '')} ↔ {strategy.get('protocol_b', '')}"
+
+        liq_dist_str = (
+            "N/A"
+            if not isinstance(liq_dist, (int, float)) or liq_dist == float('inf')
+            else f"{liq_dist * 100:.2f}%"
+        )
+        max_liq_str = "N/A" if max_size == float('inf') else f"${max_size:,.2f}"
+
+        summary_data = [{
+            'Token Flow':    token_flow,
+            'Protocols':     protocol_pair,
+            'Net APR':       f"{apr_net * 100:.2f}%",
+            'APR 5d':        f"{apr5 * 100:.2f}%",
+            'APR 30d':       f"{apr30 * 100:.2f}%",
+            'Liq Dist':      liq_dist_str,
+            'Fees (%)':      f"{fees_pct * 100:.3f}%",
+            'Days to BE':    format_days_to_breakeven(days_to_be),
+            'Max Liquidity': max_liq_str,
+        }]
+        summary_df = pd.DataFrame(summary_data)
+
+        def _color_apr(val):
+            if isinstance(val, str) and '%' in val:
+                try:
+                    v = float(val.replace('%', ''))
+                    if v > 0:
+                        return 'color: green'
+                    elif v < 0:
+                        return 'color: red'
+                except (ValueError, TypeError):
+                    pass
+            return ''
+
+        styled = summary_df.style.map(_color_apr, subset=['Net APR', 'APR 5d', 'APR 30d'])
+        st.dataframe(styled, width='stretch', hide_index=True)
 
     @staticmethod
     def render_detail_table(
@@ -2040,14 +2186,20 @@ def render_position_expander(
             f"are present for this strategy type."
         )
 
-    # Build title
-    title = build_position_expander_title(
-        position, stats, strategy_type, include_timestamp=True
-    )
-
-    # Create rate helpers
+    # Create rate helpers (needed for basis-adjusted APR)
     get_rate, get_borrow_fee, get_price_with_fallback = create_rate_helpers(
         rate_lookup, oracle_prices
+    )
+
+    # Compute basis-adjusted current APR (perp strategies only; non-perp returns current_apr)
+    current_apr_incl_basis = compute_basis_adjusted_current_apr(
+        position, stats, get_price_with_fallback, timestamp_seconds
+    )
+
+    # Build title
+    title = build_position_expander_title(
+        position, stats, strategy_type, include_timestamp=True,
+        current_apr_incl_basis=current_apr_incl_basis
     )
 
     with st.expander(title, expanded=expanded):
@@ -2167,6 +2319,65 @@ class StablecoinLendingRenderer(StrategyRendererBase):
                 'reward_earnings', 'total_fees']
 
     @staticmethod
+    def render_apr_summary_table(strategy: dict, timestamp_seconds: int) -> None:
+        """
+        Render APR overview table for stablecoin_lending in the strategy selection modal.
+
+        Columns: Token Flow, Protocols, Net APR, APR 5d, APR 30d, Liq Dist,
+                 Fees (%), Days to BE, Max Liquidity.
+        Liq Dist shows "N/A" (stablecoin lending has no liquidation risk).
+        Fees (%) is always 0.00% (no borrowing, no upfront costs).
+        """
+        apr_net  = _modal_sf(strategy, 'apr_net')
+        apr5     = _modal_sf(strategy, 'apr5')
+        apr30    = _modal_sf(strategy, 'apr30')
+        liq_dist = strategy.get('liquidation_distance', float('inf'))
+        b_a      = _modal_sf(strategy, 'b_a')
+        b_b      = _modal_sf(strategy, 'b_b')
+        fees_pct = (b_a * _modal_sf(strategy, 'borrow_fee_2a')
+                  + b_b * _modal_sf(strategy, 'borrow_fee_3b'))
+        days_to_be = strategy.get('days_to_breakeven')
+        max_size   = float(strategy.get('max_size', float('inf')))
+
+        token_flow    = StablecoinLendingRenderer.build_token_flow_string(pd.Series(strategy))
+        protocol_pair = f"{strategy.get('protocol_a', '')} ↔ {strategy.get('protocol_b', '')}"
+
+        liq_dist_str = (
+            "N/A"
+            if not isinstance(liq_dist, (int, float)) or liq_dist == float('inf')
+            else f"{liq_dist * 100:.2f}%"
+        )
+        max_liq_str = "N/A" if max_size == float('inf') else f"${max_size:,.2f}"
+
+        summary_data = [{
+            'Token Flow':    token_flow,
+            'Protocols':     protocol_pair,
+            'Net APR':       f"{apr_net * 100:.2f}%",
+            'APR 5d':        f"{apr5 * 100:.2f}%",
+            'APR 30d':       f"{apr30 * 100:.2f}%",
+            'Liq Dist':      liq_dist_str,
+            'Fees (%)':      f"{fees_pct * 100:.3f}%",
+            'Days to BE':    format_days_to_breakeven(days_to_be),
+            'Max Liquidity': max_liq_str,
+        }]
+        summary_df = pd.DataFrame(summary_data)
+
+        def _color_apr(val):
+            if isinstance(val, str) and '%' in val:
+                try:
+                    v = float(val.replace('%', ''))
+                    if v > 0:
+                        return 'color: green'
+                    elif v < 0:
+                        return 'color: red'
+                except (ValueError, TypeError):
+                    pass
+            return ''
+
+        styled = summary_df.style.map(_color_apr, subset=['Net APR', 'APR 5d', 'APR 30d'])
+        st.dataframe(styled, width='stretch', hide_index=True)
+
+    @staticmethod
     def render_detail_table(
         position: pd.Series,
         get_rate: Callable,
@@ -2279,6 +2490,64 @@ class NoLoopCrossProtocolRenderer(StrategyRendererBase):
                 'reward_earnings', 'total_fees']
 
     @staticmethod
+    def render_apr_summary_table(strategy: dict, timestamp_seconds: int) -> None:
+        """
+        Render APR overview table for noloop_cross_protocol_lending in the strategy modal.
+
+        Columns: Token Flow, Protocols, Net APR, APR 5d, APR 30d, Liq Dist,
+                 Fees (%), Days to BE, Max Liquidity.
+        Fees (%) = B_A × borrow_fee_2a (only Protocol A borrow leg; borrow_fee_3b = 0).
+        """
+        apr_net  = _modal_sf(strategy, 'apr_net')
+        apr5     = _modal_sf(strategy, 'apr5')
+        apr30    = _modal_sf(strategy, 'apr30')
+        liq_dist = strategy.get('liquidation_distance', 0.0)
+        b_a      = _modal_sf(strategy, 'b_a')
+        b_b      = _modal_sf(strategy, 'b_b')
+        fees_pct = (b_a * _modal_sf(strategy, 'borrow_fee_2a')
+                  + b_b * _modal_sf(strategy, 'borrow_fee_3b'))
+        days_to_be = strategy.get('days_to_breakeven')
+        max_size   = float(strategy.get('max_size', float('inf')))
+
+        token_flow    = NoLoopCrossProtocolRenderer.build_token_flow_string(pd.Series(strategy))
+        protocol_pair = f"{strategy.get('protocol_a', '')} ↔ {strategy.get('protocol_b', '')}"
+
+        liq_dist_str = (
+            "N/A"
+            if not isinstance(liq_dist, (int, float)) or liq_dist == float('inf')
+            else f"{liq_dist * 100:.2f}%"
+        )
+        max_liq_str = "N/A" if max_size == float('inf') else f"${max_size:,.2f}"
+
+        summary_data = [{
+            'Token Flow':    token_flow,
+            'Protocols':     protocol_pair,
+            'Net APR':       f"{apr_net * 100:.2f}%",
+            'APR 5d':        f"{apr5 * 100:.2f}%",
+            'APR 30d':       f"{apr30 * 100:.2f}%",
+            'Liq Dist':      liq_dist_str,
+            'Fees (%)':      f"{fees_pct * 100:.3f}%",
+            'Days to BE':    format_days_to_breakeven(days_to_be),
+            'Max Liquidity': max_liq_str,
+        }]
+        summary_df = pd.DataFrame(summary_data)
+
+        def _color_apr(val):
+            if isinstance(val, str) and '%' in val:
+                try:
+                    v = float(val.replace('%', ''))
+                    if v > 0:
+                        return 'color: green'
+                    elif v < 0:
+                        return 'color: red'
+                except (ValueError, TypeError):
+                    pass
+            return ''
+
+        styled = summary_df.style.map(_color_apr, subset=['Net APR', 'APR 5d', 'APR 30d'])
+        st.dataframe(styled, width='stretch', hide_index=True)
+
+    @staticmethod
     def render_detail_table(
         position: pd.Series,
         get_rate: Callable,
@@ -2344,7 +2613,6 @@ class NoLoopCrossProtocolRenderer(StrategyRendererBase):
             deployment=deployment,
             segment_data=segment_data,
             segment_type=segment_type,
-            borrow_fee=position.get('entry_borrow_fee_2a'),
             borrow_weight=position.get('entry_borrow_weight_2a', 1.0)
         ))
 
@@ -2508,6 +2776,78 @@ class PerpLendingRenderer(StrategyRendererBase):
     @staticmethod
     def get_metrics_layout() -> List[str]:
         return ['total_pnl', 'total_earnings', 'base_earnings', 'reward_earnings', 'total_fees']
+
+    @staticmethod
+    def render_apr_summary_table(strategy: dict, timestamp_seconds: int) -> None:
+        """
+        Render APR overview table for perp_lending in the strategy selection modal.
+
+        Columns: Token Flow, Protocols, Net APR, APR 5d, APR 30d, Liq Dist,
+                 Basis Cost (%), Fees (%), Total Fees (%), Days to BE, Max Liquidity
+        """
+        apr_net  = _modal_sf(strategy, 'apr_net')
+        apr5     = _modal_sf(strategy, 'apr5')
+        apr30    = _modal_sf(strategy, 'apr30')
+        liq_dist = _modal_sf(strategy, 'liquidation_distance')
+        perp_fees_apr      = _modal_sf(strategy, 'perp_fees_apr')
+        basis_cost         = _modal_sf(strategy, 'basis_cost')
+        basis_cost_included = strategy.get('basis_cost_included', False)
+        total_upfront_fee  = _modal_sf(strategy, 'total_upfront_fee')
+        days_to_be  = strategy.get('days_to_breakeven')
+        max_size    = float(strategy.get('max_size', float('inf')))
+
+        token_flow   = PerpLendingRenderer.build_token_flow_string(pd.Series(strategy))
+        protocol_pair = f"{strategy.get('protocol_a', '')} ↔ {strategy.get('protocol_b', '')}"
+
+        basis_cost_str = (
+            f"{basis_cost * 100:.3f}%"
+            if basis_cost_included
+            else "N/A"
+        )
+        max_liq_str = (
+            "N/A"
+            if max_size == float('inf')
+            else f"${max_size:,.2f}"
+        )
+
+        summary_data = [{
+            'Token Flow':      token_flow,
+            'Protocols':       protocol_pair,
+            'Net APR':         f"{apr_net * 100:.2f}%",
+            'APR 5d':          f"{apr5 * 100:.2f}%",
+            'APR 30d':         f"{apr30 * 100:.2f}%",
+            'Liq Dist':        f"{liq_dist * 100:.2f}%",
+            'Basis Cost (%)':  basis_cost_str,
+            'Fees (%)':        f"{perp_fees_apr * 100:.3f}%",
+            'Total Fees (%)':  f"{total_upfront_fee * 100:.3f}%",
+            'Days to BE':      format_days_to_breakeven(days_to_be),
+            'Max Liquidity':   max_liq_str,
+        }]
+        summary_df = pd.DataFrame(summary_data)
+
+        def _color_apr(val):
+            if isinstance(val, str) and '%' in val:
+                try:
+                    v = float(val.replace('%', ''))
+                    if v > 0:
+                        return 'color: green'
+                    elif v < 0:
+                        return 'color: red'
+                except (ValueError, TypeError):
+                    pass
+            return ''
+
+        def _color_basis(val):
+            if val == "N/A":
+                return 'color: gray; font-style: italic'
+            return ''
+
+        styled = (
+            summary_df.style
+            .map(_color_apr,   subset=['Net APR', 'APR 5d', 'APR 30d'])
+            .map(_color_basis, subset=['Basis Cost (%)'])
+        )
+        st.dataframe(styled, width='stretch', hide_index=True)
 
     @staticmethod
     def render_detail_table(
@@ -2784,6 +3124,86 @@ class PerpBorrowingRenderer(StrategyRendererBase):
     @staticmethod
     def get_metrics_layout() -> List[str]:
         return ['total_pnl', 'total_earnings', 'base_earnings', 'reward_earnings', 'total_fees']
+
+    @staticmethod
+    def render_apr_summary_table(strategy: dict, timestamp_seconds: int) -> None:
+        """
+        Render APR overview table for perp_borrowing (and recursive variant) in the strategy selection modal.
+
+        Columns: Token Flow, Protocols, Net APR, APR 5d, APR 30d, Liq Dist,
+                 Basis Cost (%), Fees (%), Total Fees (%), Days to BE, Max Liquidity
+
+        Fees (%) = perp_fees (L_B × 2 × taker_fee) + borrow_fee (B_A × borrow_fee_2a)
+        Total Fees (%) = Fees + Basis Cost  (stored as total_upfront_fee)
+        """
+        apr_net  = _modal_sf(strategy, 'apr_net')
+        apr5     = _modal_sf(strategy, 'apr5')
+        apr30    = _modal_sf(strategy, 'apr30')
+        liq_dist = _modal_sf(strategy, 'liquidation_distance')
+        perp_fees_apr       = _modal_sf(strategy, 'perp_fees_apr')
+        b_a                 = _modal_sf(strategy, 'b_a')
+        borrow_fee_2a       = _modal_sf(strategy, 'borrow_fee_2a')
+        basis_cost          = _modal_sf(strategy, 'basis_cost')
+        basis_cost_included = strategy.get('basis_cost_included', False)
+        total_upfront_fee   = _modal_sf(strategy, 'total_upfront_fee')
+        days_to_be  = strategy.get('days_to_breakeven')
+        max_size    = float(strategy.get('max_size', float('inf')))
+
+        token_flow    = PerpBorrowingRenderer.build_token_flow_string(pd.Series(strategy))
+        protocol_pair = f"{strategy.get('protocol_a', '')} ↔ {strategy.get('protocol_b', '')}"
+
+        # Fees = perp trading fees (entry + exit) + Protocol A upfront borrow fee
+        trading_fees_pct = perp_fees_apr + b_a * borrow_fee_2a
+
+        basis_cost_str = (
+            f"{basis_cost * 100:.3f}%"
+            if basis_cost_included
+            else "N/A"
+        )
+        max_liq_str = (
+            "N/A"
+            if max_size == float('inf')
+            else f"${max_size:,.2f}"
+        )
+
+        summary_data = [{
+            'Token Flow':      token_flow,
+            'Protocols':       protocol_pair,
+            'Net APR':         f"{apr_net * 100:.2f}%",
+            'APR 5d':          f"{apr5 * 100:.2f}%",
+            'APR 30d':         f"{apr30 * 100:.2f}%",
+            'Liq Dist':        f"{liq_dist * 100:.2f}%",
+            'Basis Cost (%)':  basis_cost_str,
+            'Fees (%)':        f"{trading_fees_pct * 100:.3f}%",
+            'Total Fees (%)':  f"{total_upfront_fee * 100:.3f}%",
+            'Days to BE':      format_days_to_breakeven(days_to_be),
+            'Max Liquidity':   max_liq_str,
+        }]
+        summary_df = pd.DataFrame(summary_data)
+
+        def _color_apr(val):
+            if isinstance(val, str) and '%' in val:
+                try:
+                    v = float(val.replace('%', ''))
+                    if v > 0:
+                        return 'color: green'
+                    elif v < 0:
+                        return 'color: red'
+                except (ValueError, TypeError):
+                    pass
+            return ''
+
+        def _color_basis(val):
+            if val == "N/A":
+                return 'color: gray; font-style: italic'
+            return ''
+
+        styled = (
+            summary_df.style
+            .map(_color_apr,   subset=['Net APR', 'APR 5d', 'APR 30d'])
+            .map(_color_basis, subset=['Basis Cost (%)'])
+        )
+        st.dataframe(styled, width='stretch', hide_index=True)
 
     @staticmethod
     def render_detail_table(

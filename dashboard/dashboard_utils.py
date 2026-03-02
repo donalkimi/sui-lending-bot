@@ -202,6 +202,27 @@ def load_historical_snapshot(timestamp: str, conn: Optional[Any] = None) -> Tupl
 # UTILITY FUNCTIONS
 # ============================================================================
 
+def format_days_to_breakeven(days: Optional[float]) -> str:
+    """
+    Format days to breakeven for display.
+
+    Args:
+        days: Days to breakeven (can be float('inf'), 0, or positive number)
+
+    Returns:
+        Formatted string for display
+    """
+    if days is None:
+        return "N/A"
+    if days == float('inf') or days > 99999:
+        return "Never"
+    if days == 0:
+        return "0.0"
+    if days > 999:
+        return ">999"
+    return f"{days:.1f}"
+
+
 def format_usd_abbreviated(value: float) -> str:
     """Format USD amount abbreviated (e.g., $1.23M, $456K)"""
     if value is None or pd.isna(value):

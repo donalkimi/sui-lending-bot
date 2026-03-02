@@ -18,6 +18,7 @@ import pandas as pd
 
 from analysis.position_service import PositionService
 from utils.time_helpers import to_seconds, to_datetime_str
+from config import settings
 
 
 def calculate_position_statistics(
@@ -249,7 +250,13 @@ def calculate_position_statistics(
     # Get current rates for all 4 legs
     lend_1A = get_rate_func(position['token1_contract'], position['protocol_a'], 'lend')
     borrow_2A = get_rate_func(position['token2_contract'], position['protocol_a'], 'borrow')
-    lend_2B = get_rate_func(position['token2_contract'], position['protocol_b'], 'lend')
+    # For perp_borrowing, leg 2B is the Bluefin long perp — its rates_snapshot entry
+    # is stored under token3_contract (proxy "0xBTC-USDC-PERP_bluefin"), not token2_contract.
+    _strat = position.get('strategy_type', '')
+    if _strat in ('perp_borrowing', 'perp_borrowing_recursive'):
+        lend_2B = get_rate_func(position['token3_contract'], position['protocol_b'], 'lend')
+    else:
+        lend_2B = get_rate_func(position['token2_contract'], position['protocol_b'], 'lend')
     borrow_3B = get_rate_func(position['token3_contract'], position['protocol_b'], 'borrow')
 
     # Get current borrow fees
@@ -259,11 +266,23 @@ def calculate_position_statistics(
     # Calculate gross APR (weighted average of all legs)
     gross_apr = (l_a * lend_1A) + (l_b * lend_2B) - (b_a * borrow_2A) - (b_b * borrow_3B)
 
-    # Calculate fee cost
+    # Calculate fee cost (borrow protocol fees)
     fee_cost = b_a * borrow_fee_2A_current + b_b * borrow_fee_3B_current
 
+    # Perp trading fees: annualised entry + exit taker fee cost
+    # perp_lending:             perp leg = b_b (short perp)
+    # perp_borrowing/recursive: perp leg = l_b (long perp)
+    # all other strategies:     0.0
+    _strategy_type = position.get('strategy_type', '')
+    if _strategy_type == 'perp_lending':
+        perp_trading_fee_apr = b_b * 2.0 * settings.BLUEFIN_TAKER_FEE
+    elif _strategy_type in ('perp_borrowing', 'perp_borrowing_recursive'):
+        perp_trading_fee_apr = l_b * 2.0 * settings.BLUEFIN_TAKER_FEE
+    else:
+        perp_trading_fee_apr = 0.0
+
     # Calculate NET current APR
-    current_apr = gross_apr - fee_cost
+    current_apr = gross_apr - fee_cost - perp_trading_fee_apr
 
     # 8. Return statistics dict
     return {

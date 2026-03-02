@@ -258,6 +258,7 @@ class PerpLendingCalculator(StrategyCalculatorBase):
         basis_spread = kwargs.get('basis_spread')
         basis_mid    = kwargs.get('basis_mid')
         basis_bid    = kwargs.get('basis_bid')   # entry-side basis for perp_lending (short perp at bid)
+        basis_ask    = kwargs.get('basis_ask')   # exit-side basis for perp_lending (cover short at ask)
         basis_cost   = b_b * basis_spread if basis_spread is not None else 0.0  # basis_spread × B_B
 
         net_apr = self.calculate_net_apr(positions=positions, rates=rates, fees={},
@@ -305,6 +306,7 @@ class PerpLendingCalculator(StrategyCalculatorBase):
             'basis_spread': basis_spread,
             'basis_mid': basis_mid,
             'basis_bid': basis_bid,
+            'basis_ask': basis_ask,
             'basis_cost': basis_cost,
             'total_upfront_fee': total_upfront_fee,
             'basis_cost_included': basis_spread is not None,
