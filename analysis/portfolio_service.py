@@ -134,8 +134,8 @@ class PortfolioService:
             'allocation_usd', 'net_apr', 'token1', 'token2', 'token3',
             'token1_contract', 'token2_contract', 'token3_contract',
             'protocol_a', 'protocol_b',
-            'lend_rate_1a', 'borrow_rate_2a', 'lend_rate_2b', 'borrow_rate_3b',
-            'P1_A', 'P2_A', 'P2_B', 'P3_B'
+            'token1_rate', 'token2_rate', 'token3_rate', 'token4_rate',
+            'token1_price', 'token2_price', 'token3_price', 'token4_price'
         ]
         missing_cols = [col for col in required_cols if col not in portfolio_df.columns]
         if missing_cols:

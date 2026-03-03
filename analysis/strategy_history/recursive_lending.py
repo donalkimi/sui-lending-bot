@@ -23,14 +23,14 @@ class RecursiveLendingHistoryHandler(HistoryHandlerBase):
         Recursive needs 4 legs:
         - Leg 1A: token1 at protocol_a (lending)
         - Leg 2A: token2 at protocol_a (borrowing)
-        - Leg 2B: token2 at protocol_b (lending)
-        - Leg 3B: token3 at protocol_b (borrowing)
+        - Leg 2B: token3 at protocol_b (lending = same volatile as token2)
+        - Leg 3B: token4 at protocol_b (borrowing closing stablecoin)
         """
         return [
             (strategy['token1_contract'], strategy['protocol_a']),  # Leg 1A
             (strategy['token2_contract'], strategy['protocol_a']),  # Leg 2A
-            (strategy['token2_contract'], strategy['protocol_b']),  # Leg 2B
-            (strategy['token3_contract'], strategy['protocol_b'])   # Leg 3B
+            (strategy['token3_contract'], strategy['protocol_b']),  # Leg 2B (token3 = token2)
+            (strategy['token4_contract'], strategy['protocol_b'])   # Leg 3B (token4 = closing stablecoin)
         ]
 
     def build_market_data_dict(self, row_group: pd.DataFrame, strategy: Dict) -> Optional[Dict]:
@@ -60,7 +60,7 @@ class RecursiveLendingHistoryHandler(HistoryHandlerBase):
                 leg_2A = row
             elif contract == strategy['token2_contract'] and protocol == strategy['protocol_b']:
                 leg_2B = row
-            elif contract == strategy['token3_contract'] and protocol == strategy['protocol_b']:
+            elif contract == strategy['token4_contract'] and protocol == strategy['protocol_b']:
                 leg_3B = row
 
         # Validate all legs found
@@ -95,13 +95,15 @@ class RecursiveLendingHistoryHandler(HistoryHandlerBase):
         # NOTE: Following DESIGN_NOTES.md Principle 16 - NO .get() with defaults
         try:
             return {
-                # Token symbols (required by calculator as positional args)
+                # Token symbols (universal leg convention)
                 'token1': strategy['token1'],
                 'token2': strategy['token2'],
-                'token3': strategy['token3'],
+                'token3': strategy['token3'],   # L_B = same volatile as token2
+                'token4': strategy['token4'],   # B_B = closing stablecoin
                 'token1_contract': strategy['token1_contract'],
                 'token2_contract': strategy['token2_contract'],
                 'token3_contract': strategy['token3_contract'],
+                'token4_contract': strategy['token4_contract'],
                 'protocol_a': strategy['protocol_a'],
                 'protocol_b': strategy['protocol_b'],
 
@@ -141,11 +143,12 @@ class RecursiveLendingHistoryHandler(HistoryHandlerBase):
     def validate_strategy_dict(self, strategy: Dict) -> Tuple[bool, str]:
         """
         Validate recursive strategy requires:
-        token1, token2, token3, token1_contract, token2_contract, token3_contract, protocol_a, protocol_b.
+        token1, token2, token3 (L_B = volatile), token4 (B_B = closing stablecoin),
+        all four contracts, protocol_a, protocol_b.
         """
         required = [
-            'token1', 'token2', 'token3',
-            'token1_contract', 'token2_contract', 'token3_contract',
+            'token1', 'token2', 'token3', 'token4',
+            'token1_contract', 'token2_contract', 'token3_contract', 'token4_contract',
             'protocol_a', 'protocol_b'
         ]
         missing = [f for f in required if f not in strategy or strategy[f] is None]

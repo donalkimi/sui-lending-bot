@@ -220,10 +220,10 @@ class PerpLendingCalculator(StrategyCalculatorBase):
                 'error': 'Invalid or missing required data'
             }
 
-        # Extract additional params from kwargs
-        token3 = kwargs.get('token3', f'{token1}-PERP')
+        # Extract additional params from kwargs (perp proxy is B_B = token4 slot)
+        token4 = kwargs.get('token4', f'{token1}-PERP')
         token1_contract = kwargs.get('token1_contract')
-        token3_contract = kwargs.get('token3_contract')
+        token4_contract = kwargs.get('token4_contract')
         price_3B = kwargs.get('price_3B', price_1A)  # Default perp price = spot price
 
         # Calculate positions
@@ -279,17 +279,23 @@ class PerpLendingCalculator(StrategyCalculatorBase):
         _t1_a = l_a / price_1A if price_1A > 0 else 0.0
 
         return {
-            # Token and protocol info
+            # Token identity (universal leg convention)
+            # L_A = token1 (spot, lent at protocol_A)
+            # B_A = None (no borrow at protocol_A)
+            # L_B = None (no lend at protocol_B — Bluefin is perp only)
+            # B_B = token4 (perp proxy = short perp at Bluefin)
             'token1': token1,
-            'token2': 'USDC',  # Collateral for perp
-            'token3': token3,
+            'token2': None,     # B_A unused
+            'token3': None,     # L_B unused
+            'token4': token4,   # B_B = short perp proxy
             'protocol_a': protocol_a,
             'protocol_b': protocol_b,
 
-            # Contracts (for historical chart queries)
+            # Contracts
             'token1_contract': token1_contract,
-            'token2_contract': None,  # USDC not tracked separately
-            'token3_contract': token3_contract,
+            'token2_contract': None,
+            'token3_contract': None,
+            'token4_contract': token4_contract,
 
             # Position multipliers
             'l_a': positions['l_a'],
@@ -321,25 +327,25 @@ class PerpLendingCalculator(StrategyCalculatorBase):
             'liq_price_multiplier': liq_price_multiplier,
             'has_lending_liq_risk': False,  # Spot cannot be liquidated
             'has_perp_liq_risk': True,      # Short can be liquidated
-            'max_size': float('inf'),  # Not limited yet
+            'max_size': float('inf'),
 
-            # Prices (required by dashboard)
-            'P1_A': price_1A,
-            'P2_A': 1.0,  # USDC price
-            'P2_B': 1.0,  # USDC price
-            'P3_B': price_3B,  # Perp price
+            # Prices (unused legs = None)
+            'token1_price': price_1A,
+            'token2_price': None,
+            'token3_price': None,
+            'token4_price': price_3B,   # B_B: perp price
 
-            # Token amounts (tokens per $1 deployed) — token-count matching for perp leg
-            'T1_A': _t1_a,
-            'T2_A': 0.0,
-            'T2_B': 0.0,
-            'T3_B': _t1_a,  # perp = spot tokens
+            # Token amounts (tokens per $1 deployed)
+            'token1_units': _t1_a,
+            'token2_units': None,
+            'token3_units': None,
+            'token4_units': _t1_a,  # market neutral: perp short = spot token count
 
-            # Rates (required by dashboard)
-            'lend_rate_1a': lend_total_apr_1A,
-            'borrow_rate_2a': 0.0,  # No borrowing on spot side
-            'lend_rate_2b': 0.0,  # No lending on perp side
-            'borrow_rate_3b': borrow_total_apr_3B,  # Funding rate
+            # Rates (unused legs = None)
+            'token1_rate': lend_total_apr_1A,
+            'token2_rate': None,
+            'token3_rate': None,
+            'token4_rate': borrow_total_apr_3B,  # B_B: perp funding rate
 
             # Validation
             'valid': True,
@@ -349,15 +355,15 @@ class PerpLendingCalculator(StrategyCalculatorBase):
             'net_apr': net_apr,
 
             # Fields not applicable to perp_lending — store as NULL in DB
-            'collateral_ratio_1a': None,
-            'liquidation_threshold_1a': None,
-            'borrow_fee_2a': None,
-            'available_borrow_2a': None,
-            'borrow_weight_2a': None,
-            'collateral_ratio_2b': None,
-            'liquidation_threshold_2b': None,
-            'borrow_fee_3b': None,
-            'borrow_weight_3b': None,
+            'token1_collateral_ratio': None,
+            'token1_liquidation_threshold': None,
+            'token2_borrow_fee': None,
+            'token2_available_borrow': None,
+            'token2_borrow_weight': None,
+            'token3_collateral_ratio': None,
+            'token3_liquidation_threshold': None,
+            'token4_borrow_fee': None,
+            'token4_borrow_weight': None,
 
             # Note: Price PnL calculated separately via calculate_price_pnl()
         }

@@ -255,7 +255,7 @@ class RecursiveLendingCalculator(StrategyCalculatorBase):
     def analyze_strategy(self,
                         token1: str,
                         token2: str,
-                        token3: str,
+                        token4: str,  # B_B leg: closing stablecoin (was token3)
                         protocol_a: str,
                         protocol_b: str,
                         lend_total_apr_1A: float,
@@ -283,7 +283,7 @@ class RecursiveLendingCalculator(StrategyCalculatorBase):
         Args:
             token1: Stablecoin (starting lend, market neutral)
             token2: High-yield token (borrowed for yield)
-            token3: Closing stablecoin (borrowed from Protocol B, converted to token1)
+            token4: Closing stablecoin (borrowed from Protocol B, converted to token1)
             protocol_a, protocol_b: Protocol names
             lend_total_apr_1A, etc.: Total APRs (base + reward)
             collateral_ratio_1A, collateral_ratio_2B: Max collateral factors
@@ -345,7 +345,26 @@ class RecursiveLendingCalculator(StrategyCalculatorBase):
 
             _t2_a = positions['b_a'] / price_2A if price_2A > 0 else 0.0
 
+            # Extract contracts from kwargs (passed by rate_analyzer)
+            token1_contract = kwargs.get('token1_contract')
+            token2_contract = kwargs.get('token2_contract')
+            token4_contract = kwargs.get('token4_contract')
+
             return {
+                # Token identity (universal leg convention)
+                'token1': token1,
+                'token2': token2,
+                'token3': token2,           # L_B = same volatile as B_A
+                'token4': token4,           # B_B = closing stablecoin
+                'protocol_a': protocol_a,
+                'protocol_b': protocol_b,
+
+                # Contracts
+                'token1_contract': token1_contract,
+                'token2_contract': token2_contract,
+                'token3_contract': token2_contract,  # Same token as token2
+                'token4_contract': token4_contract,
+
                 # Position multipliers
                 'l_a': positions['l_a'],
                 'b_a': positions['b_a'],
@@ -354,7 +373,7 @@ class RecursiveLendingCalculator(StrategyCalculatorBase):
 
                 # APR metrics
                 'net_apr': net_apr,   # kept for backwards compat (dashboard, position_renderers)
-                'apr_net': net_apr,   # added for consistency with all other strategy types
+                'apr_net': net_apr,
                 'apr5': apr5,
                 'apr30': apr30,
                 'apr90': apr90,
@@ -364,17 +383,37 @@ class RecursiveLendingCalculator(StrategyCalculatorBase):
                 'liquidation_distance': self.liq_dist_input,
                 'max_size': max_size,
 
-                # Prices (required by dashboard)
-                'P1_A': price_1A,
-                'P2_A': price_2A,
-                'P2_B': price_2B,
-                'P3_B': price_3B,
+                # Prices
+                'token1_price': price_1A,
+                'token2_price': price_2A,
+                'token3_price': price_2B,   # L_B: volatile token at protocol_B
+                'token4_price': price_3B,   # B_B: closing stablecoin
 
                 # Token amounts (tokens per $1 deployed)
-                'T1_A': positions['l_a'] / price_1A if price_1A > 0 else 0.0,
-                'T2_A': _t2_a,
-                'T2_B': _t2_a,  # same tokens as T2_A
-                'T3_B': positions['b_b'] / price_3B if price_3B > 0 else 0.0,
+                'token1_units': positions['l_a'] / price_1A if price_1A > 0 else 0.0,
+                'token2_units': _t2_a,
+                'token3_units': _t2_a,      # same tokens as B_A (lend same volatile in B)
+                'token4_units': positions['b_b'] / price_3B if price_3B > 0 else 0.0,
+
+                # Rates
+                'token1_rate': lend_total_apr_1A,
+                'token2_rate': borrow_total_apr_2A,
+                'token3_rate': lend_total_apr_2B,
+                'token4_rate': borrow_total_apr_3B,
+
+                # Collateral and liquidation
+                'token1_collateral_ratio': collateral_ratio_1A,
+                'token3_collateral_ratio': collateral_ratio_2B,
+                'token1_liquidation_threshold': liquidation_threshold_1A,
+                'token3_liquidation_threshold': liquidation_threshold_2B,
+
+                # Fees and liquidity
+                'token2_borrow_fee': borrow_fee_2A,
+                'token4_borrow_fee': borrow_fee_3B,
+                'token2_available_borrow': available_borrow_2A,
+                'available_borrow_3b': available_borrow_3B,
+                'token2_borrow_weight': borrow_weight_2A,
+                'token4_borrow_weight': borrow_weight_3B,
 
                 # Metadata
                 'valid': True,

@@ -283,17 +283,19 @@ class NoLoopCrossProtocolCalculator(StrategyCalculatorBase):
         _t2_a = positions['b_a'] / price_2A if price_2A > 0 else 0.0
 
         return {
-            # Token and protocol info
+            # Token and protocol info (universal leg convention)
             'token1': token1,
             'token2': token2,
-            'token3': token2,  # NoLoop doesn't loop back, so token3 = token2
+            'token3': token2,   # L_B = same volatile as B_A
+            'token4': None,     # B_B = 0 (no loop back)
             'protocol_a': protocol_a,
             'protocol_b': protocol_b,
 
-            # Contracts (for historical chart queries)
+            # Contracts
             'token1_contract': token1_contract,
             'token2_contract': token2_contract,
             'token3_contract': token2_contract,  # Same as token2
+            'token4_contract': None,             # B_B unused
 
             # Position multipliers
             'l_a': positions['l_a'],
@@ -309,40 +311,40 @@ class NoLoopCrossProtocolCalculator(StrategyCalculatorBase):
             'days_to_breakeven': days_to_breakeven,
 
             # Risk metrics
-            'liquidation_distance': liquidation_distance,  # Store original user input for display
+            'liquidation_distance': liquidation_distance,
             'max_size': max_size,
 
-            # Prices (required by dashboard)
-            'P1_A': price_1A,
-            'P2_A': price_2A,
-            'P2_B': price_2B,
-            'P3_B': price_2B,  # Same as P2_B since token3 = token2
+            # Prices
+            'token1_price': price_1A,
+            'token2_price': price_2A,
+            'token3_price': price_2B,
+            'token4_price': None,   # B_B unused
 
             # Token amounts (tokens per $1 deployed)
-            'T1_A': positions['l_a'] / price_1A if price_1A > 0 else 0.0,
-            'T2_A': _t2_a,
-            'T2_B': _t2_a,  # same tokens as T2_A
-            'T3_B': 0.0,  # no 4th leg
+            'token1_units': positions['l_a'] / price_1A if price_1A > 0 else 0.0,
+            'token2_units': _t2_a,
+            'token3_units': _t2_a,  # same tokens as T2_A
+            'token4_units': None,   # B_B unused
 
-            # Rates (required by dashboard)
-            'lend_rate_1a': lend_total_apr_1A,
-            'borrow_rate_2a': borrow_total_apr_2A,
-            'lend_rate_2b': lend_total_apr_2B,
-            'borrow_rate_3b': 0.0,  # No 4th leg
+            # Rates
+            'token1_rate': lend_total_apr_1A,
+            'token2_rate': borrow_total_apr_2A,
+            'token3_rate': lend_total_apr_2B,
+            'token4_rate': None,    # B_B unused
 
-            # Collateral and liquidation (required by dashboard)
-            'collateral_ratio_1a': collateral_ratio_1A,
-            'collateral_ratio_2b': 0.0,  # No borrowing on leg B
-            'liquidation_threshold_1a': liquidation_threshold_1A,
-            'liquidation_threshold_2b': 0.0,  # No borrowing on leg B
+            # Collateral and liquidation
+            'token1_collateral_ratio': collateral_ratio_1A,
+            'token3_collateral_ratio': 0.0,  # No borrowing on leg B
+            'token1_liquidation_threshold': liquidation_threshold_1A,
+            'token3_liquidation_threshold': 0.0,  # No borrowing on leg B
 
-            # Fees and liquidity (required by dashboard)
-            'borrow_fee_2a': borrow_fee_2A or 0.0,
-            'borrow_fee_3b': 0.0,  # No 4th leg
-            'available_borrow_2a': available_borrow_2A,
-            'available_borrow_3b': 0.0,  # No 4th leg
-            'borrow_weight_2a': kwargs.get('borrow_weight_2A', 1.0),
-            'borrow_weight_3b': 1.0,  # No 4th leg
+            # Fees and liquidity
+            'token2_borrow_fee': borrow_fee_2A or 0.0,
+            'token4_borrow_fee': None,  # B_B unused
+            'token2_available_borrow': available_borrow_2A,
+            'available_borrow_3b': None,  # B_B unused
+            'token2_borrow_weight': kwargs.get('borrow_weight_2A', 1.0),
+            'token4_borrow_weight': None,  # B_B unused
 
             # Metadata
             'valid': True,

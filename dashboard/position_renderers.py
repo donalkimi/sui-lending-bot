@@ -665,22 +665,22 @@ def build_segment_data_from_position(position: pd.Series) -> Dict:
         'is_live_segment': True,
 
         # Token amounts from position entry (stored in positions table)
-        'opening_token_amount_1a': position.get('entry_token_amount_1a'),
-        'opening_token_amount_2a': position.get('entry_token_amount_2a'),
-        'opening_token_amount_2b': position.get('entry_token_amount_2b'),
-        'opening_token_amount_3b': position.get('entry_token_amount_3b'),
+        'opening_token1_amount': position.get('entry_token1_amount'),
+        'opening_token2_amount': position.get('entry_token2_amount'),
+        'opening_token3_amount': position.get('entry_token3_amount'),
+        'opening_token4_amount': position.get('entry_token4_amount'),
 
         # Prices from position entry
-        'opening_price_1a': position.get('entry_price_1a'),
-        'opening_price_2a': position.get('entry_price_2a'),
-        'opening_price_2b': position.get('entry_price_2b'),
-        'opening_price_3b': position.get('entry_price_3b'),
+        'opening_token1_price': position.get('entry_token1_price'),
+        'opening_token2_price': position.get('entry_token2_price'),
+        'opening_token3_price': position.get('entry_token3_price'),
+        'opening_token4_price': position.get('entry_token4_price'),
 
         # Rates from position entry
-        'opening_lend_rate_1a': position.get('entry_lend_rate_1a'),
-        'opening_borrow_rate_2a': position.get('entry_borrow_rate_2a'),
-        'opening_lend_rate_2b': position.get('entry_lend_rate_2b'),
-        'opening_borrow_rate_3b': position.get('entry_borrow_rate_3b'),
+        'opening_token1_rate': position.get('entry_token1_rate'),
+        'opening_token2_rate': position.get('entry_token2_rate'),
+        'opening_token3_rate': position.get('entry_token3_rate'),
+        'opening_token4_rate': position.get('entry_token4_rate'),
     }
 
     return segment_data
@@ -710,34 +710,34 @@ def build_segment_data_from_rebalance(rebalance: Dict) -> Dict:
         'is_live_segment': _is_live,
 
         # Token amounts from rebalance entry
-        'opening_token_amount_1a': rebalance.get('entry_token_amount_1a'),
-        'opening_token_amount_2a': rebalance.get('entry_token_amount_2a'),
-        'opening_token_amount_2b': rebalance.get('entry_token_amount_2b'),
-        'opening_token_amount_3b': rebalance.get('entry_token_amount_3b'),
+        'opening_token1_amount': rebalance.get('entry_token1_amount'),
+        'opening_token2_amount': rebalance.get('entry_token2_amount'),
+        'opening_token3_amount': rebalance.get('entry_token3_amount'),
+        'opening_token4_amount': rebalance.get('entry_token4_amount'),
 
         # Prices from rebalance opening
-        'opening_price_1a': rebalance.get('opening_price_1a'),
-        'opening_price_2a': rebalance.get('opening_price_2a'),
-        'opening_price_2b': rebalance.get('opening_price_2b'),
-        'opening_price_3b': rebalance.get('opening_price_3b'),
+        'opening_token1_price': rebalance.get('opening_token1_price'),
+        'opening_token2_price': rebalance.get('opening_token2_price'),
+        'opening_token3_price': rebalance.get('opening_token3_price'),
+        'opening_token4_price': rebalance.get('opening_token4_price'),
 
         # Prices from rebalance closing (for historical segments)
-        'closing_price_1a': rebalance.get('closing_price_1a'),
-        'closing_price_2a': rebalance.get('closing_price_2a'),
-        'closing_price_2b': rebalance.get('closing_price_2b'),
-        'closing_price_3b': rebalance.get('closing_price_3b'),
+        'closing_token1_price': rebalance.get('closing_token1_price'),
+        'closing_token2_price': rebalance.get('closing_token2_price'),
+        'closing_token3_price': rebalance.get('closing_token3_price'),
+        'closing_token4_price': rebalance.get('closing_token4_price'),
 
         # Rates from rebalance opening
-        'opening_lend_rate_1a': rebalance.get('opening_lend_rate_1a'),
-        'opening_borrow_rate_2a': rebalance.get('opening_borrow_rate_2a'),
-        'opening_lend_rate_2b': rebalance.get('opening_lend_rate_2b'),
-        'opening_borrow_rate_3b': rebalance.get('opening_borrow_rate_3b'),
+        'opening_token1_rate': rebalance.get('opening_token1_rate'),
+        'opening_token2_rate': rebalance.get('opening_token2_rate'),
+        'opening_token3_rate': rebalance.get('opening_token3_rate'),
+        'opening_token4_rate': rebalance.get('opening_token4_rate'),
 
         # Rates from rebalance closing (for historical segments)
-        'closing_lend_rate_1a': rebalance.get('closing_lend_rate_1a'),
-        'closing_borrow_rate_2a': rebalance.get('closing_borrow_rate_2a'),
-        'closing_lend_rate_2b': rebalance.get('closing_lend_rate_2b'),
-        'closing_borrow_rate_3b': rebalance.get('closing_borrow_rate_3b'),
+        'closing_token1_rate': rebalance.get('closing_token1_rate'),
+        'closing_token2_rate': rebalance.get('closing_token2_rate'),
+        'closing_token3_rate': rebalance.get('closing_token3_rate'),
+        'closing_token4_rate': rebalance.get('closing_token4_rate'),
     }
 
     return segment_data
@@ -776,25 +776,25 @@ def compute_basis_adjusted_current_apr(
         return current_apr
 
     if strategy_type == 'perp_lending':
-        spot_tokens      = _safe_float(position.get('entry_token_amount_1a', 0.0))
-        perp_tokens      = _safe_float(position.get('entry_token_amount_3b', 0.0))
-        entry_spot_price = _safe_float(position.get('entry_price_1a', 0.0))
-        entry_perp_price = _safe_float(position.get('entry_price_3b', 0.0))
+        spot_tokens      = _safe_float(position.get('entry_token1_amount', 0.0))
+        perp_tokens      = _safe_float(position.get('entry_token4_amount', 0.0))
+        entry_spot_price = _safe_float(position.get('entry_token1_price', 0.0))
+        entry_perp_price = _safe_float(position.get('entry_token4_price', 0.0))
         live_spot_price  = get_price_with_fallback(position['token1'], position['protocol_a'])
-        live_perp_price  = get_price_with_fallback(position['token3'], position['protocol_b'])
+        live_perp_price  = get_price_with_fallback(position['token4'], position['protocol_b'])
         if live_spot_price is None or live_perp_price is None:
             return current_apr
         basis_pnl = ((live_spot_price - entry_spot_price) * spot_tokens
                    - (live_perp_price - entry_perp_price) * perp_tokens)
     else:  # perp_borrowing / perp_borrowing_recursive
-        # Leg 2B = long perp (weight l_b). entry_token_amount_2b and entry_price_2b
+        # Leg 2B = long perp (weight l_b). entry_token3_amount and entry_token3_price
         # are the correct fields — NOT 3b (which has b_b=0 for perp_borrowing).
         # get_price_with_fallback(token2, bluefin) misses rate_lookup and falls back
         # to oracle_prices['BTC'] = real price from lending protocol rows.
-        spot_tokens      = _safe_float(position.get('entry_token_amount_2a', 0.0))
-        perp_tokens      = _safe_float(position.get('entry_token_amount_2b', 0.0))
-        entry_spot_price = _safe_float(position.get('entry_price_2a', 0.0))
-        entry_perp_price = _safe_float(position.get('entry_price_2b', 0.0))
+        spot_tokens      = _safe_float(position.get('entry_token2_amount', 0.0))
+        perp_tokens      = _safe_float(position.get('entry_token3_amount', 0.0))
+        entry_spot_price = _safe_float(position.get('entry_token2_price', 0.0))
+        entry_perp_price = _safe_float(position.get('entry_token3_price', 0.0))
         live_spot_price  = get_price_with_fallback(position['token2'], position['protocol_a'])
         live_perp_price  = get_price_with_fallback(position['token2'], position['protocol_b'])
         if live_spot_price is None or live_perp_price is None:
@@ -1274,10 +1274,10 @@ class RecursiveLendingRenderer(StrategyRendererBase):
         required_fields = [
             'token1', 'token2', 'protocol_a', 'protocol_b',
             'l_a', 'b_a', 'l_b', 'b_b',
-            'entry_lend_rate_1a', 'entry_borrow_rate_2a',
-            'entry_lend_rate_2b', 'entry_borrow_rate_3b',
-            'entry_price_1a', 'entry_price_2a',
-            'entry_price_2b', 'entry_price_3b'
+            'entry_token1_rate', 'entry_token2_rate',
+            'entry_token3_rate', 'entry_token4_rate',
+            'entry_token1_price', 'entry_token2_price',
+            'entry_token3_price', 'entry_token4_price'
         ]
 
         return all(field in position.index for field in required_fields)
@@ -1296,7 +1296,7 @@ class RecursiveLendingRenderer(StrategyRendererBase):
         Columns: Token Flow, Protocols, Net APR, APR 5d, APR 30d, Liq Dist,
                  Fees (%), Days to BE, Max Liquidity.
         No basis columns — non-perp strategies have no spot/perp spread.
-        Note: borrow_fee_2a / borrow_fee_3b are not stored in the recursive_lending
+        Note: token2_borrow_fee / token4_borrow_fee are not stored in the recursive_lending
         result dict, so Fees (%) shows 0.00% (same as the existing inline fallback).
         """
         apr_net  = _modal_sf(strategy, 'apr_net')
@@ -1305,8 +1305,8 @@ class RecursiveLendingRenderer(StrategyRendererBase):
         liq_dist = strategy.get('liquidation_distance', 0.0)
         b_a      = _modal_sf(strategy, 'b_a')
         b_b      = _modal_sf(strategy, 'b_b')
-        fees_pct = (b_a * _modal_sf(strategy, 'borrow_fee_2a')
-                  + b_b * _modal_sf(strategy, 'borrow_fee_3b'))
+        fees_pct = (b_a * _modal_sf(strategy, 'token2_borrow_fee')
+                  + b_b * _modal_sf(strategy, 'token4_borrow_fee'))
         days_to_be = strategy.get('days_to_breakeven')
         max_size   = float(strategy.get('max_size', float('inf')))
 
@@ -1377,8 +1377,8 @@ class RecursiveLendingRenderer(StrategyRendererBase):
         # For historical segments, use closing prices from segment_data
         # For live segments, use current market prices
         if segment_type == 'historical' and segment_data:
-            token2_price_live = float(segment_data.get('closing_price_2a')) if segment_data.get('closing_price_2a') is not None else None
-            token1_price_live = float(segment_data.get('closing_price_1a')) if segment_data.get('closing_price_1a') is not None else None
+            token2_price_live = float(segment_data.get('closing_token2_price')) if segment_data.get('closing_token2_price') is not None else None
+            token1_price_live = float(segment_data.get('closing_token1_price')) if segment_data.get('closing_token1_price') is not None else None
         else:
             token2_price_live = get_price_with_fallback(position['token2'], position['protocol_a'])
             token1_price_live = get_price_with_fallback(position['token1'], position['protocol_a'])
@@ -1390,8 +1390,8 @@ class RecursiveLendingRenderer(StrategyRendererBase):
             token=position['token1'],
             protocol=position['protocol_a'],
             weight=position['l_a'],
-            entry_rate=position['entry_lend_rate_1a'],
-            entry_price=position['entry_price_1a'],
+            entry_rate=position['entry_token1_rate'],
+            entry_price=position['entry_token1_price'],
             get_rate=get_rate,
             get_price_with_fallback=get_price_with_fallback,
             deployment=deployment,
@@ -1399,10 +1399,10 @@ class RecursiveLendingRenderer(StrategyRendererBase):
             segment_type=segment_type,
             borrow_token=position['token2'],  # Leg 2A borrows token2
             borrow_price_live=token2_price_live,
-            borrow_price_entry=position['entry_price_2a'],
+            borrow_price_entry=position['entry_token2_price'],
             borrow_weight_value=position['b_a'],
-            liquidation_threshold=position.get('entry_liquidation_threshold_1a', 0.0),
-            borrow_weight=position.get('entry_borrow_weight_2a', 1.0)
+            liquidation_threshold=position.get('entry_token1_liquidation_threshold', 0.0),
+            borrow_weight=position.get('entry_token2_borrow_weight', 1.0)
         ))
 
         # ========== LEG 2: Protocol A - Borrow token2 ==========
@@ -1412,10 +1412,10 @@ class RecursiveLendingRenderer(StrategyRendererBase):
             token=position['token2'],
             protocol=position['protocol_a'],
             weight=position['b_a'],
-            entry_rate=position['entry_borrow_rate_2a'],
-            entry_price=position['entry_price_2a'],
-            collateral_ratio=position.get('entry_collateral_ratio_1a', 0.0),
-            liquidation_threshold=position.get('entry_liquidation_threshold_1a', 0.0),
+            entry_rate=position['entry_token2_rate'],
+            entry_price=position['entry_token2_price'],
+            collateral_ratio=position.get('entry_token1_collateral_ratio', 0.0),
+            liquidation_threshold=position.get('entry_token1_liquidation_threshold', 0.0),
             get_rate=get_rate,
             get_borrow_fee=get_borrow_fee,
             get_price_with_fallback=get_price_with_fallback,
@@ -1424,23 +1424,23 @@ class RecursiveLendingRenderer(StrategyRendererBase):
             segment_type=segment_type,
             collateral_token=position['token1'],
             collateral_price_live=token1_price_live,
-            collateral_price_entry=position['entry_price_1a'],
-            borrow_weight=position.get('entry_borrow_weight_2a', 1.0)
+            collateral_price_entry=position['entry_token1_price'],
+            borrow_weight=position.get('entry_token2_borrow_weight', 1.0)
         ))
 
         # ========== LEG 3: Protocol B - Lend token2 ==========
-        # Check if there's a 4th leg (borrow token3) to calculate liquidation
-        token3 = position.get('token3')
+        # Check if there's a 4th leg (borrow token4 = closing stablecoin) to calculate liquidation
+        token4 = position.get('token4')
         b_b = position.get('b_b')
-        has_leg4 = token3 is not None and pd.notna(token3) and str(token3).strip() != '' and b_b is not None and pd.notna(b_b) and float(b_b) > 0
+        has_leg4 = token4 is not None and pd.notna(token4) and str(token4).strip() != '' and b_b is not None and pd.notna(b_b) and float(b_b) > 0
 
         # For historical segments, use closing prices from segment_data
         # For live segments, use current market prices
         if segment_type == 'historical' and segment_data:
-            token3_price_live = float(segment_data.get('closing_price_3b')) if (has_leg4 and segment_data.get('closing_price_3b') is not None) else None
-            token2_price_live_protocolb = float(segment_data.get('closing_price_2b')) if segment_data.get('closing_price_2b') is not None else None
+            token4_price_live = float(segment_data.get('closing_token4_price')) if (has_leg4 and segment_data.get('closing_token4_price') is not None) else None
+            token2_price_live_protocolb = float(segment_data.get('closing_token3_price')) if segment_data.get('closing_token3_price') is not None else None
         else:
-            token3_price_live = get_price_with_fallback(position['token3'], position['protocol_b']) if has_leg4 else None
+            token4_price_live = get_price_with_fallback(position['token4'], position['protocol_b']) if has_leg4 else None
             token2_price_live_protocolb = get_price_with_fallback(position['token2'], position['protocol_b'])
 
         detail_data.append(RecursiveLendingRenderer._build_lend_leg_row(
@@ -1449,34 +1449,34 @@ class RecursiveLendingRenderer(StrategyRendererBase):
             token=position['token2'],
             protocol=position['protocol_b'],
             weight=position['l_b'],
-            entry_rate=position['entry_lend_rate_2b'],
-            entry_price=position['entry_price_2b'],
+            entry_rate=position['entry_token3_rate'],
+            entry_price=position['entry_token3_price'],
             get_rate=get_rate,
             get_price_with_fallback=get_price_with_fallback,
             deployment=deployment,
             segment_data=segment_data,
             segment_type=segment_type,
-            borrow_token=position['token3'] if has_leg4 else None,  # Leg 3B borrows token3 (if exists)
-            borrow_price_live=token3_price_live,
-            borrow_price_entry=position['entry_price_3b'] if has_leg4 else None,
+            borrow_token=position['token4'] if has_leg4 else None,  # Leg 3B borrows token4 (B_B = closing stablecoin)
+            borrow_price_live=token4_price_live,
+            borrow_price_entry=position['entry_token4_price'] if has_leg4 else None,
             borrow_weight_value=position['b_b'] if has_leg4 else None,
-            liquidation_threshold=position.get('entry_liquidation_threshold_2b', 0.0) if has_leg4 else None,
-            borrow_weight=position.get('entry_borrow_weight_3b', 1.0) if has_leg4 else 1.0
+            liquidation_threshold=position.get('entry_token3_liquidation_threshold', 0.0) if has_leg4 else None,
+            borrow_weight=position.get('entry_token4_borrow_weight', 1.0) if has_leg4 else 1.0
         ))
 
-        # ========== LEG 4: Protocol B - Borrow token3 (if levered) ==========
+        # ========== LEG 4: Protocol B - Borrow token4 (B_B = closing stablecoin, if levered) ==========
         # Use has_leg4 check from Leg 3
         if has_leg4:
             detail_data.append(RecursiveLendingRenderer._build_borrow_leg_row(
                 position=position,
                 leg_id='leg_3b',
-                token=position['token3'],
+                token=position['token4'],
                 protocol=position['protocol_b'],
                 weight=position['b_b'],
-                entry_rate=position['entry_borrow_rate_3b'],
-                entry_price=position['entry_price_3b'],
-                collateral_ratio=position.get('entry_collateral_ratio_2b', 0.0),
-                liquidation_threshold=position.get('entry_liquidation_threshold_2b', 0.0),
+                entry_rate=position['entry_token4_rate'],
+                entry_price=position['entry_token4_price'],
+                collateral_ratio=position.get('entry_token3_collateral_ratio', 0.0),
+                liquidation_threshold=position.get('entry_token3_liquidation_threshold', 0.0),
                 get_rate=get_rate,
                 get_borrow_fee=get_borrow_fee,
                 get_price_with_fallback=get_price_with_fallback,
@@ -1485,8 +1485,8 @@ class RecursiveLendingRenderer(StrategyRendererBase):
                 segment_type=segment_type,
                 collateral_token=position['token2'],
                 collateral_price_live=token2_price_live_protocolb,
-                collateral_price_entry=position['entry_price_2b'],
-                borrow_weight=position.get('entry_borrow_weight_3b', 1.0)
+                collateral_price_entry=position['entry_token3_price'],
+                borrow_weight=position.get('entry_token4_borrow_weight', 1.0)
             ))
 
         # Display table
@@ -1502,25 +1502,25 @@ class RecursiveLendingRenderer(StrategyRendererBase):
         b_a = _modal_sf(strategy, 'b_a')
         l_b = _modal_sf(strategy, 'l_b')
         b_b = _modal_sf(strategy, 'b_b')
-        P1_A = _modal_sf(strategy, 'P1_A', 1.0)
-        P2_A = _modal_sf(strategy, 'P2_A', 1.0)
-        P2_B = _modal_sf(strategy, 'P2_B', 1.0)
-        P3_B = _modal_sf(strategy, 'P3_B', 1.0)
-        borrow_fee_2a = _modal_sf(strategy, 'borrow_fee_2a')
-        borrow_fee_3b = _modal_sf(strategy, 'borrow_fee_3b')
-        borrow_weight_2a = _modal_sf(strategy, 'borrow_weight_2a', 1.0)
-        borrow_weight_3b = _modal_sf(strategy, 'borrow_weight_3b', 1.0)
-        lltv_1A = _modal_sf(strategy, 'liquidation_threshold_1a')
-        lltv_2B = _modal_sf(strategy, 'liquidation_threshold_2b')
-        collateral_ratio_1a = _modal_sf(strategy, 'collateral_ratio_1a')
-        collateral_ratio_2b = _modal_sf(strategy, 'collateral_ratio_2b')
-        available_borrow_2a = _modal_sf(strategy, 'available_borrow_2a')
+        P1_A = _modal_sf(strategy, 'token1_price', 1.0)
+        P2_A = _modal_sf(strategy, 'token2_price', 1.0)
+        P2_B = _modal_sf(strategy, 'token3_price', 1.0)
+        P3_B = _modal_sf(strategy, 'token4_price', 1.0)
+        token2_borrow_fee = _modal_sf(strategy, 'token2_borrow_fee')
+        token4_borrow_fee = _modal_sf(strategy, 'token4_borrow_fee')
+        token2_borrow_weight = _modal_sf(strategy, 'token2_borrow_weight', 1.0)
+        token4_borrow_weight = _modal_sf(strategy, 'token4_borrow_weight', 1.0)
+        lltv_1A = _modal_sf(strategy, 'token1_liquidation_threshold')
+        lltv_2B = _modal_sf(strategy, 'token3_liquidation_threshold')
+        token1_collateral_ratio = _modal_sf(strategy, 'token1_collateral_ratio')
+        token3_collateral_ratio = _modal_sf(strategy, 'token3_collateral_ratio')
+        token2_available_borrow = _modal_sf(strategy, 'token2_available_borrow')
         available_borrow_3b = _modal_sf(strategy, 'available_borrow_3b')
 
-        T1_A = _modal_sf(strategy, 'T1_A')
-        T2_A = _modal_sf(strategy, 'T2_A')
-        T2_B = _modal_sf(strategy, 'T2_B')
-        T3_B = _modal_sf(strategy, 'T3_B')
+        T1_A = _modal_sf(strategy, 'token1_units')
+        T2_A = _modal_sf(strategy, 'token2_units')
+        T2_B = _modal_sf(strategy, 'token3_units')
+        T3_B = _modal_sf(strategy, 'token4_units')
         entry_token_amount_1A = T1_A * deployment_usd
         entry_token_amount_2 = T2_A * deployment_usd
         entry_token_amount_2B = T2_B * deployment_usd
@@ -1529,20 +1529,20 @@ class RecursiveLendingRenderer(StrategyRendererBase):
         position_size_2A = b_a * deployment_usd
         position_size_2B = l_b * deployment_usd
         position_size_3B = b_b * deployment_usd
-        fee_usd_2A = b_a * borrow_fee_2a * deployment_usd
-        fee_usd_3B = b_b * borrow_fee_3b * deployment_usd
+        fee_usd_2A = b_a * token2_borrow_fee * deployment_usd
+        fee_usd_3B = b_b * token4_borrow_fee * deployment_usd
         precision_1A = get_token_precision(P1_A)
         precision_2A = get_token_precision(P2_A)
         precision_2B = get_token_precision(P2_B)
         precision_3B = get_token_precision(P3_B)
-        effective_ltv_1A = (b_a / l_a) * borrow_weight_2a if l_a > 0 else 0.0
-        effective_ltv_2B = (b_b / l_b) * borrow_weight_3b if l_b > 0 else 0.0
+        effective_ltv_1A = (b_a / l_a) * token2_borrow_weight if l_a > 0 else 0.0
+        effective_ltv_2B = (b_b / l_b) * token4_borrow_weight if l_b > 0 else 0.0
 
         calc = PositionCalculator()
-        liq1 = calc.calculate_liquidation_price(position_size_1A, position_size_2A, P1_A, P2_A, lltv_1A, 'lending', borrow_weight_2a)
-        liq2 = calc.calculate_liquidation_price(position_size_1A, position_size_2A, P1_A, P2_A, lltv_1A, 'borrowing', borrow_weight_2a)
-        liq3 = calc.calculate_liquidation_price(position_size_2B, position_size_3B, P2_B, P3_B, lltv_2B, 'lending', borrow_weight_3b)
-        liq4 = calc.calculate_liquidation_price(position_size_2B, position_size_3B, P2_B, P3_B, lltv_2B, 'borrowing', borrow_weight_3b)
+        liq1 = calc.calculate_liquidation_price(position_size_1A, position_size_2A, P1_A, P2_A, lltv_1A, 'lending', token2_borrow_weight)
+        liq2 = calc.calculate_liquidation_price(position_size_1A, position_size_2A, P1_A, P2_A, lltv_1A, 'borrowing', token2_borrow_weight)
+        liq3 = calc.calculate_liquidation_price(position_size_2B, position_size_3B, P2_B, P3_B, lltv_2B, 'lending', token4_borrow_weight)
+        liq4 = calc.calculate_liquidation_price(position_size_2B, position_size_3B, P2_B, P3_B, lltv_2B, 'borrowing', token4_borrow_weight)
 
         def _lp(r):
             p = r['liq_price']
@@ -1555,9 +1555,9 @@ class RecursiveLendingRenderer(StrategyRendererBase):
         detail_data = [
             {
                 'Protocol': strategy.get('protocol_a', ''), 'Token': strategy.get('token1', ''), 'Action': 'Lend',
-                'maxCF': f"{collateral_ratio_1a:.2%}", 'LLTV': f"{lltv_1A:.2%}" if lltv_1A > 0 else "",
+                'maxCF': f"{token1_collateral_ratio:.2%}", 'LLTV': f"{lltv_1A:.2%}" if lltv_1A > 0 else "",
                 'Effective LTV': f"{effective_ltv_1A:.2%}", 'Borrow Weight': "-", 'Weight': f"{l_a:.4f}",
-                'Rate': f"{_modal_sf(strategy, 'lend_rate_1a') * 100:.2f}%",
+                'Rate': f"{_modal_sf(strategy, 'token1_rate') * 100:.2f}%",
                 'Token Amount': f"{entry_token_amount_1A:,.{precision_1A}f}", 'Size ($$$)': f"${position_size_1A:,.2f}",
                 'Price': f"${P1_A:.4f}", 'Fees (%)': "", 'Fees ($$$)': "",
                 'Liquidation Price': _lp(liq1), 'Liq Distance': _ld(liq1), 'Max Borrow': "",
@@ -1565,20 +1565,20 @@ class RecursiveLendingRenderer(StrategyRendererBase):
             {
                 'Protocol': strategy.get('protocol_a', ''), 'Token': strategy.get('token2', ''), 'Action': 'Borrow',
                 'maxCF': "-", 'LLTV': "-", 'Effective LTV': "-",
-                'Borrow Weight': f"{borrow_weight_2a:.2f}x", 'Weight': f"{b_a:.4f}",
-                'Rate': f"{_modal_sf(strategy, 'borrow_rate_2a') * 100:.2f}%",
+                'Borrow Weight': f"{token2_borrow_weight:.2f}x", 'Weight': f"{b_a:.4f}",
+                'Rate': f"{_modal_sf(strategy, 'token2_rate') * 100:.2f}%",
                 'Token Amount': f"{entry_token_amount_2:,.{precision_2A}f}", 'Size ($$$)': f"${position_size_2A:,.2f}",
                 'Price': f"${P2_A:.4f}",
-                'Fees (%)': f"{borrow_fee_2a * 100:.2f}%" if borrow_fee_2a > 0 else "",
+                'Fees (%)': f"{token2_borrow_fee * 100:.2f}%" if token2_borrow_fee > 0 else "",
                 'Fees ($$$)': f"${fee_usd_2A:.2f}" if fee_usd_2A > 0 else "",
                 'Liquidation Price': _lp(liq2), 'Liq Distance': _ld(liq2),
-                'Max Borrow': f"${available_borrow_2a:,.2f}" if available_borrow_2a > 0 else "",
+                'Max Borrow': f"${token2_available_borrow:,.2f}" if token2_available_borrow > 0 else "",
             },
             {
                 'Protocol': strategy.get('protocol_b', ''), 'Token': strategy.get('token2', ''), 'Action': 'Lend',
-                'maxCF': f"{collateral_ratio_2b:.2%}", 'LLTV': f"{lltv_2B:.2%}" if lltv_2B > 0 else "",
+                'maxCF': f"{token3_collateral_ratio:.2%}", 'LLTV': f"{lltv_2B:.2%}" if lltv_2B > 0 else "",
                 'Effective LTV': f"{effective_ltv_2B:.2%}", 'Borrow Weight': "-", 'Weight': f"{l_b:.4f}",
-                'Rate': f"{_modal_sf(strategy, 'lend_rate_2b') * 100:.2f}%",
+                'Rate': f"{_modal_sf(strategy, 'token3_rate') * 100:.2f}%",
                 'Token Amount': f"{entry_token_amount_2B:,.{precision_2B}f}", 'Size ($$$)': f"${position_size_2B:,.2f}",
                 'Price': f"${P2_B:.4f}", 'Fees (%)': "", 'Fees ($$$)': "",
                 'Liquidation Price': _lp(liq3), 'Liq Distance': _ld(liq3), 'Max Borrow': "",
@@ -1586,11 +1586,11 @@ class RecursiveLendingRenderer(StrategyRendererBase):
             {
                 'Protocol': strategy.get('protocol_b', ''), 'Token': strategy.get('token3', ''), 'Action': 'Borrow',
                 'maxCF': "-", 'LLTV': "-", 'Effective LTV': "-",
-                'Borrow Weight': f"{borrow_weight_3b:.2f}x", 'Weight': f"{b_b:.4f}",
-                'Rate': f"{_modal_sf(strategy, 'borrow_rate_3b') * 100:.2f}%",
+                'Borrow Weight': f"{token4_borrow_weight:.2f}x", 'Weight': f"{b_b:.4f}",
+                'Rate': f"{_modal_sf(strategy, 'token4_rate') * 100:.2f}%",
                 'Token Amount': f"{entry_token_amount_3B:,.{precision_3B}f}", 'Size ($$$)': f"${position_size_3B:,.2f}",
                 'Price': f"${P3_B:.4f}",
-                'Fees (%)': f"{borrow_fee_3b * 100:.2f}%" if borrow_fee_3b > 0 else "",
+                'Fees (%)': f"{token4_borrow_fee * 100:.2f}%" if token4_borrow_fee > 0 else "",
                 'Fees ($$$)': f"${fee_usd_3B:.2f}" if fee_usd_3B > 0 else "",
                 'Liquidation Price': _lp(liq4), 'Liq Distance': _ld(liq4),
                 'Max Borrow': f"${available_borrow_3b:,.2f}" if available_borrow_3b > 0 else "",
@@ -1677,19 +1677,19 @@ class RecursiveLendingRenderer(StrategyRendererBase):
             # REBALANCE SEGMENT PATH: Use position_rebalances table
             # segment_data contains rebalance opening values (from build_rebalance_segment_data)
             if leg_id == 'leg_1a':
-                segment_entry_rate = segment_data.get('opening_lend_rate_1a')
-                segment_entry_price = segment_data.get('opening_price_1a')
-                token_amount = segment_data.get('opening_token_amount_1a')
+                segment_entry_rate = segment_data.get('opening_token1_rate')
+                segment_entry_price = segment_data.get('opening_token1_price')
+                token_amount = segment_data.get('opening_token1_amount')
                 # Use closing values for "exit" price/rate
-                live_rate = float(segment_data.get('closing_lend_rate_1a')) if segment_data.get('closing_lend_rate_1a') is not None else None
-                live_price = float(segment_data.get('closing_price_1a')) if segment_data.get('closing_price_1a') is not None else None
+                live_rate = float(segment_data.get('closing_token1_rate')) if segment_data.get('closing_token1_rate') is not None else None
+                live_price = float(segment_data.get('closing_token1_price')) if segment_data.get('closing_token1_price') is not None else None
             elif leg_id == 'leg_2b':
-                segment_entry_rate = segment_data.get('opening_lend_rate_2b')
-                segment_entry_price = segment_data.get('opening_price_2b')
-                token_amount = segment_data.get('opening_token_amount_2b')
+                segment_entry_rate = segment_data.get('opening_token3_rate')
+                segment_entry_price = segment_data.get('opening_token3_price')
+                token_amount = segment_data.get('opening_token3_amount')
                 # Use closing values for "exit" price/rate
-                live_rate = float(segment_data.get('closing_lend_rate_2b')) if segment_data.get('closing_lend_rate_2b') is not None else None
-                live_price = float(segment_data.get('closing_price_2b')) if segment_data.get('closing_price_2b') is not None else None
+                live_rate = float(segment_data.get('closing_token3_rate')) if segment_data.get('closing_token3_rate') is not None else None
+                live_price = float(segment_data.get('closing_token3_price')) if segment_data.get('closing_token3_price') is not None else None
         else:
             # LIVE SEGMENT PATH: Use positions table + current rates
             # segment_data already contains position entry values (from build_live_segment_data)
@@ -1698,13 +1698,13 @@ class RecursiveLendingRenderer(StrategyRendererBase):
 
             # Map leg_id to field names
             if leg_id == 'leg_1a':
-                segment_entry_rate = segment_data.get('opening_lend_rate_1a')
-                segment_entry_price = segment_data.get('opening_price_1a')
-                token_amount = segment_data.get('opening_token_amount_1a')
+                segment_entry_rate = segment_data.get('opening_token1_rate')
+                segment_entry_price = segment_data.get('opening_token1_price')
+                token_amount = segment_data.get('opening_token1_amount')
             elif leg_id == 'leg_2b':
-                segment_entry_rate = segment_data.get('opening_lend_rate_2b')
-                segment_entry_price = segment_data.get('opening_price_2b')
-                token_amount = segment_data.get('opening_token_amount_2b')
+                segment_entry_rate = segment_data.get('opening_token3_rate')
+                segment_entry_price = segment_data.get('opening_token3_price')
+                token_amount = segment_data.get('opening_token3_amount')
 
         # Pandas-safe checks (avoid truth value ambiguity)
         def safe_value(val):
@@ -1740,10 +1740,10 @@ class RecursiveLendingRenderer(StrategyRendererBase):
                 if segment_data:
                     if leg_id == 'leg_1a':
                         # Leg 1A lends, Leg 2A borrows
-                        loan_token_amount = segment_data.get('opening_token_amount_2a')
+                        loan_token_amount = segment_data.get('opening_token2_amount')
                     elif leg_id == 'leg_2b':
                         # Leg 2B lends, Leg 3B borrows
-                        loan_token_amount = segment_data.get('opening_token_amount_3b')
+                        loan_token_amount = segment_data.get('opening_token4_amount')
 
                 # Collateral is this lend leg's tokens at live price
                 collateral_value = float(token_amount) * float(live_price) if token_amount else 0.0
@@ -1895,19 +1895,19 @@ class RecursiveLendingRenderer(StrategyRendererBase):
             # REBALANCE SEGMENT PATH: Use position_rebalances table
             # segment_data contains rebalance opening values (from build_rebalance_segment_data)
             if leg_id == 'leg_2a':
-                segment_entry_rate = segment_data.get('opening_borrow_rate_2a')
-                segment_entry_price = segment_data.get('opening_price_2a')
-                token_amount = segment_data.get('opening_token_amount_2a')
+                segment_entry_rate = segment_data.get('opening_token2_rate')
+                segment_entry_price = segment_data.get('opening_token2_price')
+                token_amount = segment_data.get('opening_token2_amount')
                 # Use closing values for "exit" price/rate
-                live_rate = float(segment_data.get('closing_borrow_rate_2a')) if segment_data.get('closing_borrow_rate_2a') is not None else None
-                live_price = float(segment_data.get('closing_price_2a')) if segment_data.get('closing_price_2a') is not None else None
+                live_rate = float(segment_data.get('closing_token2_rate')) if segment_data.get('closing_token2_rate') is not None else None
+                live_price = float(segment_data.get('closing_token2_price')) if segment_data.get('closing_token2_price') is not None else None
             elif leg_id == 'leg_3b':
-                segment_entry_rate = segment_data.get('opening_borrow_rate_3b')
-                segment_entry_price = segment_data.get('opening_price_3b')
-                token_amount = segment_data.get('opening_token_amount_3b')
+                segment_entry_rate = segment_data.get('opening_token4_rate')
+                segment_entry_price = segment_data.get('opening_token4_price')
+                token_amount = segment_data.get('opening_token4_amount')
                 # Use closing values for "exit" price/rate
-                live_rate = float(segment_data.get('closing_borrow_rate_3b')) if segment_data.get('closing_borrow_rate_3b') is not None else None
-                live_price = float(segment_data.get('closing_price_3b')) if segment_data.get('closing_price_3b') is not None else None
+                live_rate = float(segment_data.get('closing_token4_rate')) if segment_data.get('closing_token4_rate') is not None else None
+                live_price = float(segment_data.get('closing_token4_price')) if segment_data.get('closing_token4_price') is not None else None
             # Get borrow fee (always from current market - not stored in rebalance history)
             borrow_fee = get_borrow_fee(token, protocol)
         else:
@@ -1919,13 +1919,13 @@ class RecursiveLendingRenderer(StrategyRendererBase):
 
             # Map leg_id to field names
             if leg_id == 'leg_2a':
-                segment_entry_rate = segment_data.get('opening_borrow_rate_2a')
-                segment_entry_price = segment_data.get('opening_price_2a')
-                token_amount = segment_data.get('opening_token_amount_2a')
+                segment_entry_rate = segment_data.get('opening_token2_rate')
+                segment_entry_price = segment_data.get('opening_token2_price')
+                token_amount = segment_data.get('opening_token2_amount')
             elif leg_id == 'leg_3b':
-                segment_entry_rate = segment_data.get('opening_borrow_rate_3b')
-                segment_entry_price = segment_data.get('opening_price_3b')
-                token_amount = segment_data.get('opening_token_amount_3b')
+                segment_entry_rate = segment_data.get('opening_token4_rate')
+                segment_entry_price = segment_data.get('opening_token4_price')
+                token_amount = segment_data.get('opening_token4_amount')
 
         # Pandas-safe checks (avoid truth value ambiguity)
         def safe_value(val):
@@ -1952,11 +1952,11 @@ class RecursiveLendingRenderer(StrategyRendererBase):
         if segment_data:
             if leg_id == 'leg_2a':
                 # Leg 2A borrows, Leg 1A is collateral
-                collateral_token_amount = segment_data.get('opening_token_amount_1a')
+                collateral_token_amount = segment_data.get('opening_token1_amount')
                 collateral_leg_weight = position.get('l_a', 0.0)
             elif leg_id == 'leg_3b':
                 # Leg 3B borrows, Leg 2B is collateral
-                collateral_token_amount = segment_data.get('opening_token_amount_2b')
+                collateral_token_amount = segment_data.get('opening_token3_amount')
                 collateral_leg_weight = position.get('l_b', 0.0)
 
         # Collateral is the lend leg's tokens at live price
@@ -2307,8 +2307,8 @@ class StablecoinLendingRenderer(StrategyRendererBase):
         required_fields = [
             'token1', 'protocol_a',
             'l_a',
-            'entry_lend_rate_1a',
-            'entry_price_1a'
+            'entry_token1_rate',
+            'entry_token1_price'
         ]
         return all(field in position.index for field in required_fields)
 
@@ -2334,8 +2334,8 @@ class StablecoinLendingRenderer(StrategyRendererBase):
         liq_dist = strategy.get('liquidation_distance', float('inf'))
         b_a      = _modal_sf(strategy, 'b_a')
         b_b      = _modal_sf(strategy, 'b_b')
-        fees_pct = (b_a * _modal_sf(strategy, 'borrow_fee_2a')
-                  + b_b * _modal_sf(strategy, 'borrow_fee_3b'))
+        fees_pct = (b_a * _modal_sf(strategy, 'token2_borrow_fee')
+                  + b_b * _modal_sf(strategy, 'token4_borrow_fee'))
         days_to_be = strategy.get('days_to_breakeven')
         max_size   = float(strategy.get('max_size', float('inf')))
 
@@ -2405,8 +2405,8 @@ class StablecoinLendingRenderer(StrategyRendererBase):
             token=position['token1'],
             protocol=position['protocol_a'],
             weight=position['l_a'],
-            entry_rate=position['entry_lend_rate_1a'],
-            entry_price=position['entry_price_1a'],
+            entry_rate=position['entry_token1_rate'],
+            entry_price=position['entry_token1_price'],
             get_rate=get_rate,
             get_price_with_fallback=get_price_with_fallback,
             deployment=deployment,
@@ -2428,16 +2428,16 @@ class StablecoinLendingRenderer(StrategyRendererBase):
     def render_strategy_modal_table(strategy: dict, deployment_usd: float) -> None:
         """Render 1-row detail table for stablecoin lending (modal view)."""
         l_a = _modal_sf(strategy, 'l_a')
-        P1_A = _modal_sf(strategy, 'P1_A', 1.0)
+        P1_A = _modal_sf(strategy, 'token1_price', 1.0)
         precision_1A = get_token_precision(P1_A)
-        T1_A = _modal_sf(strategy, 'T1_A')
+        T1_A = _modal_sf(strategy, 'token1_units')
         token_amount = T1_A * deployment_usd
         detail_data = [{
             'Protocol': strategy.get('protocol_a', ''),
             'Token': strategy.get('token1', ''),
             'Action': 'Lend',
             'Weight': f"{l_a:.4f}",
-            'Rate': f"{_modal_sf(strategy, 'lend_rate_1a') * 100:.2f}%",
+            'Rate': f"{_modal_sf(strategy, 'token1_rate') * 100:.2f}%",
             'Token Amount': f"{token_amount:,.{precision_1A}f}",
             'Size ($$$)': f"${l_a * deployment_usd:,.2f}",
             'Price': f"${P1_A:.4f}",
@@ -2478,8 +2478,8 @@ class NoLoopCrossProtocolRenderer(StrategyRendererBase):
         required_fields = [
             'token1', 'token2', 'protocol_a', 'protocol_b',
             'l_a', 'b_a', 'l_b',
-            'entry_lend_rate_1a', 'entry_borrow_rate_2a', 'entry_lend_rate_2b',
-            'entry_price_1a', 'entry_price_2a', 'entry_price_2b'
+            'entry_token1_rate', 'entry_token2_rate', 'entry_token3_rate',
+            'entry_token1_price', 'entry_token2_price', 'entry_token3_price'
         ]
         return all(field in position.index for field in required_fields)
 
@@ -2496,7 +2496,7 @@ class NoLoopCrossProtocolRenderer(StrategyRendererBase):
 
         Columns: Token Flow, Protocols, Net APR, APR 5d, APR 30d, Liq Dist,
                  Fees (%), Days to BE, Max Liquidity.
-        Fees (%) = B_A × borrow_fee_2a (only Protocol A borrow leg; borrow_fee_3b = 0).
+        Fees (%) = B_A × token2_borrow_fee (only Protocol A borrow leg; token4_borrow_fee = 0).
         """
         apr_net  = _modal_sf(strategy, 'apr_net')
         apr5     = _modal_sf(strategy, 'apr5')
@@ -2504,8 +2504,8 @@ class NoLoopCrossProtocolRenderer(StrategyRendererBase):
         liq_dist = strategy.get('liquidation_distance', 0.0)
         b_a      = _modal_sf(strategy, 'b_a')
         b_b      = _modal_sf(strategy, 'b_b')
-        fees_pct = (b_a * _modal_sf(strategy, 'borrow_fee_2a')
-                  + b_b * _modal_sf(strategy, 'borrow_fee_3b'))
+        fees_pct = (b_a * _modal_sf(strategy, 'token2_borrow_fee')
+                  + b_b * _modal_sf(strategy, 'token4_borrow_fee'))
         days_to_be = strategy.get('days_to_breakeven')
         max_size   = float(strategy.get('max_size', float('inf')))
 
@@ -2570,7 +2570,7 @@ class NoLoopCrossProtocolRenderer(StrategyRendererBase):
 
         # Get token2 live price
         if segment_type == 'historical' and segment_data:
-            token2_price_live = float(segment_data.get('closing_price_2a')) if segment_data.get('closing_price_2a') is not None else None
+            token2_price_live = float(segment_data.get('closing_token2_price')) if segment_data.get('closing_token2_price') is not None else None
         else:
             token2_price_live = get_price_with_fallback(position['token2'], position['protocol_a'])
 
@@ -2581,8 +2581,8 @@ class NoLoopCrossProtocolRenderer(StrategyRendererBase):
             token=position['token1'],
             protocol=position['protocol_a'],
             weight=position['l_a'],
-            entry_rate=position['entry_lend_rate_1a'],
-            entry_price=position['entry_price_1a'],
+            entry_rate=position['entry_token1_rate'],
+            entry_price=position['entry_token1_price'],
             get_rate=get_rate,
             get_price_with_fallback=get_price_with_fallback,
             deployment=deployment,
@@ -2590,10 +2590,10 @@ class NoLoopCrossProtocolRenderer(StrategyRendererBase):
             segment_type=segment_type,
             borrow_token=position['token2'],  # Leg 2A borrows token2
             borrow_price_live=token2_price_live,
-            borrow_price_entry=position['entry_price_2a'],
+            borrow_price_entry=position['entry_token2_price'],
             borrow_weight_value=position['b_a'],
-            liquidation_threshold=position.get('entry_liquidation_threshold_1a', 0.0),
-            borrow_weight=position.get('entry_borrow_weight_2a', 1.0)
+            liquidation_threshold=position.get('entry_token1_liquidation_threshold', 0.0),
+            borrow_weight=position.get('entry_token2_borrow_weight', 1.0)
         ))
 
         # ========== LEG 2: Protocol A - Borrow token2 ==========
@@ -2603,17 +2603,17 @@ class NoLoopCrossProtocolRenderer(StrategyRendererBase):
             token=position['token2'],
             protocol=position['protocol_a'],
             weight=position['b_a'],
-            entry_rate=position['entry_borrow_rate_2a'],
-            entry_price=position['entry_price_2a'],
-            collateral_ratio=position.get('entry_collateral_ratio_1a', 0.0),
-            liquidation_threshold=position.get('entry_liquidation_threshold_1a', 0.0),
+            entry_rate=position['entry_token2_rate'],
+            entry_price=position['entry_token2_price'],
+            collateral_ratio=position.get('entry_token1_collateral_ratio', 0.0),
+            liquidation_threshold=position.get('entry_token1_liquidation_threshold', 0.0),
             get_rate=get_rate,
             get_borrow_fee=get_borrow_fee,
             get_price_with_fallback=get_price_with_fallback,
             deployment=deployment,
             segment_data=segment_data,
             segment_type=segment_type,
-            borrow_weight=position.get('entry_borrow_weight_2a', 1.0)
+            borrow_weight=position.get('entry_token2_borrow_weight', 1.0)
         ))
 
         # ========== LEG 3: Protocol B - Lend token2 ==========
@@ -2623,8 +2623,8 @@ class NoLoopCrossProtocolRenderer(StrategyRendererBase):
             token=position['token2'],
             protocol=position['protocol_b'],
             weight=position['l_b'],
-            entry_rate=position['entry_lend_rate_2b'],
-            entry_price=position['entry_price_2b'],
+            entry_rate=position['entry_token3_rate'],
+            entry_price=position['entry_token3_price'],
             get_rate=get_rate,
             get_price_with_fallback=get_price_with_fallback,
             deployment=deployment,
@@ -2650,15 +2650,15 @@ class NoLoopCrossProtocolRenderer(StrategyRendererBase):
         l_a = _modal_sf(strategy, 'l_a')
         b_a = _modal_sf(strategy, 'b_a')
         l_b = _modal_sf(strategy, 'l_b')
-        P1_A = _modal_sf(strategy, 'P1_A', 1.0)
-        P2_A = _modal_sf(strategy, 'P2_A', 1.0)
-        P2_B = _modal_sf(strategy, 'P2_B', 1.0)
-        borrow_fee_2a = _modal_sf(strategy, 'borrow_fee_2a')
-        borrow_weight_2a = _modal_sf(strategy, 'borrow_weight_2a', 1.0)
-        lltv_1A = _modal_sf(strategy, 'liquidation_threshold_1a')
-        collateral_ratio_1a = _modal_sf(strategy, 'collateral_ratio_1a')
-        collateral_ratio_2b = _modal_sf(strategy, 'collateral_ratio_2b')
-        available_borrow_2a = _modal_sf(strategy, 'available_borrow_2a')
+        P1_A = _modal_sf(strategy, 'token1_price', 1.0)
+        P2_A = _modal_sf(strategy, 'token2_price', 1.0)
+        P2_B = _modal_sf(strategy, 'token3_price', 1.0)
+        token2_borrow_fee = _modal_sf(strategy, 'token2_borrow_fee')
+        token2_borrow_weight = _modal_sf(strategy, 'token2_borrow_weight', 1.0)
+        lltv_1A = _modal_sf(strategy, 'token1_liquidation_threshold')
+        token1_collateral_ratio = _modal_sf(strategy, 'token1_collateral_ratio')
+        token3_collateral_ratio = _modal_sf(strategy, 'token3_collateral_ratio')
+        token2_available_borrow = _modal_sf(strategy, 'token2_available_borrow')
 
         precision_1A = get_token_precision(P1_A)
         precision_2A = get_token_precision(P2_A)
@@ -2666,16 +2666,16 @@ class NoLoopCrossProtocolRenderer(StrategyRendererBase):
         position_size_1A = l_a * deployment_usd
         position_size_2A = b_a * deployment_usd
         position_size_2B = l_b * deployment_usd
-        T1_A = _modal_sf(strategy, 'T1_A')
-        T2_A = _modal_sf(strategy, 'T2_A')
+        T1_A = _modal_sf(strategy, 'token1_units')
+        T2_A = _modal_sf(strategy, 'token2_units')
         entry_token_amount_1A = T1_A * deployment_usd
         entry_token_amount_2 = T2_A * deployment_usd
-        fee_usd_2A = b_a * borrow_fee_2a * deployment_usd
-        effective_ltv_1A = (b_a / l_a) * borrow_weight_2a if l_a > 0 else 0.0
+        fee_usd_2A = b_a * token2_borrow_fee * deployment_usd
+        effective_ltv_1A = (b_a / l_a) * token2_borrow_weight if l_a > 0 else 0.0
 
         calc = PositionCalculator()
-        liq1 = calc.calculate_liquidation_price(position_size_1A, position_size_2A, P1_A, P2_A, lltv_1A, 'lending', borrow_weight_2a)
-        liq2 = calc.calculate_liquidation_price(position_size_1A, position_size_2A, P1_A, P2_A, lltv_1A, 'borrowing', borrow_weight_2a)
+        liq1 = calc.calculate_liquidation_price(position_size_1A, position_size_2A, P1_A, P2_A, lltv_1A, 'lending', token2_borrow_weight)
+        liq2 = calc.calculate_liquidation_price(position_size_1A, position_size_2A, P1_A, P2_A, lltv_1A, 'borrowing', token2_borrow_weight)
 
         def _lp(r):
             p = r['liq_price']
@@ -2688,9 +2688,9 @@ class NoLoopCrossProtocolRenderer(StrategyRendererBase):
         detail_data = [
             {
                 'Protocol': strategy.get('protocol_a', ''), 'Token': strategy.get('token1', ''), 'Action': 'Lend',
-                'maxCF': f"{collateral_ratio_1a:.2%}", 'LLTV': f"{lltv_1A:.2%}" if lltv_1A > 0 else "",
+                'maxCF': f"{token1_collateral_ratio:.2%}", 'LLTV': f"{lltv_1A:.2%}" if lltv_1A > 0 else "",
                 'Effective LTV': f"{effective_ltv_1A:.2%}", 'Borrow Weight': "-", 'Weight': f"{l_a:.4f}",
-                'Rate': f"{_modal_sf(strategy, 'lend_rate_1a') * 100:.2f}%",
+                'Rate': f"{_modal_sf(strategy, 'token1_rate') * 100:.2f}%",
                 'Token Amount': f"{entry_token_amount_1A:,.{precision_1A}f}", 'Size ($$$)': f"${position_size_1A:,.2f}",
                 'Price': f"${P1_A:.4f}", 'Fees (%)': "", 'Fees ($$$)': "",
                 'Liquidation Price': _lp(liq1), 'Liq Distance': _ld(liq1), 'Max Borrow': "",
@@ -2698,20 +2698,20 @@ class NoLoopCrossProtocolRenderer(StrategyRendererBase):
             {
                 'Protocol': strategy.get('protocol_a', ''), 'Token': strategy.get('token2', ''), 'Action': 'Borrow',
                 'maxCF': "-", 'LLTV': "-", 'Effective LTV': "-",
-                'Borrow Weight': f"{borrow_weight_2a:.2f}x", 'Weight': f"{b_a:.4f}",
-                'Rate': f"{_modal_sf(strategy, 'borrow_rate_2a') * 100:.2f}%",
+                'Borrow Weight': f"{token2_borrow_weight:.2f}x", 'Weight': f"{b_a:.4f}",
+                'Rate': f"{_modal_sf(strategy, 'token2_rate') * 100:.2f}%",
                 'Token Amount': f"{entry_token_amount_2:,.{precision_2A}f}", 'Size ($$$)': f"${position_size_2A:,.2f}",
                 'Price': f"${P2_A:.4f}",
-                'Fees (%)': f"{borrow_fee_2a * 100:.2f}%" if borrow_fee_2a > 0 else "",
+                'Fees (%)': f"{token2_borrow_fee * 100:.2f}%" if token2_borrow_fee > 0 else "",
                 'Fees ($$$)': f"${fee_usd_2A:.2f}" if fee_usd_2A > 0 else "",
                 'Liquidation Price': _lp(liq2), 'Liq Distance': _ld(liq2),
-                'Max Borrow': f"${available_borrow_2a:,.2f}" if available_borrow_2a > 0 else "",
+                'Max Borrow': f"${token2_available_borrow:,.2f}" if token2_available_borrow > 0 else "",
             },
             {
                 'Protocol': strategy.get('protocol_b', ''), 'Token': strategy.get('token2', ''), 'Action': 'Lend',
-                'maxCF': f"{collateral_ratio_2b:.2%}", 'LLTV': "", 'Effective LTV': "",
+                'maxCF': f"{token3_collateral_ratio:.2%}", 'LLTV': "", 'Effective LTV': "",
                 'Borrow Weight': "-", 'Weight': f"{l_b:.4f}",
-                'Rate': f"{_modal_sf(strategy, 'lend_rate_2b') * 100:.2f}%",
+                'Rate': f"{_modal_sf(strategy, 'token3_rate') * 100:.2f}%",
                 'Token Amount': f"{entry_token_amount_2:,.{precision_2B}f}", 'Size ($$$)': f"${position_size_2B:,.2f}",
                 'Price': f"${P2_B:.4f}", 'Fees (%)': "", 'Fees ($$$)': "",
                 'Liquidation Price': "N/A", 'Liq Distance': "N/A", 'Max Borrow': "",
@@ -2765,12 +2765,12 @@ class PerpLendingRenderer(StrategyRendererBase):
     @staticmethod
     def build_token_flow_string(position: pd.Series) -> str:
         token1 = position.get('token1', '')
-        token3 = position.get('token3', '')
-        return f"{token1} (Spot) ↔ {token3} (Short Perp)"
+        token4 = position.get('token4', '')  # B_B = short perp
+        return f"{token1} (Spot) ↔ {token4} (Short Perp)"
 
     @staticmethod
     def validate_position_data(position: pd.Series) -> bool:
-        required_fields = ['token1', 'token3', 'protocol_a', 'protocol_b', 'l_a', 'b_b']
+        required_fields = ['token1', 'token4', 'protocol_a', 'protocol_b', 'l_a', 'b_b']
         return all(field in position.index for field in required_fields)
 
     @staticmethod
@@ -2880,8 +2880,8 @@ class PerpLendingRenderer(StrategyRendererBase):
             token=position['token1'],
             protocol=position['protocol_a'],
             weight=position['l_a'],
-            entry_rate=position['entry_lend_rate_1a'],
-            entry_price=position['entry_price_1a'],
+            entry_rate=position['entry_token1_rate'],
+            entry_price=position['entry_token1_price'],
             get_rate=get_rate,
             get_price_with_fallback=get_price_with_fallback,
             deployment=deployment,
@@ -2895,9 +2895,9 @@ class PerpLendingRenderer(StrategyRendererBase):
             borrow_weight=1.0
         ))
 
-        # ========== LEG 2: Protocol B - Short Perp token3 ==========
-        entry_rate_3b = position['entry_borrow_rate_3b']
-        entry_price_3b = position['entry_price_3b']
+        # ========== LEG 2: Protocol B - Short Perp token4 (B_B) ==========
+        entry_rate_3b = position['entry_token4_rate']
+        entry_token4_price = position['entry_token4_price']
 
         def safe_value(val):
             """Check if value is valid (not None, not NaN). Allows zero values."""
@@ -2918,16 +2918,16 @@ class PerpLendingRenderer(StrategyRendererBase):
         if is_live_segment:
             live_rate_3b = get_rate(position['token3'], position['protocol_b'], 'borrow_apr')
             live_price_3b = get_price_with_fallback(position['token3'], position['protocol_b'])
-            segment_entry_rate_3b = segment_data.get('opening_borrow_rate_3b')
-            segment_entry_price_3b = segment_data.get('opening_price_3b')
+            segment_entry_rate_3b = segment_data.get('opening_token4_rate')
+            segment_entry_token4_price = segment_data.get('opening_token4_price')
         else:
-            segment_entry_rate_3b = segment_data.get('opening_borrow_rate_3b')
-            segment_entry_price_3b = segment_data.get('opening_price_3b')
-            live_rate_3b = float(segment_data.get('closing_borrow_rate_3b')) if segment_data.get('closing_borrow_rate_3b') is not None else None
-            live_price_3b = float(segment_data.get('closing_price_3b')) if segment_data.get('closing_price_3b') is not None else None
+            segment_entry_rate_3b = segment_data.get('opening_token4_rate')
+            segment_entry_token4_price = segment_data.get('opening_token4_price')
+            live_rate_3b = float(segment_data.get('closing_token4_rate')) if segment_data.get('closing_token4_rate') is not None else None
+            live_price_3b = float(segment_data.get('closing_token4_price')) if segment_data.get('closing_token4_price') is not None else None
 
-        token_amount_3b = segment_data.get('opening_token_amount_3b')
-        perp_fee = get_borrow_fee(position['token3'], position['protocol_b'])
+        token_amount_3b = segment_data.get('opening_token4_amount')  # B_B slot = short perp amount
+        perp_fee = get_borrow_fee(position['token4'], position['protocol_b'])
 
         # Short perp liq: price must RISE by liq_dist to liquidate.
         # Liq price is fixed at entry: entry_price * (1 + liq_dist).
@@ -2938,8 +2938,8 @@ class PerpLendingRenderer(StrategyRendererBase):
         live_liq_dist_str = "N/A"
         liq_price_str = "N/A"
 
-        if safe_value(segment_entry_price_3b) and float(segment_entry_price_3b) > 0:
-            perp_liq_price = float(segment_entry_price_3b) * (1.0 + liq_dist)
+        if safe_value(segment_entry_token4_price) and float(segment_entry_token4_price) > 0:
+            perp_liq_price = float(segment_entry_token4_price) * (1.0 + liq_dist)
             liq_price_str = f"${perp_liq_price:,.4f}"
             entry_liq_dist_str = f"{liq_dist * 100:+.1f}%"
             if safe_value(live_price_3b) and float(live_price_3b) > 0:
@@ -2952,13 +2952,13 @@ class PerpLendingRenderer(StrategyRendererBase):
         if is_live_segment:
             perp_row = {
                 'Protocol': position['protocol_b'],
-                'Token': position['token3'],
+                'Token': position['token4'],  # B_B = short perp
                 'Action': 'Short Perp',
                 'Position Entry Rate (%)': f"{entry_rate_3b * 100:.2f}" if safe_value(entry_rate_3b) else "N/A",
                 'Entry Rate (%)': f"{float(segment_entry_rate_3b) * 100:.2f}" if safe_value(segment_entry_rate_3b) else "N/A",
                 'Live Rate (%)': f"{float(live_rate_3b) * 100:.2f}" if safe_value(live_rate_3b) else "N/A",
                 'Entry Basis': entry_basis_str,
-                'Entry Price ($)': f"{float(segment_entry_price_3b):.4f}" if safe_value(segment_entry_price_3b) else "N/A",
+                'Entry Price ($)': f"{float(segment_entry_token4_price):.4f}" if safe_value(segment_entry_token4_price) else "N/A",
                 'Live Price ($)': f"{float(live_price_3b):.4f}" if safe_value(live_price_3b) else "N/A",
                 'Liquidation Price ($)': liq_price_str,
                 'Token Amount': f"{float(token_amount_3b):,.5f}" if safe_value(token_amount_3b) else "N/A",
@@ -2972,13 +2972,13 @@ class PerpLendingRenderer(StrategyRendererBase):
         else:
             perp_row = {
                 'Protocol': position['protocol_b'],
-                'Token': position['token3'],
+                'Token': position['token4'],  # B_B = short perp
                 'Action': 'Short Perp',
                 'Position Entry Rate (%)': f"{entry_rate_3b * 100:.2f}" if safe_value(entry_rate_3b) else "N/A",
                 'Segment Entry Rate (%)': f"{float(segment_entry_rate_3b) * 100:.2f}" if safe_value(segment_entry_rate_3b) else "N/A",
                 'Exit Rate (%)': f"{float(live_rate_3b) * 100:.2f}" if safe_value(live_rate_3b) else "N/A",
                 'Entry Basis': entry_basis_str,
-                'Segment Entry Price ($)': f"{float(segment_entry_price_3b):.4f}" if safe_value(segment_entry_price_3b) else "N/A",
+                'Segment Entry Price ($)': f"{float(segment_entry_token4_price):.4f}" if safe_value(segment_entry_token4_price) else "N/A",
                 'Exit Price ($)': f"{float(live_price_3b):.4f}" if safe_value(live_price_3b) else "N/A",
                 'Liquidation Price ($)': liq_price_str,
                 'Token Amount': f"{float(token_amount_3b):,.5f}" if safe_value(token_amount_3b) else "N/A",
@@ -3000,10 +3000,10 @@ class PerpLendingRenderer(StrategyRendererBase):
         """Render 2-row detail table: Spot Lend + Short Perp."""
         l_a = _modal_sf(strategy, 'l_a')
         b_b = _modal_sf(strategy, 'b_b')
-        P1_A = _modal_sf(strategy, 'P1_A', 1.0)
-        P3_B = _modal_sf(strategy, 'P3_B', 1.0)
-        lend_rate_1a = _modal_sf(strategy, 'lend_rate_1a')
-        borrow_rate_3b = _modal_sf(strategy, 'borrow_rate_3b')
+        P1_A = _modal_sf(strategy, 'token1_price', 1.0)
+        P3_B = _modal_sf(strategy, 'token4_price', 1.0)
+        token1_rate = _modal_sf(strategy, 'token1_rate')
+        token4_rate = _modal_sf(strategy, 'token4_rate')
         spot_lending_apr = _modal_sf(strategy, 'spot_lending_apr')
         funding_rate_apr = _modal_sf(strategy, 'funding_rate_apr')
         perp_fees_apr = _modal_sf(strategy, 'perp_fees_apr')
@@ -3013,8 +3013,8 @@ class PerpLendingRenderer(StrategyRendererBase):
 
         precision_1A = get_token_precision(P1_A)
         precision_3B = get_token_precision(P3_B)
-        T1_A = _modal_sf(strategy, 'T1_A')
-        T3_B = _modal_sf(strategy, 'T3_B')
+        T1_A = _modal_sf(strategy, 'token1_units')
+        T3_B = _modal_sf(strategy, 'token4_units')
         token_amount_1A = T1_A * deployment_usd
         token_amount_3B = T3_B * deployment_usd
         size_1A = l_a * deployment_usd
@@ -3033,7 +3033,7 @@ class PerpLendingRenderer(StrategyRendererBase):
                 'Token': strategy.get('token1', ''),
                 'Action': 'Spot Lend',
                 'Weight': f"{l_a:.4f}",
-                'Rate': f"{lend_rate_1a * 100:.2f}%",
+                'Rate': f"{token1_rate * 100:.2f}%",
                 'APR Contrib': f"{spot_lending_apr * 100:.2f}%",
                 'Entry Basis': "—",
                 'Token Amount': f"{token_amount_1A:,.{precision_1A}f}",
@@ -3044,10 +3044,10 @@ class PerpLendingRenderer(StrategyRendererBase):
             },
             {
                 'Protocol': strategy.get('protocol_b', ''),
-                'Token': strategy.get('token3', ''),
+                'Token': strategy.get('token4', ''),  # B_B = short perp
                 'Action': 'Short Perp',
                 'Weight': f"{b_b:.4f}",
-                'Rate': f"{borrow_rate_3b * 100:.2f}% (funding)",
+                'Rate': f"{token4_rate * 100:.2f}% (funding)",
                 'APR Contrib': f"{-funding_rate_apr * 100:.2f}%",  # Negate: shorts earn when rate is negative
                 'Entry Basis': basis_bid_str,
                 'Token Amount': f"{token_amount_3B:,.{precision_3B}f}",
@@ -3133,7 +3133,7 @@ class PerpBorrowingRenderer(StrategyRendererBase):
         Columns: Token Flow, Protocols, Net APR, APR 5d, APR 30d, Liq Dist,
                  Basis Cost (%), Fees (%), Total Fees (%), Days to BE, Max Liquidity
 
-        Fees (%) = perp_fees (L_B × 2 × taker_fee) + borrow_fee (B_A × borrow_fee_2a)
+        Fees (%) = perp_fees (L_B × 2 × taker_fee) + borrow_fee (B_A × token2_borrow_fee)
         Total Fees (%) = Fees + Basis Cost  (stored as total_upfront_fee)
         """
         apr_net  = _modal_sf(strategy, 'apr_net')
@@ -3142,7 +3142,7 @@ class PerpBorrowingRenderer(StrategyRendererBase):
         liq_dist = _modal_sf(strategy, 'liquidation_distance')
         perp_fees_apr       = _modal_sf(strategy, 'perp_fees_apr')
         b_a                 = _modal_sf(strategy, 'b_a')
-        borrow_fee_2a       = _modal_sf(strategy, 'borrow_fee_2a')
+        token2_borrow_fee       = _modal_sf(strategy, 'token2_borrow_fee')
         basis_cost          = _modal_sf(strategy, 'basis_cost')
         basis_cost_included = strategy.get('basis_cost_included', False)
         total_upfront_fee   = _modal_sf(strategy, 'total_upfront_fee')
@@ -3153,7 +3153,7 @@ class PerpBorrowingRenderer(StrategyRendererBase):
         protocol_pair = f"{strategy.get('protocol_a', '')} ↔ {strategy.get('protocol_b', '')}"
 
         # Fees = perp trading fees (entry + exit) + Protocol A upfront borrow fee
-        trading_fees_pct = perp_fees_apr + b_a * borrow_fee_2a
+        trading_fees_pct = perp_fees_apr + b_a * token2_borrow_fee
 
         basis_cost_str = (
             f"{basis_cost * 100:.3f}%"
@@ -3228,8 +3228,8 @@ class PerpBorrowingRenderer(StrategyRendererBase):
 
         # Get live prices for leg 1A/2A (needed for borrow leg liq calculation)
         if segment_type == 'historical' and segment_data:
-            token2_price_live = float(segment_data.get('closing_price_2a')) if segment_data.get('closing_price_2a') is not None else None
-            token1_price_live = float(segment_data.get('closing_price_1a')) if segment_data.get('closing_price_1a') is not None else None
+            token2_price_live = float(segment_data.get('closing_token2_price')) if segment_data.get('closing_token2_price') is not None else None
+            token1_price_live = float(segment_data.get('closing_token1_price')) if segment_data.get('closing_token1_price') is not None else None
         else:
             token2_price_live = get_price_with_fallback(position['token2'], position['protocol_a'])
             token1_price_live = get_price_with_fallback(position['token1'], position['protocol_a'])
@@ -3243,8 +3243,8 @@ class PerpBorrowingRenderer(StrategyRendererBase):
             token=position['token1'],
             protocol=position['protocol_a'],
             weight=position['l_a'],
-            entry_rate=position['entry_lend_rate_1a'],
-            entry_price=position['entry_price_1a'],
+            entry_rate=position['entry_token1_rate'],
+            entry_price=position['entry_token1_price'],
             get_rate=get_rate,
             get_price_with_fallback=get_price_with_fallback,
             deployment=deployment,
@@ -3252,10 +3252,10 @@ class PerpBorrowingRenderer(StrategyRendererBase):
             segment_type=segment_type,
             borrow_token=position['token2'],
             borrow_price_live=token2_price_live,
-            borrow_price_entry=position['entry_price_2a'],
+            borrow_price_entry=position['entry_token2_price'],
             borrow_weight_value=position['b_a'],
-            liquidation_threshold=position.get('entry_liquidation_threshold_1a', 0.0),
-            borrow_weight=position.get('entry_borrow_weight_2a', 1.0)
+            liquidation_threshold=position.get('entry_token1_liquidation_threshold', 0.0),
+            borrow_weight=position.get('entry_token2_borrow_weight', 1.0)
         ))
 
         # ========== LEG 2: Protocol A - Borrow Spot (token2) ==========
@@ -3265,10 +3265,10 @@ class PerpBorrowingRenderer(StrategyRendererBase):
             token=position['token2'],
             protocol=position['protocol_a'],
             weight=position['b_a'],
-            entry_rate=position['entry_borrow_rate_2a'],
-            entry_price=position['entry_price_2a'],
-            collateral_ratio=position.get('entry_collateral_ratio_1a', 0.0),
-            liquidation_threshold=position.get('entry_liquidation_threshold_1a', 0.0),
+            entry_rate=position['entry_token2_rate'],
+            entry_price=position['entry_token2_price'],
+            collateral_ratio=position.get('entry_token1_collateral_ratio', 0.0),
+            liquidation_threshold=position.get('entry_token1_liquidation_threshold', 0.0),
             get_rate=get_rate,
             get_borrow_fee=get_borrow_fee,
             get_price_with_fallback=get_price_with_fallback,
@@ -3277,8 +3277,8 @@ class PerpBorrowingRenderer(StrategyRendererBase):
             segment_type=segment_type,
             collateral_token=position['token1'],
             collateral_price_live=token1_price_live,
-            collateral_price_entry=position['entry_price_1a'],
-            borrow_weight=position.get('entry_borrow_weight_2a', 1.0)
+            collateral_price_entry=position['entry_token1_price'],
+            borrow_weight=position.get('entry_token2_borrow_weight', 1.0)
         ))
 
         # ========== LEG 3: Protocol B - Long Perp (token3) ==========
@@ -3298,21 +3298,22 @@ class PerpBorrowingRenderer(StrategyRendererBase):
             except (TypeError, ValueError):
                 return False
 
-        entry_rate_3b = position['entry_borrow_rate_3b']  # Funding rate (positive = longs pay shorts)
-        entry_price_3b = position['entry_price_3b']
+        # perp_borrowing: perp is L_B = token3 slot (entry_token3_rate, entry_token3_price)
+        entry_rate_3b = position['entry_token3_rate']  # Funding rate (positive = longs pay shorts)
+        entry_token3_price = position['entry_token3_price']
 
         if is_live_segment:
             live_rate_3b = get_rate(position['token3'], position['protocol_b'], 'borrow_apr')
             live_price_3b = get_price_with_fallback(position['token3'], position['protocol_b'])
-            segment_entry_rate_3b = segment_data.get('opening_borrow_rate_3b')
-            segment_entry_price_3b = segment_data.get('opening_price_3b')
+            segment_entry_rate_3b = segment_data.get('opening_token3_rate')
+            segment_entry_token3_price = segment_data.get('opening_token3_price')
         else:
-            segment_entry_rate_3b = segment_data.get('opening_borrow_rate_3b')
-            segment_entry_price_3b = segment_data.get('opening_price_3b')
-            live_rate_3b = float(segment_data.get('closing_borrow_rate_3b')) if segment_data.get('closing_borrow_rate_3b') is not None else None
-            live_price_3b = float(segment_data.get('closing_price_3b')) if segment_data.get('closing_price_3b') is not None else None
+            segment_entry_rate_3b = segment_data.get('opening_token3_rate')
+            segment_entry_token3_price = segment_data.get('opening_token3_price')
+            live_rate_3b = float(segment_data.get('closing_token3_rate')) if segment_data.get('closing_token3_rate') is not None else None
+            live_price_3b = float(segment_data.get('closing_token3_price')) if segment_data.get('closing_token3_price') is not None else None
 
-        token_amount_3b = segment_data.get('opening_token_amount_3b')
+        token_amount_3b = segment_data.get('opening_token3_amount')  # L_B slot = perp long amount
         perp_fee = get_borrow_fee(position['token3'], position['protocol_b'])
 
         # Long perp liq: price must DROP by liq_dist to liquidate.
@@ -3324,8 +3325,8 @@ class PerpBorrowingRenderer(StrategyRendererBase):
         live_liq_dist_str = "N/A"
         liq_price_str = "N/A"
 
-        if safe_value(segment_entry_price_3b) and float(segment_entry_price_3b) > 0:
-            perp_liq_price = float(segment_entry_price_3b) * (1.0 - liq_dist)
+        if safe_value(segment_entry_token3_price) and float(segment_entry_token3_price) > 0:
+            perp_liq_price = float(segment_entry_token3_price) * (1.0 - liq_dist)
             liq_price_str = f"${perp_liq_price:,.4f}"
             entry_liq_dist_str = f"{-liq_dist * 100:+.1f}%"
             if safe_value(live_price_3b) and float(live_price_3b) > 0:
@@ -3344,7 +3345,7 @@ class PerpBorrowingRenderer(StrategyRendererBase):
                 'Entry Rate (%)': f"{float(segment_entry_rate_3b) * 100:.2f}" if safe_value(segment_entry_rate_3b) else "N/A",
                 'Live Rate (%)': f"{float(live_rate_3b) * 100:.2f}" if safe_value(live_rate_3b) else "N/A",
                 'Entry Basis': entry_basis_str,
-                'Entry Price ($)': f"{float(segment_entry_price_3b):.4f}" if safe_value(segment_entry_price_3b) else "N/A",
+                'Entry Price ($)': f"{float(segment_entry_token3_price):.4f}" if safe_value(segment_entry_token3_price) else "N/A",
                 'Live Price ($)': f"{float(live_price_3b):.4f}" if safe_value(live_price_3b) else "N/A",
                 'Liquidation Price ($)': liq_price_str,
                 'Token Amount': f"{float(token_amount_3b):,.5f}" if safe_value(token_amount_3b) else "N/A",
@@ -3364,7 +3365,7 @@ class PerpBorrowingRenderer(StrategyRendererBase):
                 'Segment Entry Rate (%)': f"{float(segment_entry_rate_3b) * 100:.2f}" if safe_value(segment_entry_rate_3b) else "N/A",
                 'Exit Rate (%)': f"{float(live_rate_3b) * 100:.2f}" if safe_value(live_rate_3b) else "N/A",
                 'Entry Basis': entry_basis_str,
-                'Segment Entry Price ($)': f"{float(segment_entry_price_3b):.4f}" if safe_value(segment_entry_price_3b) else "N/A",
+                'Segment Entry Price ($)': f"{float(segment_entry_token3_price):.4f}" if safe_value(segment_entry_token3_price) else "N/A",
                 'Exit Price ($)': f"{float(live_price_3b):.4f}" if safe_value(live_price_3b) else "N/A",
                 'Liquidation Price ($)': liq_price_str,
                 'Token Amount': f"{float(token_amount_3b):,.5f}" if safe_value(token_amount_3b) else "N/A",
@@ -3390,26 +3391,26 @@ class PerpBorrowingRenderer(StrategyRendererBase):
         l_a   = float(strategy['l_a'])
         b_a   = float(strategy['b_a'])
         l_b   = float(strategy['l_b'])
-        P1_A  = float(strategy['P1_A'])
-        P2_A  = float(strategy['P2_A'])
-        P3_B  = float(strategy['P3_B'])
-        lend_rate_1a         = float(strategy['lend_rate_1a'])
-        borrow_rate_2a       = float(strategy['borrow_rate_2a'])
-        borrow_rate_3b       = float(strategy['borrow_rate_3b'])
+        P1_A  = float(strategy['token1_price'])
+        P2_A  = float(strategy['token2_price'])
+        P3_B  = float(strategy['token3_price'])   # L_B = long perp
+        token1_rate         = float(strategy['token1_rate'])
+        token2_rate       = float(strategy['token2_rate'])
+        token3_rate       = float(strategy['token3_rate'])  # L_B = perp funding rate
         stablecoin_lending_apr = float(strategy['stablecoin_lending_apr'])
         token2_borrow_apr    = float(strategy['token2_borrow_apr'])
         funding_rate_apr     = float(strategy['funding_rate_apr'])
         perp_fees_apr        = float(strategy['perp_fees_apr'])
-        borrow_fee_2a        = float(strategy['borrow_fee_2a'])
-        borrow_weight_2a     = float(strategy['borrow_weight_2a'])
-        lltv_1A              = float(strategy['liquidation_threshold_1a'])
-        collateral_ratio_1a  = float(strategy['collateral_ratio_1a'])
+        token2_borrow_fee        = float(strategy['token2_borrow_fee'])
+        token2_borrow_weight     = float(strategy['token2_borrow_weight'])
+        lltv_1A              = float(strategy['token1_liquidation_threshold'])
+        token1_collateral_ratio  = float(strategy['token1_collateral_ratio'])
         liquidation_distance = float(strategy['liquidation_distance'])
-        T1_A = float(strategy['T1_A'])
-        T2_A = float(strategy['T2_A'])
-        T3_B = float(strategy['T3_B'])
+        T1_A = float(strategy['token1_units'])
+        T2_A = float(strategy['token2_units'])
+        T3_B = float(strategy['token3_units'])  # L_B = perp long contract count
         # Optional fields — None is valid (liquidity cap may be unknown)
-        available_borrow_2a  = _modal_sf(strategy, 'available_borrow_2a')
+        token2_available_borrow  = _modal_sf(strategy, 'token2_available_borrow')
 
         precision_1A = get_token_precision(P1_A)
         precision_2A = get_token_precision(P2_A)
@@ -3420,13 +3421,13 @@ class PerpBorrowingRenderer(StrategyRendererBase):
         position_size_1A = l_a * deployment_usd
         position_size_2A = b_a * deployment_usd
         position_size_3B = token_amount_3B * P3_B  # actual USD exposure of perp
-        borrow_fee_usd = b_a * borrow_fee_2a * deployment_usd
+        borrow_fee_usd = b_a * token2_borrow_fee * deployment_usd
         perp_fee_usd = perp_fees_apr * deployment_usd
-        effective_ltv_1A = (b_a / l_a) * borrow_weight_2a if l_a > 0 else 0.0
+        effective_ltv_1A = (b_a / l_a) * token2_borrow_weight if l_a > 0 else 0.0
 
         calc = PositionCalculator()
-        liq1 = calc.calculate_liquidation_price(position_size_1A, position_size_2A, P1_A, P2_A, lltv_1A, 'lending', borrow_weight_2a)
-        liq2 = calc.calculate_liquidation_price(position_size_1A, position_size_2A, P1_A, P2_A, lltv_1A, 'borrowing', borrow_weight_2a)
+        liq1 = calc.calculate_liquidation_price(position_size_1A, position_size_2A, P1_A, P2_A, lltv_1A, 'lending', token2_borrow_weight)
+        liq2 = calc.calculate_liquidation_price(position_size_1A, position_size_2A, P1_A, P2_A, lltv_1A, 'borrowing', token2_borrow_weight)
 
         def _lp(r):
             p = r['liq_price']
@@ -3446,26 +3447,26 @@ class PerpBorrowingRenderer(StrategyRendererBase):
             {
                 'Protocol': strategy.get('protocol_a', ''), 'Token': strategy.get('token1', ''),
                 'Action': 'Lend (Stablecoin)',
-                'maxCF': f"{collateral_ratio_1a:.2%}", 'LLTV': f"{lltv_1A:.2%}" if lltv_1A > 0 else "",
+                'maxCF': f"{token1_collateral_ratio:.2%}", 'LLTV': f"{lltv_1A:.2%}" if lltv_1A > 0 else "",
                 'Eff LTV': f"{effective_ltv_1A:.2%}", 'Weight': f"{l_a:.4f}",
-                'Rate': f"{lend_rate_1a * 100:.2f}%",
+                'Rate': f"{token1_rate * 100:.2f}%",
                 'APR Contrib': f"{stablecoin_lending_apr * 100:.2f}%",
                 'Entry Basis': "—",
                 'Token Amount': f"{token_amount_1A:,.{precision_1A}f}", 'Size ($)': f"${position_size_1A:,.2f}",
                 'Price': f"${P1_A:.4f}", 'Fees (%)': "", 'Fees ($)': "",
                 'Liq Risk': "Price DOWN", 'Liq Price': _lp(liq1), 'Liq Distance': _ld(liq1),
-                'Max Borrow': f"${available_borrow_2a:,.2f}" if available_borrow_2a > 0 else "",
+                'Max Borrow': f"${token2_available_borrow:,.2f}" if token2_available_borrow > 0 else "",
             },
             {
                 'Protocol': strategy.get('protocol_a', ''), 'Token': strategy.get('token2', ''),
                 'Action': 'Borrow (Spot)',
                 'maxCF': "-", 'LLTV': "-", 'Eff LTV': "-", 'Weight': f"{b_a:.4f}",
-                'Rate': f"{borrow_rate_2a * 100:.2f}%",
+                'Rate': f"{token2_rate * 100:.2f}%",
                 'APR Contrib': f"{-token2_borrow_apr * 100:.2f}%",
                 'Entry Basis': "—",
                 'Token Amount': f"{token_amount_2A:,.{precision_2A}f}", 'Size ($)': f"${position_size_2A:,.2f}",
                 'Price': f"${P2_A:.4f}",
-                'Fees (%)': f"{borrow_fee_2a * 100:.2f}%" if borrow_fee_2a > 0 else "",
+                'Fees (%)': f"{token2_borrow_fee * 100:.2f}%" if token2_borrow_fee > 0 else "",
                 'Fees ($)': f"${borrow_fee_usd:,.2f}" if borrow_fee_usd > 0 else "",
                 'Liq Risk': "Price UP", 'Liq Price': _lp(liq2), 'Liq Distance': _ld(liq2),
                 'Max Borrow': "",
@@ -3474,7 +3475,7 @@ class PerpBorrowingRenderer(StrategyRendererBase):
                 'Protocol': strategy.get('protocol_b', ''), 'Token': strategy.get('token3', ''),
                 'Action': 'Long Perp',
                 'maxCF': "-", 'LLTV': "-", 'Eff LTV': "-", 'Weight': f"{l_b:.4f}",
-                'Rate': f"{borrow_rate_3b * 100:.2f}% (funding)",
+                'Rate': f"{token3_rate * 100:.2f}% (funding)",
                 'APR Contrib': f"{funding_rate_apr * 100:.2f}%",
                 'Entry Basis': basis_ask_str,
                 'Token Amount': f"{token_amount_3B:,.{precision_3B}f}", 'Size ($)': f"${position_size_3B:,.2f}",

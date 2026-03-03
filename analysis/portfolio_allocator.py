@@ -69,11 +69,14 @@ class PortfolioAllocator:
             - adjusted_apr: blended_apr * stablecoin_multiplier
             - stablecoins_in_strategy: List of stablecoins found in strategy
         """
-        # Get all tokens in strategy
+        # Get all tokens in strategy (include all legs; None = unused)
         tokens_in_strategy = [
-            strategy_row['token1'],
-            strategy_row['token2'],
-            strategy_row['token3']
+            t for t in [
+                strategy_row.get('token1'),
+                strategy_row.get('token2'),
+                strategy_row.get('token3'),
+                strategy_row.get('token4'),
+            ] if t is not None
         ]
 
         # Find stablecoins and their multipliers
@@ -195,15 +198,20 @@ class PortfolioAllocator:
         from config.stablecoins import STABLECOIN_SYMBOLS
 
         l_a = strategy_row.get('l_a', 1.0)
-        b_a = strategy_row.get('borrow_weight_2A', 1.0)
-        b_b = strategy_row.get('borrow_weight_3B', 1.0)
+        b_a = strategy_row.get('token2_borrow_weight', 0.0)
+        b_b = strategy_row.get('token4_borrow_weight', 0.0)
 
         # Calculate exposure weights for each token
-        # Stablecoins use net lending formula: +L_A for token1, -B_B for token3
-        # Non-stablecoins (token2) use de-leveraged formula: B_A / L_A
-        for token_num in [1, 2, 3]:
-            token_contract = strategy_row[f'token{token_num}_contract']
-            token_symbol = strategy_row[f'token{token_num}']
+        # token1 = L_A (lend at protocol_A), token2 = B_A (borrow at protocol_A)
+        # token3 = L_B (lend at protocol_B, skipped — same token as B_A; avoids double-counting)
+        # token4 = B_B (borrow at protocol_B)
+        for token_num in [1, 2, 4]:
+            token_contract = strategy_row.get(f'token{token_num}_contract')
+            token_symbol = strategy_row.get(f'token{token_num}')
+
+            # Skip unused legs (None contract = leg not deployed)
+            if not token_contract or pd.isna(token_contract) or not token_symbol or pd.isna(token_symbol):
+                continue
 
             # Determine exposure weight based on token position and type
             is_stablecoin = token_symbol in STABLECOIN_SYMBOLS
@@ -214,8 +222,7 @@ class PortfolioAllocator:
             elif token_num == 2:
                 # Token2: De-leveraged exposure B_A / L_A (applies to all tokens)
                 weight = b_a / l_a if l_a > 0 else 1.0
-            else:  # token_num == 3
-                # Token3: Borrowed from Protocol B
+            else:  # token_num == 4 (B_B: Borrowed from Protocol B)
                 # Stablecoins: negative weight (borrowed position)
                 # Non-stablecoins: standard borrow weight
                 weight = -b_b if is_stablecoin else b_b
@@ -361,13 +368,18 @@ class PortfolioAllocator:
         from config.stablecoins import STABLECOIN_SYMBOLS
 
         l_a = strategy_row.get('l_a', 1.0)
-        b_a = strategy_row.get('borrow_weight_2A', 1.0)
-        b_b = strategy_row.get('borrow_weight_3B', 1.0)
+        b_a = strategy_row.get('token2_borrow_weight', 0.0)
+        b_b = strategy_row.get('token4_borrow_weight', 0.0)
 
         # Update token exposures using appropriate weight for each position
-        for token_num in [1, 2, 3]:
-            token_contract = strategy_row[f'token{token_num}_contract']
-            token_symbol = strategy_row[f'token{token_num}']
+        # token3 (L_B) is skipped — same token as B_A (token2); avoids double-counting
+        for token_num in [1, 2, 4]:
+            token_contract = strategy_row.get(f'token{token_num}_contract')
+            token_symbol = strategy_row.get(f'token{token_num}')
+
+            # Skip unused legs
+            if not token_contract or pd.isna(token_contract) or not token_symbol or pd.isna(token_symbol):
+                continue
 
             # Determine exposure weight based on token position and type
             is_stablecoin = token_symbol in STABLECOIN_SYMBOLS
@@ -378,8 +390,7 @@ class PortfolioAllocator:
             elif token_num == 2:
                 # Token2: De-leveraged exposure B_A / L_A
                 weight = b_a / l_a if l_a > 0 else 1.0
-            else:  # token_num == 3
-                # Token3: Borrowed from Protocol B
+            else:  # token_num == 4 (B_B: Borrowed from Protocol B)
                 # Stablecoins: negative weight (net borrowing)
                 weight = -b_b if is_stablecoin else b_b
 
@@ -631,14 +642,19 @@ class PortfolioAllocator:
 
             # Get position weights
             l_a = row.get('l_a', 1.0)
-            b_a = row.get('borrow_weight_2A', 1.0)
+            b_a = row.get('token2_borrow_weight') or 0.0
             l_b = row.get('l_b', 1.0)
-            b_b = row.get('borrow_weight_3B', 1.0)
+            b_b = row.get('token4_borrow_weight') or 0.0
 
             # Process each token using appropriate exposure formula
-            for token_num in [1, 2, 3]:
-                token_contract = row[f'token{token_num}_contract']
-                token_symbol = row[f'token{token_num}']
+            # token3 (L_B) is skipped — same token as B_A (token2); avoids double-counting
+            for token_num in [1, 2, 4]:
+                token_contract = row.get(f'token{token_num}_contract')
+                token_symbol = row.get(f'token{token_num}')
+
+                # Skip unused legs
+                if not token_contract or pd.isna(token_contract) or not token_symbol or pd.isna(token_symbol):
+                    continue
 
                 # Initialize token entry if needed
                 if token_contract not in token_exposures:
@@ -654,14 +670,13 @@ class PortfolioAllocator:
 
                 if token_num == 1:
                     # Token1: Lent to Protocol A
-                    weight = l_a if is_stablecoin else l_a  # Both use l_a for now
+                    weight = l_a
                 elif token_num == 2:
                     # Token2: De-leveraged exposure B_A / L_A
                     weight = (b_a / l_a) if l_a > 0 else 1.0
-                else:  # token_num == 3
-                    # Token3: Borrowed from Protocol B
+                else:  # token_num == 4 (B_B: Borrowed from Protocol B)
                     # Stablecoins: negative weight (net borrowing)
-                    weight = -b_b if is_stablecoin else 0.0  # Non-stablecoins don't count token3
+                    weight = -b_b if is_stablecoin else b_b
 
                 exposure_contribution = allocation * weight
                 token_exposures[token_contract]['usd'] += exposure_contribution
@@ -706,7 +721,7 @@ class PortfolioAllocator:
         for efficient updates during allocation.
 
         Args:
-            strategies: Strategy data with available_borrow_2a/3b fields
+            strategies: Strategy data with token2_available_borrow/3b fields
 
         Returns:
             DataFrame with Token symbols as index, Protocol names as columns,
@@ -717,14 +732,14 @@ class PortfolioAllocator:
         protocols_set = set()
 
         for _, row in strategies.iterrows():
-            # Token2 and its protocol
+            # Token2 (B_A) and its protocol
             if pd.notna(row.get('token2')) and pd.notna(row.get('protocol_a')):
                 tokens_set.add(row['token2'])
                 protocols_set.add(row['protocol_a'])
 
-            # Token3 and its protocol (skip if None for unlevered strategies)
-            if pd.notna(row.get('token3')) and pd.notna(row.get('protocol_b')):
-                tokens_set.add(row['token3'])
+            # Token4 (B_B) and its protocol (skip if None for unlevered / perp_borrowing strategies)
+            if pd.notna(row.get('token4')) and pd.notna(row.get('protocol_b')):
+                tokens_set.add(row['token4'])
                 protocols_set.add(row['protocol_b'])
 
         # Create empty DataFrame with Token index and Protocol columns
@@ -740,20 +755,20 @@ class PortfolioAllocator:
             # Process token2 on protocol_a
             token2 = row.get('token2')
             protocol_a = row.get('protocol_a')
-            available_2a = row.get('available_borrow_2a', 0.0)
+            available_2a = row.get('token2_available_borrow', 0.0)
 
             if pd.notna(token2) and pd.notna(protocol_a) and pd.notna(available_2a):
                 current_value = matrix.loc[token2, protocol_a]
                 matrix.loc[token2, protocol_a] = max(current_value, float(available_2a))
 
-            # Process token3 on protocol_b (skip if None)
-            token3 = row.get('token3')
+            # Process token4 (B_B) on protocol_b (skip if None — unused leg)
+            token4 = row.get('token4')
             protocol_b = row.get('protocol_b')
             available_3b = row.get('available_borrow_3b', 0.0)
 
-            if pd.notna(token3) and pd.notna(protocol_b) and pd.notna(available_3b):
-                current_value = matrix.loc[token3, protocol_b]
-                matrix.loc[token3, protocol_b] = max(current_value, float(available_3b))
+            if pd.notna(token4) and pd.notna(protocol_b) and pd.notna(available_3b):
+                current_value = matrix.loc[token4, protocol_b]
+                matrix.loc[token4, protocol_b] = max(current_value, float(available_3b))
 
         return matrix
 
@@ -777,7 +792,7 @@ class PortfolioAllocator:
         # Extract token2 and protocol_a (leg 2A)
         token2 = strategy_row.get('token2')
         protocol_a = strategy_row.get('protocol_a')
-        b_a = strategy_row.get('borrow_weight_2A', strategy_row.get('b_a', 0.0))
+        b_a = strategy_row.get('token2_borrow_weight') or strategy_row.get('b_a', 0.0)
 
         # Calculate borrow amount for token2 on protocol_a
         borrow_2A = allocation_amount * b_a
@@ -797,28 +812,28 @@ class PortfolioAllocator:
             except KeyError:
                 print(f"⚠️  Warning: {token2} on {protocol_a} not found in available_borrow matrix. Skipping update.")
 
-        # Extract token3 and protocol_b (leg 3B)
-        token3 = strategy_row.get('token3')
+        # Extract token4 (B_B) and protocol_b (leg 3B)
+        token4 = strategy_row.get('token4')
         protocol_b = strategy_row.get('protocol_b')
-        b_b = strategy_row.get('borrow_weight_3B', strategy_row.get('b_b', 0.0))
+        b_b = strategy_row.get('token4_borrow_weight') or strategy_row.get('b_b', 0.0)
 
-        # Calculate borrow amount for token3 on protocol_b
+        # Calculate borrow amount for token4 on protocol_b
         borrow_3B = allocation_amount * b_b
 
-        # Update matrix for token3 (if exists - skip for unlevered strategies)
-        if pd.notna(token3) and pd.notna(protocol_b) and b_b > 0:
+        # Update matrix for token4 (if exists — skip when B_B leg unused)
+        if pd.notna(token4) and pd.notna(protocol_b) and b_b > 0:
             try:
-                current_value = available_borrow.loc[token3, protocol_b]
+                current_value = available_borrow.loc[token4, protocol_b]
                 new_value = current_value - borrow_3B
 
                 # Clamp to 0 to prevent negative liquidity
-                available_borrow.loc[token3, protocol_b] = max(0.0, new_value)
+                available_borrow.loc[token4, protocol_b] = max(0.0, new_value)
 
                 # Warn if over-borrowed
                 if new_value < 0:
-                    print(f"⚠️  Warning: {token3} on {protocol_b} over-borrowed by ${abs(new_value):.2f}")
+                    print(f"⚠️  Warning: {token4} on {protocol_b} over-borrowed by ${abs(new_value):.2f}")
             except KeyError:
-                print(f"⚠️  Warning: {token3} on {protocol_b} not found in available_borrow matrix. Skipping update.")
+                print(f"⚠️  Warning: {token4} on {protocol_b} not found in available_borrow matrix. Skipping update.")
 
     def _calculate_max_size_from_available_borrow(
         self,
@@ -850,7 +865,7 @@ class PortfolioAllocator:
         try:
             # Extract strategy parameters
             token2 = strategy['token2']
-            token3 = strategy.get('token3', None)
+            token4 = strategy.get('token4', None)  # B_B leg (was token3)
             protocol_a = strategy['protocol_a']
             protocol_b = strategy.get('protocol_b', None)
 
@@ -883,10 +898,10 @@ class PortfolioAllocator:
             else:
                 constraint_2a = float('inf')
 
-            # Calculate constraint from token3 on protocol_b (if levered)
-            if token3 and protocol_b:
-                if token3 in available_borrow.index and protocol_b in available_borrow.columns:
-                    available_3b = available_borrow.loc[token3, protocol_b]
+            # Calculate constraint from token4 (B_B) on protocol_b (if used)
+            if token4 and protocol_b:
+                if token4 in available_borrow.index and protocol_b in available_borrow.columns:
+                    available_3b = available_borrow.loc[token4, protocol_b]
                 else:
                     available_3b = 0.0
 
@@ -929,15 +944,15 @@ class PortfolioAllocator:
         new_max_sizes = []
 
         for idx, row in strategies.iterrows():
-            # Extract token2 and protocol_a
+            # Extract token2 (B_A) and protocol_a
             token2 = row.get('token2')
             protocol_a = row.get('protocol_a')
-            b_a = row.get('borrow_weight_2A', row.get('b_a', 0.0))
+            b_a = row.get('token2_borrow_weight') or row.get('b_a', 0.0)
 
-            # Extract token3 and protocol_b
-            token3 = row.get('token3')
+            # Extract token4 (B_B) and protocol_b
+            token4 = row.get('token4')
             protocol_b = row.get('protocol_b')
-            b_b = row.get('borrow_weight_3B', row.get('b_b', 0.0))
+            b_b = row.get('token4_borrow_weight') or row.get('b_b', 0.0)
 
             # Get current available_borrow for token2 on protocol_a
             try:
@@ -945,9 +960,9 @@ class PortfolioAllocator:
             except KeyError:
                 available_2A = 0.0
 
-            # Get current available_borrow for token3 on protocol_b
+            # Get current available_borrow for token4 (B_B) on protocol_b
             try:
-                available_3B = available_borrow.loc[token3, protocol_b] if pd.notna(token3) and pd.notna(protocol_b) else 0.0
+                available_3B = available_borrow.loc[token4, protocol_b] if pd.notna(token4) and pd.notna(protocol_b) else 0.0
             except KeyError:
                 available_3B = 0.0
 

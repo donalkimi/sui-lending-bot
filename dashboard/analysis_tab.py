@@ -38,17 +38,18 @@ def _strategy_label(row: pd.Series) -> str:
     stype  = row.get('strategy_type', '')
     t1     = row.get('token1', '?')
     t2     = row.get('token2', '')
-    t3     = row.get('token3', '?')
+    t3     = row.get('token3', '')
+    t4     = row.get('token4', '')
     pa     = row.get('protocol_a', '')
     pb     = row.get('protocol_b', '')
     apr    = row.get('apr_net', 0)
 
     if stype == 'perp_lending':
-        tokens = f"{t1} ↔ {t3}"
+        tokens = f"{t1} ↔ {t4}"
     elif t2:
-        tokens = f"{t1} → {t2} → {t3}"
+        tokens = f"{t1} → {t2} → {t3 or t4}"
     else:
-        tokens = f"{t1} → {t3}"
+        tokens = f"{t1}"
 
     protocols = f"{pa}/{pb}" if pb else pa
     return f"{stype} | {tokens} | {protocols} | {apr * 100:.1f}%"
@@ -67,12 +68,17 @@ def _filter_strategies(
     if force_usdc:
         df = df[df['token1'] == 'USDC']
     if force_t3_eq_t1:
-        df = df[df['token3'] == df['token1']]
+        # Filter for strategies where the B_B closing token (token4) equals the starting token (token1)
+        # token4 may be None for strategies without a B_B leg; compare safely
+        if 'token4' in df.columns:
+            df = df[df['token4'].fillna('') == df['token1']]
+        else:
+            df = df[df['token3'] == df['token1']]
     if stablecoin_only:
         df = df[
             df['token1'].isin(STABLECOIN_SYMBOLS) &
-            df['token2'].isin(STABLECOIN_SYMBOLS) &
-            df['token3'].isin(STABLECOIN_SYMBOLS)
+            (df['token2'].isna() | df['token2'].isin(STABLECOIN_SYMBOLS)) &
+            (df['token3'].isna() | df['token3'].isin(STABLECOIN_SYMBOLS))
         ]
     return df
 
@@ -99,7 +105,7 @@ def _render_strategy_summary(strategy: dict, timestamp_seconds: int) -> None:
 
     # ── Header ────────────────────────────────────────────────────────────
     if strategy_type == 'perp_lending':
-        st.markdown(f"#### {strategy.get('token1')} ↔ {strategy.get('token3')} (Perp Lending)")
+        st.markdown(f"#### {strategy.get('token1')} ↔ {strategy.get('token4')} (Perp Lending)")
     elif is_perp:
         st.markdown(f"#### {strategy.get('token1')} / {strategy.get('token2')} / {strategy.get('token3')} (Perp Borrowing)")
     else:
@@ -113,7 +119,8 @@ def _render_strategy_summary(strategy: dict, timestamp_seconds: int) -> None:
         t1 = strategy.get('token1', '')
         t2 = strategy.get('token2', '')
         t3 = strategy.get('token3', '')
-        token_flow = f"{t1} ↔ {t3}" if strategy_type == 'perp_lending' else f"{t1} → {t2} → {t3}"
+        t4 = strategy.get('token4', '')
+        token_flow = f"{t1} ↔ {t4}" if strategy_type == 'perp_lending' else f"{t1} → {t2} → {t3}"
 
     def _sf(key, default=0.0):
         try:

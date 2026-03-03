@@ -59,8 +59,11 @@ def format_strategy_summary_line(strategy: Dict, liq_dist: float) -> str:
         Formatted summary line string
     """
     token1 = strategy['token1']
-    token2 = strategy['token2']
-    token3 = strategy['token3']
+    token2 = strategy.get('token2')
+    # B_B closing token: token4 for recursive/perp_lending, token3 for perp_borrowing, None for unused legs
+    token4 = strategy.get('token4')
+    token3 = strategy.get('token3')
+    closing_token = token4 or token3  # B_B if set, else L_B (perp_borrowing shows perp proxy)
     protocol_a = strategy['protocol_a']
     protocol_b = strategy['protocol_b']
     max_size = strategy.get('max_size')
@@ -79,7 +82,12 @@ def format_strategy_summary_line(strategy: Dict, liq_dist: float) -> str:
     apr5_indicator = "🟢" if apr5_value >= 0 else "🔴"
 
     # Build token flow (levered)
-    token_flow = f"{token1} → {token2} → {token3}"
+    if token2 and closing_token:
+        token_flow = f"{token1} → {token2} → {closing_token}"
+    elif token2:
+        token_flow = f"{token1} → {token2}"
+    else:
+        token_flow = token1
 
     return f"{token_flow} | {protocol_a} ↔ {protocol_b} | Max Size {max_size_str} | {net_apr_indicator} Net APR {net_apr_value * 100:.2f}% | {apr5_indicator} 5day APR {apr5_value * 100:.2f}%"
 
@@ -221,15 +229,17 @@ class SlackNotifier:
         message = f"🚀 High APR Opportunity: {strategy['net_apr']:.2f}%"
         
         # Prepare variables for Slack Workflows
-        has_conversion = strategy['token1'] != strategy['token3']
+        # B_B closing token: token4 for recursive_lending/perp_lending, else None
+        _token4 = strategy.get('token4')
+        has_conversion = _token4 is not None and strategy['token1'] != _token4
         conversion_note = f" → {strategy['token1']}" if has_conversion else ""
-        
+
         variables = {
             "net_apr": f"{strategy['net_apr']:.2f}",
             "liquidation_distance": f"{strategy['liquidation_distance']:.0f}",
             "token1": strategy['token1'],
-            "token2": strategy['token2'],
-            "token3": strategy['token3'],
+            "token2": strategy.get('token2', ''),
+            "token3": _token4 or '',  # B_B closing token (was token3 in old convention)
             "conversion_note": conversion_note,
             "protocol_A": strategy['protocol_a'],
             "protocol_B": strategy['protocol_b'],
@@ -237,10 +247,10 @@ class SlackNotifier:
             "borrow_amount_1": f"{strategy['b_a']:.2f}",
             "lend_amount_2": f"{strategy['l_b']:.2f}",
             "borrow_amount_2": f"{strategy['b_b']:.2f}",
-            "lend_rate_1A": f"{strategy['lend_rate_1a']:.2f}",
-            "borrow_rate_2A": f"{strategy['borrow_rate_2a']:.2f}",
-            "lend_rate_2B": f"{strategy['lend_rate_2b']:.2f}",
-            "borrow_rate_3B": f"{strategy['borrow_rate_3b']:.2f}",
+            "lend_rate_1A": f"{strategy['token1_rate']:.2f}",
+            "borrow_rate_2A": f"{strategy['token2_rate']:.2f}",
+            "lend_rate_2B": f"{strategy['token3_rate']:.2f}",
+            "borrow_rate_3B": f"{strategy['token4_rate']:.2f}",
             "available_borrow_2A": format_usd_abbreviated(strategy.get('available_borrow_2A')),
             "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')
         }
@@ -282,11 +292,11 @@ class SlackNotifier:
                     "type": "mrkdwn",
                     "text": (
                         f"*Strategy:*\n"
-                        f"• Lend {strategy['l_a']:.2f} {strategy['token1']} in {strategy['protocol_a']} @ {strategy['lend_rate_1a']:.2f}%\n"
-                        f"• Borrow {strategy['b_a']:.2f} {strategy['token2']} from {strategy['protocol_a']} @ {strategy['borrow_rate_2a']:.2f}%\n"
-                        f"• Lend {strategy['l_b']:.2f} {strategy['token2']} in {strategy['protocol_b']} @ {strategy['lend_rate_2b']:.2f}%\n"
-                        f"• Borrow {strategy['b_b']:.2f} {strategy['token3']} from {strategy['protocol_b']} @ {strategy['borrow_rate_3b']:.2f}%\n"
-                        + (f"• Convert {strategy['token3']} → {strategy['token1']} (1:1)" if has_conversion else "")
+                        f"• Lend {strategy['l_a']:.2f} {strategy['token1']} in {strategy['protocol_a']} @ {strategy['token1_rate']:.2f}%\n"
+                        f"• Borrow {strategy['b_a']:.2f} {strategy.get('token2', '')} from {strategy['protocol_a']} @ {strategy['token2_rate']:.2f}%\n"
+                        f"• Lend {strategy['l_b']:.2f} {strategy.get('token2', '')} in {strategy['protocol_b']} @ {strategy['token3_rate']:.2f}%\n"
+                        f"• Borrow {strategy['b_b']:.2f} {_token4 or ''} from {strategy['protocol_b']} @ {strategy['token4_rate']:.2f}%\n"
+                        + (f"• Convert {_token4} → {strategy['token1']} (1:1)" if has_conversion else "")
                     )
                 }
             },
@@ -748,10 +758,10 @@ if __name__ == "__main__":
         'b_a': 0.63,
         'l_b': 0.63,
         'b_b': 0.09,
-        'lend_rate_1a': 9.7,
-        'borrow_rate_2a': 19.5,
-        'lend_rate_2b': 31.0,
-        'borrow_rate_3b': 5.9
+        'token1_rate': 9.7,
+        'token2_rate': 19.5,
+        'token3_rate': 31.0,
+        'token4_rate': 5.9
     }
     
     print("Sending test alert...")

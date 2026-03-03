@@ -232,16 +232,16 @@ def display_strategy_details(strategy_row: Union[pd.Series, Dict[str, Any]], dep
     b_b = strategy_row.get('b_b', 0.0)
 
     # Rates
-    lend_rate_1a = strategy_row.get('lend_rate_1a', 0.0)
-    borrow_rate_2a = strategy_row.get('borrow_rate_2a', 0.0)
-    lend_rate_2b = strategy_row.get('lend_rate_2b', 0.0)
-    borrow_rate_3b = strategy_row.get('borrow_rate_3b', 0.0)
+    token1_rate = strategy_row.get('token1_rate', 0.0)
+    token2_rate = strategy_row.get('token2_rate', 0.0)
+    token3_rate = strategy_row.get('token3_rate', 0.0)
+    token4_rate = strategy_row.get('token4_rate', 0.0)
 
     # Prices
-    P1_A = strategy_row['P1_A']
-    P2_A = strategy_row['P2_A']
-    P2_B = strategy_row['P2_B']
-    P3_B = strategy_row['P3_B']
+    P1_A = strategy_row['token1_price']
+    P2_A = strategy_row['token2_price']
+    P2_B = strategy_row['token3_price']
+    P3_B = strategy_row['token4_price']
 
     # Borrow fees and available liquidity
     borrow_fee_2A = strategy_row.get('borrow_fee_2A', 0.0)
@@ -257,7 +257,7 @@ def display_strategy_details(strategy_row: Union[pd.Series, Dict[str, Any]], dep
             max_size_message = f"📊 **Max Deployable Size:** ${max_size:,.2f}"
 
     # Prepare liquidity constraints message (detailed view)
-    available_borrow_2A = strategy_row.get('available_borrow_2a')
+    available_borrow_2A = strategy_row.get('token2_available_borrow')
     available_borrow_3B = strategy_row.get('available_borrow_3b')
 
     liquidity_details = []
@@ -287,7 +287,7 @@ def display_strategy_details(strategy_row: Union[pd.Series, Dict[str, Any]], dep
             'Token': token1,
             'Contract': format_contract(token1_contract),
             'Action': 'Lend',
-            'Rate': f"{lend_rate_1a * 100:.2f}%",
+            'Rate': f"{token1_rate * 100:.2f}%",
             'Weight': f"{l_a:.2f}",
             'Token Amount': f"{(l_a * deployment_usd) / P1_A:.2f}",
             'Price': f"${P1_A:.4f}",
@@ -300,7 +300,7 @@ def display_strategy_details(strategy_row: Union[pd.Series, Dict[str, Any]], dep
             'Token': token2,
             'Contract': format_contract(token2_contract),
             'Action': 'Borrow',
-            'Rate': f"{borrow_rate_2a * 100:.2f}%",
+            'Rate': f"{token2_rate * 100:.2f}%",
             'Weight': f"{b_a:.2f}",
             'Token Amount': f"{(b_a * deployment_usd) / P2_A:.2f}",
             'Price': f"${P2_A:.4f}",
@@ -313,7 +313,7 @@ def display_strategy_details(strategy_row: Union[pd.Series, Dict[str, Any]], dep
             'Token': token2,
             'Contract': format_contract(token2_contract),
             'Action': 'Lend',
-            'Rate': f"{lend_rate_2b * 100:.2f}%",
+            'Rate': f"{token3_rate * 100:.2f}%",
             'Weight': f"{l_b:.2f}",
             'Token Amount': f"{(l_b * deployment_usd) / P2_B:.2f}",
             'Price': f"${P2_B:.4f}",
@@ -328,7 +328,7 @@ def display_strategy_details(strategy_row: Union[pd.Series, Dict[str, Any]], dep
         'Token': token3,
         'Contract': format_contract(token3_contract),
         'Action': 'Borrow',
-        'Rate': f"{borrow_rate_3b * 100:.2f}%",
+        'Rate': f"{token4_rate * 100:.2f}%",
         'Weight': f"{b_b:.2f}",
         'Token Amount': f"{(b_b * deployment_usd) / P3_B:.2f}",
         'Price': f"${P3_B:.4f}",
@@ -395,7 +395,7 @@ def display_strategies_table(
         # Get token symbols for display (logic uses contracts)
         strategy_type = row.get('strategy_type', '') if 'strategy_type' in all_results.columns else ''
         if strategy_type == 'perp_lending':
-            token_pair = f"{row['token1']} ↔ {row['token3']}"
+            token_pair = f"{row['token1']} ↔ {row['token4']}"
         else:
             token_pair = f"{row['token1']}/{row['token2']}/{row['token3']}"
 
@@ -569,10 +569,10 @@ def _build_preview_position(strategy: dict, deployment_usd: float) -> dict:
     Returns:
         dict suitable for pd.Series() and passing to render_detail_table()
     """
-    p1a = strategy['P1_A']
-    p2a = strategy.get('P2_A')
-    p2b = strategy.get('P2_B')
-    p3b = strategy.get('P3_B')
+    p1a = strategy['token1_price']
+    p2a = strategy.get('token2_price')
+    p2b = strategy.get('token3_price')
+    p3b = strategy.get('token4_price')
     l_a = strategy['l_a']
     b_a = _safe_float(strategy.get('b_a', 0.0))
     l_b = _safe_float(strategy.get('l_b', 0.0))
@@ -592,10 +592,10 @@ def _build_preview_position(strategy: dict, deployment_usd: float) -> dict:
         except (TypeError, ValueError):
             return 0.0
 
-    ta_1a = _tf('T1_A') * deployment_usd
-    ta_2a = _tf('T2_A') * deployment_usd
-    ta_2b = _tf('T2_B') * deployment_usd
-    ta_3b = _tf('T3_B') * deployment_usd
+    ta_1a = _tf('token1_units') * deployment_usd
+    ta_2a = _tf('token2_units') * deployment_usd
+    ta_2b = _tf('token3_units') * deployment_usd
+    ta_3b = _tf('token4_units') * deployment_usd
 
     return {
         'deployment_usd': deployment_usd,
@@ -604,34 +604,36 @@ def _build_preview_position(strategy: dict, deployment_usd: float) -> dict:
         'token1': strategy['token1'],
         'token2': strategy.get('token2'),
         'token3': strategy.get('token3'),
+        'token4': strategy.get('token4'),
         'token1_contract': strategy.get('token1_contract'),
         'token2_contract': strategy.get('token2_contract'),
         'token3_contract': strategy.get('token3_contract'),
+        'token4_contract': strategy.get('token4_contract'),
         'protocol_a': strategy['protocol_a'],
         'protocol_b': strategy.get('protocol_b'),
         # Entry rates = current market rates (preview: entering at current market)
-        'entry_lend_rate_1a': _safe_float(strategy.get('lend_rate_1a', 0.0)),
-        'entry_borrow_rate_2a': _safe_float(strategy.get('borrow_rate_2a', 0.0)),
-        'entry_lend_rate_2b': _safe_float(strategy.get('lend_rate_2b', 0.0)),
-        'entry_borrow_rate_3b': _safe_float(strategy.get('borrow_rate_3b', 0.0)),
+        'entry_token1_rate': _safe_float(strategy.get('token1_rate', 0.0)),
+        'entry_token2_rate': _safe_float(strategy.get('token2_rate', 0.0)),
+        'entry_token3_rate': _safe_float(strategy.get('token3_rate', 0.0)),
+        'entry_token4_rate': _safe_float(strategy.get('token4_rate', 0.0)),
         # Entry prices = current market prices
-        'entry_price_1a': p1a,
-        'entry_price_2a': p2a if p2a is not None else 1.0,
-        'entry_price_2b': p2b if p2b is not None else 1.0,
-        'entry_price_3b': p3b if p3b is not None else 1.0,
+        'entry_token1_price': p1a,
+        'entry_token2_price': p2a if p2a is not None else 1.0,
+        'entry_token3_price': p2b if p2b is not None else 1.0,
+        'entry_token4_price': p3b if p3b is not None else 1.0,
         # Risk params from strategy
         'entry_liquidation_distance': float(strategy['liquidation_distance']),
-        'entry_liquidation_threshold_1a': _safe_float(strategy.get('liquidation_threshold_1a', 0.0)),
-        'entry_collateral_ratio_1a': _safe_float(strategy.get('collateral_ratio_1a', 0.0)),
-        'entry_liquidation_threshold_2b': _safe_float(strategy.get('liquidation_threshold_2b', 0.0)),
-        'entry_collateral_ratio_2b': _safe_float(strategy.get('collateral_ratio_2b', 0.0)),
-        'entry_borrow_weight_2a': _safe_float(strategy.get('borrow_weight_2a', 1.0)),
-        'entry_borrow_weight_3b': _safe_float(strategy.get('borrow_weight_3b', 1.0)),
+        'entry_token1_liquidation_threshold': _safe_float(strategy.get('token1_liquidation_threshold', 0.0)),
+        'entry_token1_collateral_ratio': _safe_float(strategy.get('token1_collateral_ratio', 0.0)),
+        'entry_token3_liquidation_threshold': _safe_float(strategy.get('token3_liquidation_threshold', 0.0)),
+        'entry_token3_collateral_ratio': _safe_float(strategy.get('token3_collateral_ratio', 0.0)),
+        'entry_token2_borrow_weight': _safe_float(strategy.get('token2_borrow_weight', 1.0)),
+        'entry_token4_borrow_weight': _safe_float(strategy.get('token4_borrow_weight', 1.0)),
         # Token amounts computed from deployment
-        'entry_token_amount_1a': ta_1a,
-        'entry_token_amount_2a': ta_2a,
-        'entry_token_amount_2b': ta_2b,
-        'entry_token_amount_3b': ta_3b,
+        'entry_token1_amount': ta_1a,
+        'entry_token2_amount': ta_2a,
+        'entry_token3_amount': ta_2b,
+        'entry_token4_amount': ta_3b,
         # Basis (perp strategies only)
         'entry_basis': (
             strategy.get('basis_bid') if strategy_type == 'perp_lending'
@@ -671,7 +673,7 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
     # HEADER SECTION
     # ========================================
     if strategy_type == 'perp_lending':
-        st.markdown(f"## 📊 {strategy['token1']} ↔ {strategy['token3']} (Perp Lending)")
+        st.markdown(f"## 📊 {strategy['token1']} ↔ {strategy['token4']} (Perp Lending)")
     elif is_perp:
         st.markdown(f"## 📊 {strategy['token1']} / {strategy['token2']} / {strategy['token3']} (Perp Borrowing)")
     else:
@@ -686,8 +688,8 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
     except NotImplementedError:
         # Fallback inline for strategy types not yet migrated to renderer
         upfront_fees_pct = (
-            _safe_float(strategy.get('b_a', 0)) * _safe_float(strategy.get('borrow_fee_2a', 0)) +
-            _safe_float(strategy.get('b_b', 0)) * _safe_float(strategy.get('borrow_fee_3b', 0))
+            _safe_float(strategy.get('b_a', 0)) * _safe_float(strategy.get('token2_borrow_fee', 0)) +
+            _safe_float(strategy.get('b_b', 0)) * _safe_float(strategy.get('token4_borrow_fee', 0))
         )
         try:
             renderer_cls_fb = get_strategy_renderer(strategy_type)
@@ -768,24 +770,25 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
         _t1 = strategy['token1']
         _t2 = strategy.get('token2')
         _t3 = strategy.get('token3')
+        _t4 = strategy.get('token4')
         _pa = strategy['protocol_a']
         _pb = strategy.get('protocol_b')
 
         _rate_map = {
-            (_t1, _pa): {'lend_apr': _safe_float(strategy.get('lend_rate_1a', 0.0)), 'borrow_apr': 0.0},
-            (_t2, _pa): {'lend_apr': 0.0, 'borrow_apr': _safe_float(strategy.get('borrow_rate_2a', 0.0))},
-            (_t2, _pb): {'lend_apr': _safe_float(strategy.get('lend_rate_2b', 0.0)), 'borrow_apr': 0.0},
-            (_t3, _pb): {'lend_apr': 0.0, 'borrow_apr': _safe_float(strategy.get('borrow_rate_3b', 0.0))},
+            (_t1, _pa): {'lend_apr': _safe_float(strategy.get('token1_rate', 0.0)), 'borrow_apr': 0.0},
+            (_t2, _pa): {'lend_apr': 0.0, 'borrow_apr': _safe_float(strategy.get('token2_rate', 0.0))},
+            (_t2, _pb): {'lend_apr': _safe_float(strategy.get('token3_rate', 0.0)), 'borrow_apr': 0.0},
+            (_t4, _pb): {'lend_apr': 0.0, 'borrow_apr': _safe_float(strategy.get('token4_rate', 0.0))},
         }
         _price_map = {
-            (_t1, _pa): strategy['P1_A'],
-            (_t2, _pa): strategy.get('P2_A'),
-            (_t2, _pb): strategy.get('P2_B'),
-            (_t3, _pb): strategy.get('P3_B'),
+            (_t1, _pa): strategy['token1_price'],
+            (_t2, _pa): strategy.get('token2_price'),
+            (_t2, _pb): strategy.get('token3_price'),
+            (_t4, _pb): strategy.get('token4_price'),
         }
         _fee_map = {
-            (_t2, _pa): _safe_float(strategy.get('borrow_fee_2a', 0.0)),
-            (_t3, _pb): _safe_float(strategy.get('borrow_fee_3b', 0.0)),
+            (_t2, _pa): _safe_float(strategy.get('token2_borrow_fee', 0.0)),
+            (_t4, _pb): _safe_float(strategy.get('token4_borrow_fee', 0.0)),
         }
 
         def _get_rate(token, protocol, rate_type):
@@ -876,10 +879,12 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
                 'strategy_type': strategy.get('strategy_type', 'recursive_lending'),
                 'token1': strategy.get('token1'),  # Symbol (e.g., 'USDC')
                 'token2': strategy.get('token2'),  # Symbol (e.g., 'SUI')
-                'token3': strategy.get('token3'),  # Symbol (e.g., 'USDC')
+                'token3': strategy.get('token3'),  # L_B slot
+                'token4': strategy.get('token4'),  # B_B slot
                 'token1_contract': strategy['token1_contract'],
                 'token2_contract': strategy.get('token2_contract'),
                 'token3_contract': strategy.get('token3_contract'),
+                'token4_contract': strategy.get('token4_contract'),
                 'protocol_a': strategy['protocol_a'],
                 'protocol_b': strategy.get('protocol_b'),
                 'liquidation_distance': strategy.get('liquidation_distance', 0.20)
@@ -956,9 +961,11 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
                 token1=strategy['token1'],
                 token2=strategy['token2'],
                 token3=strategy.get('token3'),
+                token4=strategy.get('token4'),
                 token1_contract=strategy['token1_contract'],
                 token2_contract=strategy['token2_contract'],
                 token3_contract=strategy.get('token3_contract'),
+                token4_contract=strategy.get('token4_contract'),
                 protocol_a=strategy['protocol_a'],
                 protocol_b=strategy['protocol_b'],
                 deployment_usd=deployment_usd,
@@ -1744,16 +1751,16 @@ def render_pending_position_instructions(position: pd.Series, service: PositionS
     l_b, b_b = float(position['l_b']), float(position['b_b'])
 
     # Extract prices and rates
-    price_1a, price_2a = float(position['entry_price_1a']), float(position['entry_price_2a'])
-    price_2b, price_3b = float(position['entry_price_2b']), float(position['entry_price_3b'])
+    price_1a, price_2a = float(position['entry_token1_price']), float(position['entry_token2_price'])
+    price_2b, price_3b = float(position['entry_token3_price']), float(position['entry_token4_price'])
 
-    rate_1a = float(position['entry_lend_rate_1a'])
-    rate_2a = float(position['entry_borrow_rate_2a'])
-    rate_2b = float(position['entry_lend_rate_2b'])
-    rate_3b = float(position['entry_borrow_rate_3b'])
+    rate_1a = float(position['entry_token1_rate'])
+    rate_2a = float(position['entry_token2_rate'])
+    rate_2b = float(position['entry_token3_rate'])
+    rate_3b = float(position['entry_token4_rate'])
 
-    fee_2a = float(position.get('entry_borrow_fee_2a', 0))
-    fee_3b = float(position.get('entry_borrow_fee_3b', 0))
+    fee_2a = float(position.get('entry_token2_borrow_fee', 0))
+    fee_3b = float(position.get('entry_token4_borrow_fee', 0))
 
     # Calculate USD amounts per leg
     lend_1a_usd = l_a * deployment_usd
@@ -2395,7 +2402,15 @@ def render_sidebar_filters(display_results: pd.DataFrame):
 
     token_filter = st.multiselect(
         "Filter by Token",
-        options=sorted(set(display_results['token1']).union(set(display_results['token2'])).union(set(display_results['token3']))) if not display_results.empty else [],
+        options=sorted(
+            set(display_results['token1'].dropna()).union(
+                set(display_results['token2'].dropna()) if 'token2' in display_results.columns else set()
+            ).union(
+                set(display_results['token3'].dropna()) if 'token3' in display_results.columns else set()
+            ).union(
+                set(display_results['token4'].dropna()) if 'token4' in display_results.columns else set()
+            )
+        ) if not display_results.empty else [],
         default=filters.get('token_filter', [])
     )
 
@@ -2562,11 +2577,11 @@ def render_allocation_tab(all_strategies_df: pd.DataFrame):
             # Get unique NON-STABLECOIN tokens from strategies
             if not all_strategies_df.empty:
                 all_tokens = set()
-                for col in ['token1', 'token2', 'token3']:
+                for col in ['token1', 'token2', 'token3', 'token4']:
                     if col in all_strategies_df.columns:
                         all_tokens.update(all_strategies_df[col].unique())
                 # Filter out stablecoins
-                non_stablecoin_tokens = sorted([t for t in all_tokens if t not in STABLECOIN_SYMBOLS])
+                non_stablecoin_tokens = sorted([t for t in all_tokens if t is not None and t not in STABLECOIN_SYMBOLS])
             else:
                 non_stablecoin_tokens = ['SUI', 'DEEP', 'CETUS', 'WAL']
 
@@ -2626,7 +2641,7 @@ def render_allocation_tab(all_strategies_df: pd.DataFrame):
             # Get unique STABLECOIN tokens from strategies
             if not all_strategies_df.empty:
                 all_tokens = set()
-                for col in ['token1', 'token2', 'token3']:
+                for col in ['token1', 'token2', 'token3', 'token4']:
                     if col in all_strategies_df.columns:
                         all_tokens.update(all_strategies_df[col].unique())
                 # Filter to stablecoins only
@@ -4098,13 +4113,19 @@ def render_dashboard(data_loader: DataLoader, mode: str):
             filtered_results = filtered_results[filtered_results['token1'] == 'USDC']
 
         if force_token3_equals_token1:
-            filtered_results = filtered_results[filtered_results['token3'] == filtered_results['token1']]
+            # Filter for strategies where the B_B closing token (token4) = starting token (token1)
+            if 'token4' in filtered_results.columns:
+                filtered_results = filtered_results[
+                    filtered_results['token4'].fillna('') == filtered_results['token1']
+                ]
+            else:
+                filtered_results = filtered_results[filtered_results['token3'] == filtered_results['token1']]
 
         if stablecoin_only:
             filtered_results = filtered_results[
                 (filtered_results['token1'].isin(STABLECOIN_SYMBOLS)) &
-                (filtered_results['token2'].isin(STABLECOIN_SYMBOLS)) &
-                (filtered_results['token3'].isin(STABLECOIN_SYMBOLS))
+                (filtered_results['token2'].isna() | filtered_results['token2'].isin(STABLECOIN_SYMBOLS)) &
+                (filtered_results['token3'].isna() | filtered_results['token3'].isin(STABLECOIN_SYMBOLS))
             ]
 
         # Filter by strategy type
@@ -4139,12 +4160,17 @@ def render_dashboard(data_loader: DataLoader, mode: str):
         if force_usdc_start:
             zero_liquidity_results = zero_liquidity_results[zero_liquidity_results['token1'] == 'USDC']
         if force_token3_equals_token1:
-            zero_liquidity_results = zero_liquidity_results[zero_liquidity_results['token3'] == zero_liquidity_results['token1']]
+            if 'token4' in zero_liquidity_results.columns:
+                zero_liquidity_results = zero_liquidity_results[
+                    zero_liquidity_results['token4'].fillna('') == zero_liquidity_results['token1']
+                ]
+            else:
+                zero_liquidity_results = zero_liquidity_results[zero_liquidity_results['token3'] == zero_liquidity_results['token1']]
         if stablecoin_only:
             zero_liquidity_results = zero_liquidity_results[
                 (zero_liquidity_results['token1'].isin(STABLECOIN_SYMBOLS)) &
-                (zero_liquidity_results['token2'].isin(STABLECOIN_SYMBOLS)) &
-                (zero_liquidity_results['token3'].isin(STABLECOIN_SYMBOLS))
+                (zero_liquidity_results['token2'].isna() | zero_liquidity_results['token2'].isin(STABLECOIN_SYMBOLS)) &
+                (zero_liquidity_results['token3'].isna() | zero_liquidity_results['token3'].isin(STABLECOIN_SYMBOLS))
             ]
 
         # Filter zero liquidity results by strategy type
@@ -4173,10 +4199,11 @@ def render_dashboard(data_loader: DataLoader, mode: str):
 
     if token_filter and not display_results.empty:
         before_count = len(display_results)
-        display_results = display_results[
-            display_results['token1'].isin(token_filter) |
-            display_results['token2'].isin(token_filter)
-        ]
+        mask = display_results['token1'].isin(token_filter)
+        for _col in ['token2', 'token3', 'token4']:
+            if _col in display_results.columns:
+                mask = mask | display_results[_col].isin(token_filter)
+        display_results = display_results[mask]
 
     if protocol_filter and not display_results.empty:
         before_count = len(display_results)

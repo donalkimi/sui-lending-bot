@@ -392,7 +392,7 @@ def fetch_historical_rates(conn: Any, token1_contract: str, token2_contract: str
 def calculate_net_apr_history(raw_df: pd.DataFrame, token1_contract: str, token2_contract: str,
                               token3_contract: str, protocol_a: str, protocol_b: str,
                               l_a: float, b_a: float, l_b: float, b_b: float,
-                              borrow_fee_2a: float = 0.0, borrow_fee_3b: float = 0.0) -> pd.DataFrame:
+                              token2_borrow_fee: float = 0.0, token4_borrow_fee: float = 0.0) -> pd.DataFrame:
     """
     Calculate net APR for each timestamp using static weightings and fees
 
@@ -404,8 +404,8 @@ def calculate_net_apr_history(raw_df: pd.DataFrame, token1_contract: str, token2
         protocol_a: First protocol name
         protocol_b: Second protocol name
         l_a, b_a, l_b, b_b: Position weightings
-        borrow_fee_2a: Borrow fee for token2 from Protocol A (decimal, e.g., 0.0030)
-        borrow_fee_3b: Borrow fee for token3 from Protocol B (decimal, e.g., 0.0030)
+        token2_borrow_fee: Borrow fee for token2 from Protocol A (decimal, e.g., 0.0030)
+        token4_borrow_fee: Borrow fee for token3 from Protocol B (decimal, e.g., 0.0030)
 
     Returns:
         DataFrame with columns: timestamp, net_apr (fee-adjusted), token2_price
@@ -446,7 +446,7 @@ def calculate_net_apr_history(raw_df: pd.DataFrame, token1_contract: str, token2
         base_apr = earn_A + earn_B - cost_A - cost_B
 
         # Subtract annualized fee cost to get Net APR (as decimal)
-        total_fee_cost = b_a * borrow_fee_2a + b_b * borrow_fee_3b
+        total_fee_cost = b_a * token2_borrow_fee + b_b * token4_borrow_fee
         net_apr = base_apr - total_fee_cost
 
         results.append({
@@ -623,8 +623,8 @@ def get_strategy_history(strategy_row: Dict[str, Any], liquidation_distance: flo
         b_b = strategy_row['b_b']
 
         # Get current fees from the strategy row
-        borrow_fee_2a = strategy_row.get('borrow_fee_2a', 0.0)
-        borrow_fee_3b = strategy_row.get('borrow_fee_3b', 0.0)
+        token2_borrow_fee = strategy_row.get('token2_borrow_fee', 0.0)
+        token4_borrow_fee = strategy_row.get('token4_borrow_fee', 0.0)
 
         # Get the strategy timestamp and convert to seconds
         from utils.time_helpers import to_seconds, to_datetime_str
@@ -661,7 +661,7 @@ def get_strategy_history(strategy_row: Dict[str, Any], liquidation_distance: flo
         history_df = calculate_net_apr_history(
             raw_df, token1_contract, token2_contract, token3_contract,
             protocol_a, protocol_b, l_a, b_a, l_b, b_b,
-            borrow_fee_2a, borrow_fee_3b
+            token2_borrow_fee, token4_borrow_fee
         )
 
         return history_df, l_a, b_a, l_b, b_b

@@ -330,62 +330,63 @@ CREATE TABLE IF NOT EXISTS positions (
     is_paper_trade BOOLEAN NOT NULL DEFAULT TRUE,
     user_id TEXT,  -- Nullable for Phase 1 (single user), required for multi-user
 
-    -- Strategy Details (all positions are 4-leg levered)
+    -- Strategy Details (universal leg convention: token1=L_A, token2=B_A, token3=L_B, token4=B_B)
+    -- token2/token3/token4 are NULL when the leg is unused (multiplier = 0)
     token1 TEXT NOT NULL,
-    token2 TEXT NOT NULL,
-    token3 TEXT NOT NULL,
+    token2 TEXT,
+    token3 TEXT,
     token1_contract TEXT NOT NULL,
-    token2_contract TEXT NOT NULL,
-    token3_contract TEXT NOT NULL,
-    protocol_A TEXT NOT NULL,
-    protocol_B TEXT NOT NULL,
+    token2_contract TEXT,
+    token3_contract TEXT,
+    protocol_a TEXT NOT NULL,
+    protocol_b TEXT NOT NULL,
 
     -- Entry Timestamp (references rates_snapshot timestamp)
     entry_timestamp TIMESTAMP NOT NULL,
 
     -- Position Sizing (normalized multipliers, scale by deployment_usd for USD amounts)
     deployment_usd DECIMAL(20, 10) NOT NULL,
-    L_A DECIMAL(10, 6) NOT NULL,  -- Lend multiplier at Protocol A
-    B_A DECIMAL(10, 6) NOT NULL,  -- Borrow multiplier at Protocol A
-    L_B DECIMAL(10, 6) NOT NULL,  -- Lend multiplier at Protocol B
-    B_B DECIMAL(10, 6) NOT NULL,  -- Borrow multiplier at Protocol B (4th leg)
+    l_a DECIMAL(10, 6) NOT NULL,  -- Lend multiplier at Protocol A (token1)
+    b_a DECIMAL(10, 6) NOT NULL,  -- Borrow multiplier at Protocol A (token2)
+    l_b DECIMAL(10, 6) NOT NULL,  -- Lend/long multiplier at Protocol B (token3)
+    b_b DECIMAL(10, 6) NOT NULL,  -- Borrow/short multiplier at Protocol B (token4)
 
     -- Entry Rates (as decimals: 0.0316 = 3.16%)
-    entry_lend_rate_1A DECIMAL(10, 6) NOT NULL,
-    entry_borrow_rate_2A DECIMAL(10, 6) NOT NULL,
-    entry_lend_rate_2B DECIMAL(10, 6) NOT NULL,
-    entry_borrow_rate_3B DECIMAL(10, 6) NOT NULL,
+    entry_token1_rate DECIMAL(10, 6) NOT NULL,  -- L_A lend rate
+    entry_token2_rate DECIMAL(10, 6),           -- B_A borrow rate (NULL when leg unused)
+    entry_token3_rate DECIMAL(10, 6),           -- L_B lend/funding rate (NULL when leg unused)
+    entry_token4_rate DECIMAL(10, 6),           -- B_B borrow/funding rate (NULL when leg unused)
 
-    -- Entry Prices (leg-level for Step 6)
-    entry_price_1A DECIMAL(20, 10) NOT NULL,
-    entry_price_2A DECIMAL(20, 10) NOT NULL,
-    entry_price_2B DECIMAL(20, 10) NOT NULL,
-    entry_price_3B DECIMAL(20, 10) NOT NULL,
+    -- Entry Prices
+    entry_token1_price DECIMAL(20, 10) NOT NULL,
+    entry_token2_price DECIMAL(20, 10),         -- NULL when leg unused
+    entry_token3_price DECIMAL(20, 10),         -- NULL when leg unused
+    entry_token4_price DECIMAL(20, 10),         -- NULL when leg unused
 
-    -- Entry Collateral Ratios (NULL for perp strategies where the leg has no collateral ratio)
-    entry_collateral_ratio_1A DECIMAL(10, 6),
-    entry_collateral_ratio_2B DECIMAL(10, 6),
+    -- Entry Collateral Ratios (NULL when leg unused or has no collateral ratio)
+    entry_token1_collateral_ratio DECIMAL(10, 6),
+    entry_token3_collateral_ratio DECIMAL(10, 6),
 
-    -- Entry Liquidation Thresholds (NULL for perp strategies where the leg has no threshold)
-    entry_liquidation_threshold_1A DECIMAL(10, 6),
-    entry_liquidation_threshold_2B DECIMAL(10, 6),
+    -- Entry Liquidation Thresholds (NULL when leg unused or has no threshold)
+    entry_token1_liquidation_threshold DECIMAL(10, 6),
+    entry_token3_liquidation_threshold DECIMAL(10, 6),
 
     -- Entry Strategy APRs (fee-adjusted for different time horizons)
     entry_net_apr DECIMAL(10, 6) NOT NULL,
     entry_apr5 DECIMAL(10, 6) NOT NULL,
     entry_apr30 DECIMAL(10, 6) NOT NULL,
     entry_apr90 DECIMAL(10, 6) NOT NULL,
-    entry_days_to_breakeven DECIMAL(10, 2),  -- NULL for backwards compatibility
+    entry_days_to_breakeven DECIMAL(10, 2),
     entry_liquidation_distance DECIMAL(10, 6) NOT NULL,
 
     -- Entry Liquidity & Fees
     entry_max_size_usd DECIMAL(20, 10),
-    entry_borrow_fee_2A DECIMAL(10, 6),
-    entry_borrow_fee_3B DECIMAL(10, 6),
+    entry_token2_borrow_fee DECIMAL(10, 6),   -- B_A borrow fee
+    entry_token4_borrow_fee DECIMAL(10, 6),   -- B_B borrow fee
 
     -- Entry Borrow Weights (captured at entry, remain constant per assumption)
-    entry_borrow_weight_2A DECIMAL(10, 6),
-    entry_borrow_weight_3B DECIMAL(10, 6),
+    entry_token2_borrow_weight DECIMAL(10, 6),
+    entry_token4_borrow_weight DECIMAL(10, 6),
 
     -- Slippage Placeholders (for Phase 2)
     expected_slippage_bps DECIMAL(10, 2),
@@ -420,11 +421,11 @@ CREATE TABLE IF NOT EXISTS positions (
     -- Portfolio Linking (NULL = standalone position, UUID = part of portfolio)
     portfolio_id TEXT DEFAULT NULL,
 
-    -- Entry Token Amounts (calculated at position creation: deployment_usd * weight / price)
-    entry_token_amount_1A DECIMAL(30, 10),  -- Token amount for Leg 1A (lend)
-    entry_token_amount_2A DECIMAL(30, 10),  -- Token amount for Leg 2A (borrow)
-    entry_token_amount_2B DECIMAL(30, 10),  -- Token amount for Leg 2B (lend)
-    entry_token_amount_3B DECIMAL(30, 10),  -- Token amount for Leg 3B (borrow, nullable)
+    -- Entry Token Amounts (calculated at position creation: weight * deployment_usd / price)
+    entry_token1_amount DECIMAL(30, 10),  -- L_A token count
+    entry_token2_amount DECIMAL(30, 10),  -- B_A token count
+    entry_token3_amount DECIMAL(30, 10),  -- L_B token count
+    entry_token4_amount DECIMAL(30, 10),  -- B_B token count
 
     -- Entry Basis (perp strategies only, NULL for non-perp)
     -- entry_basis: the direction-specific entry-side basis
@@ -432,6 +433,10 @@ CREATE TABLE IF NOT EXISTS positions (
     --   perp_borrowing: entry_basis = basis_ASK  (long perp at ask + sell spot at bid)
     entry_basis        DECIMAL(10, 8),   -- entry-side basis (bid for lending, ask for borrowing)
     entry_basis_spread DECIMAL(10, 8),   -- round-trip spread cost = basis_ask - basis_bid
+
+    -- B_B leg token (NULL = leg unused)
+    token4 TEXT,
+    token4_contract TEXT,
 
     CONSTRAINT positions_pkey PRIMARY KEY (position_id),
     CONSTRAINT fk_positions_portfolio FOREIGN KEY (portfolio_id) REFERENCES portfolios(portfolio_id) ON DELETE SET NULL
@@ -441,7 +446,7 @@ CREATE TABLE IF NOT EXISTS positions (
 CREATE INDEX IF NOT EXISTS idx_positions_status ON positions(status);
 CREATE INDEX IF NOT EXISTS idx_positions_entry_time ON positions(entry_timestamp);
 CREATE INDEX IF NOT EXISTS idx_positions_user ON positions(user_id);
-CREATE INDEX IF NOT EXISTS idx_positions_protocols ON positions(protocol_A, protocol_B);
+CREATE INDEX IF NOT EXISTS idx_positions_protocols ON positions(protocol_a, protocol_b);
 CREATE INDEX IF NOT EXISTS idx_positions_tokens ON positions(token1, token2, token3);
 CREATE INDEX IF NOT EXISTS idx_positions_is_paper ON positions(is_paper_trade);
 CREATE INDEX IF NOT EXISTS idx_positions_execution_pending ON positions(execution_time) WHERE execution_time = -1;
@@ -462,6 +467,7 @@ USING (true);
 -- Table 7: position_rebalances
 -- Stores historical position segments created through rebalancing
 -- Follows event sourcing pattern: records are immutable historical truth
+-- Each row = one completed time segment. Zero rows = position never rebalanced.
 CREATE TABLE IF NOT EXISTS position_rebalances (
     -- Rebalance Identification
     rebalance_id TEXT,
@@ -470,72 +476,72 @@ CREATE TABLE IF NOT EXISTS position_rebalances (
 
     -- Timing
     opening_timestamp TIMESTAMP NOT NULL,
-    closing_timestamp TIMESTAMP,   -- NULL while segment is still open (initial deployment or active rebalance)
+    closing_timestamp TIMESTAMP,   -- NULL while segment is still open
 
     -- Position State (multipliers - constant during segment)
     deployment_usd DECIMAL(20, 10) NOT NULL,
-    L_A DECIMAL(10, 6) NOT NULL,
-    B_A DECIMAL(10, 6) NOT NULL,
-    L_B DECIMAL(10, 6) NOT NULL,
-    B_B DECIMAL(10, 6) NOT NULL,
+    l_a DECIMAL(10, 6) NOT NULL,
+    b_a DECIMAL(10, 6) NOT NULL,
+    l_b DECIMAL(10, 6) NOT NULL,
+    b_b DECIMAL(10, 6) NOT NULL,
 
-    -- Opening State (rates, prices)
-    opening_lend_rate_1A DECIMAL(10, 6) NOT NULL,
-    opening_borrow_rate_2A DECIMAL(10, 6) NOT NULL,
-    opening_lend_rate_2B DECIMAL(10, 6) NOT NULL,
-    opening_borrow_rate_3B DECIMAL(10, 6) NOT NULL,
-    opening_price_1A DECIMAL(20, 10) NOT NULL,
-    opening_price_2A DECIMAL(20, 10) NOT NULL,
-    opening_price_2B DECIMAL(20, 10) NOT NULL,
-    opening_price_3B DECIMAL(20, 10) NOT NULL,
+    -- Opening State (rates, prices — universal leg convention: token1=L_A, token2=B_A, token3=L_B, token4=B_B)
+    opening_token1_rate DECIMAL(10, 6) NOT NULL,   -- L_A lend rate
+    opening_token2_rate DECIMAL(10, 6),            -- B_A borrow rate (NULL when leg unused)
+    opening_token3_rate DECIMAL(10, 6),            -- L_B lend/funding rate (NULL when leg unused)
+    opening_token4_rate DECIMAL(10, 6),            -- B_B borrow/funding rate (NULL when leg unused)
+    opening_token1_price DECIMAL(20, 10) NOT NULL,
+    opening_token2_price DECIMAL(20, 10),          -- NULL when leg unused
+    opening_token3_price DECIMAL(20, 10),          -- NULL when leg unused
+    opening_token4_price DECIMAL(20, 10),          -- NULL when leg unused
 
     -- Closing State (rates, prices — NULL while segment is still open)
-    closing_lend_rate_1A DECIMAL(10, 6),
-    closing_borrow_rate_2A DECIMAL(10, 6),
-    closing_lend_rate_2B DECIMAL(10, 6),
-    closing_borrow_rate_3B DECIMAL(10, 6),
-    closing_price_1A DECIMAL(20, 10),
-    closing_price_2A DECIMAL(20, 10),
-    closing_price_2B DECIMAL(20, 10),
-    closing_price_3B DECIMAL(20, 10),
+    closing_token1_rate DECIMAL(10, 6),
+    closing_token2_rate DECIMAL(10, 6),
+    closing_token3_rate DECIMAL(10, 6),
+    closing_token4_rate DECIMAL(10, 6),
+    closing_token1_price DECIMAL(20, 10),
+    closing_token2_price DECIMAL(20, 10),
+    closing_token3_price DECIMAL(20, 10),
+    closing_token4_price DECIMAL(20, 10),
 
     -- Collateral Ratios (NULL for perp strategies where the leg has no collateral ratio)
-    collateral_ratio_1A DECIMAL(10, 6) NOT NULL,
-    collateral_ratio_2B DECIMAL(10, 6),             -- NULL for perp strategies (Bluefin has no collateral ratio)
+    token1_collateral_ratio DECIMAL(10, 6) NOT NULL,
+    token3_collateral_ratio DECIMAL(10, 6),         -- NULL for perp strategies (Bluefin has no collateral ratio)
 
     -- Liquidation Thresholds (NULL for perp strategies where the leg has no threshold)
-    liquidation_threshold_1A DECIMAL(10, 6) NOT NULL,
-    liquidation_threshold_2B DECIMAL(10, 6),         -- NULL for perp strategies (Bluefin has no liquidation threshold)
+    token1_liquidation_threshold DECIMAL(10, 6) NOT NULL,
+    token3_liquidation_threshold DECIMAL(10, 6),    -- NULL for perp strategies (Bluefin has no liquidation threshold)
 
     -- Rebalance Actions (text descriptions)
-    entry_action_1A TEXT,
-    entry_action_2A TEXT,
-    entry_action_2B TEXT,
-    entry_action_3B TEXT,
-    exit_action_1A TEXT,
-    exit_action_2A TEXT,
-    exit_action_2B TEXT,
-    exit_action_3B TEXT,
+    entry_action_token1 TEXT,
+    entry_action_token2 TEXT,
+    entry_action_token3 TEXT,
+    entry_action_token4 TEXT,
+    exit_action_token1 TEXT,
+    exit_action_token2 TEXT,
+    exit_action_token3 TEXT,
+    exit_action_token4 TEXT,
 
     -- Token Amounts
-    entry_token_amount_1A DECIMAL(20, 10) NOT NULL,
-    entry_token_amount_2A DECIMAL(20, 10) NOT NULL,
-    entry_token_amount_2B DECIMAL(20, 10) NOT NULL,
-    entry_token_amount_3B DECIMAL(20, 10) NOT NULL,
-    exit_token_amount_1A DECIMAL(20, 10),   -- NULL while segment is still open
-    exit_token_amount_2A DECIMAL(20, 10),
-    exit_token_amount_2B DECIMAL(20, 10),
-    exit_token_amount_3B DECIMAL(20, 10),
+    entry_token1_amount DECIMAL(20, 10) NOT NULL,
+    entry_token2_amount DECIMAL(20, 10),           -- NULL when leg unused
+    entry_token3_amount DECIMAL(20, 10),           -- NULL when leg unused
+    entry_token4_amount DECIMAL(20, 10),           -- NULL when leg unused
+    exit_token1_amount DECIMAL(20, 10),   -- NULL while segment is still open
+    exit_token2_amount DECIMAL(20, 10),
+    exit_token3_amount DECIMAL(20, 10),
+    exit_token4_amount DECIMAL(20, 10),
 
     -- USD Sizes
-    entry_size_usd_1A DECIMAL(20, 10) NOT NULL,
-    entry_size_usd_2A DECIMAL(20, 10) NOT NULL,
-    entry_size_usd_2B DECIMAL(20, 10) NOT NULL,
-    entry_size_usd_3B DECIMAL(20, 10) NOT NULL,
-    exit_size_usd_1A DECIMAL(20, 10),   -- NULL while segment is still open
-    exit_size_usd_2A DECIMAL(20, 10),
-    exit_size_usd_2B DECIMAL(20, 10),
-    exit_size_usd_3B DECIMAL(20, 10),
+    entry_token1_size_usd DECIMAL(20, 10) NOT NULL,
+    entry_token2_size_usd DECIMAL(20, 10),         -- NULL when leg unused
+    entry_token3_size_usd DECIMAL(20, 10),         -- NULL when leg unused
+    entry_token4_size_usd DECIMAL(20, 10),         -- NULL when leg unused
+    exit_token1_size_usd DECIMAL(20, 10),   -- NULL while segment is still open
+    exit_token2_size_usd DECIMAL(20, 10),
+    exit_token3_size_usd DECIMAL(20, 10),
+    exit_token4_size_usd DECIMAL(20, 10),
 
     -- Realised Metrics (calculated once at rebalance time)
     realised_fees DECIMAL(20, 10) NOT NULL,
@@ -549,14 +555,14 @@ CREATE TABLE IF NOT EXISTS position_rebalances (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 
     -- Closing Liquidation State (NULL while segment is still open)
-    closing_liq_price_1A REAL,
-    closing_liq_price_2A REAL,
-    closing_liq_price_2B REAL,
-    closing_liq_price_3B REAL,
-    closing_liq_dist_1A  REAL,
-    closing_liq_dist_2A  REAL,
-    closing_liq_dist_2B  REAL,
-    closing_liq_dist_3B  REAL,
+    closing_token1_liq_price REAL,
+    closing_token2_liq_price REAL,
+    closing_token3_liq_price REAL,
+    closing_token4_liq_price REAL,
+    closing_token1_liq_dist  REAL,
+    closing_token2_liq_dist  REAL,
+    closing_token3_liq_dist  REAL,
+    closing_token4_liq_dist  REAL,
 
     CONSTRAINT position_rebalances_pkey PRIMARY KEY (rebalance_id),
     CONSTRAINT position_rebalances_position_id_sequence_number_key UNIQUE (position_id, sequence_number),

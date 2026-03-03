@@ -1796,7 +1796,8 @@ class RateTracker:
         import hashlib
 
         # Use contract addresses for hashing
-        key = f"{strategy['token1_contract']}_{strategy['token2_contract']}_{strategy['token3_contract']}"
+        key = (f"{strategy['token1_contract']}_{strategy.get('token2_contract') or ''}"
+               f"_{strategy.get('token3_contract') or ''}_{strategy.get('token4_contract') or ''}")
         key += f"_{strategy['protocol_a']}_{strategy['protocol_b']}"
         key += f"_{strategy.get('liquidation_distance', 0.10)}"
 

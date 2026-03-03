@@ -588,29 +588,29 @@ class PositionCalculator:
                 'b_a': positions['b_a'],
                 'l_b': positions['l_b'],
                 'b_b': positions['b_b'],
-                'lend_rate_1a': lend_rate_token1_A,  # As decimal
-                'borrow_rate_2a': borrow_rate_token2_A,  # As decimal
-                'lend_rate_2b': lend_rate_token2_B,  # As decimal
-                'borrow_rate_3b': borrow_rate_token3_B,  # As decimal
-                'collateral_ratio_1a': collateral_ratio_token1_A,
-                'collateral_ratio_2b': collateral_ratio_token2_B,
-                'liquidation_threshold_1a': liquidation_threshold_token1_A,
-                'liquidation_threshold_2b': liquidation_threshold_token2_B,
-                'P1_A': price_token1_A,
-                'P2_A': price_token2_A,
-                'P2_B': price_token2_B,
-                'P3_B': price_token3_B,
-                'T1_A': T1_A,
-                'T2_A': T2_A,
-                'T2_B': T2_B,
-                'T3_B': T3_B,
-                'available_borrow_2a': available_borrow_2A,
+                'token1_rate': lend_rate_token1_A,  # As decimal
+                'token2_rate': borrow_rate_token2_A,  # As decimal
+                'token3_rate': lend_rate_token2_B,  # As decimal
+                'token4_rate': borrow_rate_token3_B,  # As decimal
+                'token1_collateral_ratio': collateral_ratio_token1_A,
+                'token3_collateral_ratio': collateral_ratio_token2_B,
+                'token1_liquidation_threshold': liquidation_threshold_token1_A,
+                'token3_liquidation_threshold': liquidation_threshold_token2_B,
+                'token1_price': price_token1_A,
+                'token2_price': price_token2_A,
+                'token3_price': price_token2_B,
+                'token4_price': price_token3_B,
+                'token1_units': T1_A,
+                'token2_units': T2_A,
+                'token3_units': T2_B,
+                'token4_units': T3_B,
+                'token2_available_borrow': available_borrow_2A,
                 'available_borrow_3b': available_borrow_3B,
                 'max_size': max_size,
-                'borrow_fee_2a': borrow_fee_2A if borrow_fee_2A is not None else 0.0,  # Default to 0
-                'borrow_fee_3b': borrow_fee_3B if borrow_fee_3B is not None else 0.0,  # Default to 0
-                'borrow_weight_2a': borrow_weight_2A,
-                'borrow_weight_3b': borrow_weight_3B,
+                'token2_borrow_fee': borrow_fee_2A if borrow_fee_2A is not None else 0.0,  # Default to 0
+                'token4_borrow_fee': borrow_fee_3B if borrow_fee_3B is not None else 0.0,  # Default to 0
+                'token2_borrow_weight': borrow_weight_2A,
+                'token4_borrow_weight': borrow_weight_3B,
                 'valid': True,
                 'error': None
             }
@@ -704,10 +704,10 @@ if __name__ == "__main__":
     
     print(f"\n✓ Strategy is valid!")
     print(f"\nPosition Sizes:")
-    print(f"  l_a ({token1} lent in {protocol_a}):     ${result['l_a']:.4f} = {result['T1_A']:.2f} {token1} @ ${result['P1_A']:.4f}")
-    print(f"  b_a ({token2} borrowed from {protocol_a}): ${result['b_a']:.4f} = {result['T2_A']:.2f} {token2} @ ${result['P2_A']:.4f}")
-    print(f"  l_b ({token2} lent in {protocol_b}):  ${result['l_b']:.4f} = {result['T2_B']:.2f} {token2} @ ${result['P2_B']:.4f}")
-    print(f"  b_b ({token3} borrowed from {protocol_b}): ${result['b_b']:.4f} = {result['T3_B']:.2f} {token3} @ ${result['P3_B']:.4f}")
+    print(f"  l_a ({token1} lent in {protocol_a}):     ${result['l_a']:.4f} = {result['token1_units']:.2f} {token1} @ ${result['token1_price']:.4f}")
+    print(f"  b_a ({token2} borrowed from {protocol_a}): ${result['b_a']:.4f} = {result['token2_units']:.2f} {token2} @ ${result['token2_price']:.4f}")
+    print(f"  l_b ({token2} lent in {protocol_b}):  ${result['l_b']:.4f} = {result['token3_units']:.2f} {token2} @ ${result['token3_price']:.4f}")
+    print(f"  b_b ({token3} borrowed from {protocol_b}): ${result['b_b']:.4f} = {result['token4_units']:.2f} {token3} @ ${result['token4_price']:.4f}")
     print(f"  Liquidation Distance: {result['liquidation_distance'] * 100:.0f}%")
 
     print(f"\nNet APR: {result['net_apr'] * 100:.2f}%")

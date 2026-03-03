@@ -888,3 +888,41 @@ gross_apr = spot_earnings - funding_costs  # Subtract cost (negative cost = add 
 ```
 
 **Implementation date:** February 19, 2026
+
+---
+
+### 18. Position Leg Token Convention (Universal)
+
+**Core Principle:** Each position multiplier maps to a dedicated token slot universally across all strategy types. Code must never branch on strategy_type to determine which token to use for a leg lookup.
+
+| Weight | DB slot | Token | Protocol |
+|--------|---------|-------|----------|
+| `L_A` | `1A` cols | `token1` | `protocol_A` |
+| `B_A` | `2A` cols | `token2` (NULL if unused) | `protocol_A` |
+| `L_B` | `2B` cols | `token3` (NULL if unused) | `protocol_B` |
+| `B_B` | `3B` cols | `token4` (NULL if unused) | `protocol_B` |
+
+**Why:**
+- Eliminates all strategy-type branching in rate/price lookups
+- Makes new strategy types trivial to add — just assign token1/2/3/4 correctly
+- Supports simultaneous L_B and B_B on different assets (e.g., long SUI-PERP + short BTC-PERP)
+
+**Token amount matching rule:**
+- When `L_B > 0`: `entry_token_amount_2B = entry_token_amount_2A` (same physical or market-neutral token count)
+- When `B_B > 0` and strategy is perp_lending: `entry_token_amount_3B = entry_token_amount_1A` (market neutral)
+- Otherwise: calculate as `weight × deployment / price`
+
+**Per-strategy token assignments:**
+
+| Strategy | token1 | token2 | token3 | token4 |
+|----------|--------|--------|--------|--------|
+| `recursive_lending` | stablecoin | volatile | volatile (= token2) | closing stablecoin |
+| `noloop_cross_protocol` | stablecoin | volatile | volatile (= token2) | NULL |
+| `stablecoin_lending` | stablecoin | NULL | NULL | NULL |
+| `perp_lending` | spot token | NULL | NULL | perp proxy (short) |
+| `perp_borrowing` | stablecoin | volatile | perp proxy (long) | NULL |
+| `perp_borrowing_recursive` | stablecoin | volatile | perp proxy (long) | NULL |
+
+NULL means the leg is unused (weight = 0). Code must always guard for NULL before looking up rates or prices for token2/3/4.
+
+**Enforced since:** 2026-03-03 (all positions deleted before migration; no data migration required)

@@ -155,17 +155,19 @@ class StablecoinLendingCalculator(StrategyCalculatorBase):
         token1_contract = kwargs.get('token1_contract')
 
         return {
-            # Token and protocol info
+            # Token identity (universal leg convention: only L_A used)
             'token1': token1,
-            'token2': token1,  # Stablecoin lending has no second token
-            'token3': token1,  # Single leg strategy
+            'token2': None,     # B_A unused
+            'token3': None,     # L_B unused
+            'token4': None,     # B_B unused
             'protocol_a': protocol_a,
             'protocol_b': protocol_a,  # Single protocol strategy
 
-            # Contracts (for historical chart queries)
+            # Contracts
             'token1_contract': token1_contract,
-            'token2_contract': token1_contract,
-            'token3_contract': token1_contract,
+            'token2_contract': None,
+            'token3_contract': None,
+            'token4_contract': None,
 
             # Position multipliers
             'l_a': positions['l_a'],
@@ -182,47 +184,43 @@ class StablecoinLendingCalculator(StrategyCalculatorBase):
 
             # Risk metrics
             'liquidation_distance': float('inf'),  # No liquidation risk
-            'max_size': float('inf'),  # Not limited by liquidity constraints
+            'max_size': float('inf'),
 
-            # Prices (required by dashboard) - all same for single-token strategy
-            'P1_A': price_1A,
-            'P2_A': price_1A,
-            'P2_B': price_1A,
-            'P3_B': price_1A,
+            # Prices (unused legs = None)
+            'token1_price': price_1A,
+            'token2_price': None,
+            'token3_price': None,
+            'token4_price': None,
 
             # Token amounts (tokens per $1 deployed)
-            'T1_A': 1.0 / price_1A if price_1A > 0 else 0.0,
-            'T2_A': 0.0,
-            'T2_B': 0.0,
-            'T3_B': 0.0,
+            'token1_units': 1.0 / price_1A if price_1A > 0 else 0.0,
+            'token2_units': None,
+            'token3_units': None,
+            'token4_units': None,
 
-            # Rates (required by dashboard)
-            'lend_rate_1a': lend_total_apr_1A,
-            'borrow_rate_2a': 0.0,  # No borrowing
-            'lend_rate_2b': 0.0,  # No second lending leg
-            'borrow_rate_3b': 0.0,  # No borrowing
+            # Rates (unused legs = None)
+            'token1_rate': lend_total_apr_1A,
+            'token2_rate': None,
+            'token3_rate': None,
+            'token4_rate': None,
 
-            # Collateral and liquidation (required by dashboard)
-            'collateral_ratio_1a': 0.0,  # Not used as collateral
-            'collateral_ratio_2b': 0.0,  # No second leg
-            'liquidation_threshold_1a': 0.0,  # No liquidation risk
-            'liquidation_threshold_2b': 0.0,  # No second leg
+            # Collateral and liquidation
+            'token1_collateral_ratio': 0.0,   # No borrowing against token1
+            'token3_collateral_ratio': 0.0,   # L_B unused
+            'token1_liquidation_threshold': 0.0,
+            'token3_liquidation_threshold': 0.0,
 
-            # Fees and liquidity (required by dashboard)
-            'borrow_fee_2a': 0.0,  # No borrowing
-            'borrow_fee_3b': 0.0,  # No borrowing
-            'available_borrow_2a': 0.0,  # No borrowing
-            'available_borrow_3b': 0.0,  # No borrowing
-            'borrow_weight_2a': 1.0,  # No borrowing
-            'borrow_weight_3b': 1.0,  # No borrowing
+            # Fees and liquidity (unused legs = None)
+            'token2_borrow_fee': None,
+            'token4_borrow_fee': None,
+            'token2_available_borrow': None,
+            'available_borrow_3b': None,
+            'token2_borrow_weight': None,
+            'token4_borrow_weight': None,
 
             # Metadata
             'valid': True,
             'strategy_type': self.get_strategy_type(),
-
-            # Note: We don't track lending supply caps in database
-            # Only borrow liquidity limits (available_borrow_usd)
-            # Future: Will add supply_cap tracking
         }
 
     def calculate_rebalance_amounts(self, position: Dict,

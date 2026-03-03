@@ -1,25 +1,25 @@
 #!/usr/bin/env python3
 """
-Backfill entry_token_amount_3b for perp_borrowing positions.
+Backfill entry_token4_amount for perp_borrowing positions.
 
 WHY THIS IS NEEDED:
     When perp_borrowing positions were deployed, the old create_position() code computed:
-        entry_token_amount_3b = b_b * deployment / entry_price_3b
-    For perp_borrowing, b_b = 0.0 (no second borrow leg), so entry_token_amount_3b = 0
+        entry_token4_amount = b_b * deployment / entry_token4_price
+    For perp_borrowing, b_b = 0.0 (no second borrow leg), so entry_token4_amount = 0
     was stored. The correct leg is sized by l_b (the perp long notional), not b_b.
 
-    With entry_token_amount_3b = 0, the perp funding earnings are calculated as:
+    With entry_token4_amount = 0, the perp funding earnings are calculated as:
         0 tokens × price × rate × time = $0
     Only borrow costs count, showing a fake large loss.
 
 WHAT THIS DOES:
     For each 'perp_borrowing' or 'perp_borrowing_recursive' position where
-    entry_token_amount_3b = 0 AND entry_price_3b > 0:
-        entry_token_amount_3b = l_b * deployment_usd / entry_price_3b
+    entry_token4_amount = 0 AND entry_token4_price > 0:
+        entry_token4_amount = l_b * deployment_usd / entry_token4_price
 
     This matches the fixed logic in position_service.py create_position().
 
-SAFE TO RE-RUN: Only updates rows where entry_token_amount_3b = 0.
+SAFE TO RE-RUN: Only updates rows where entry_token4_amount = 0.
 
 RUN:
     python -m Scripts.backfill_perp_token_amounts
@@ -42,12 +42,12 @@ def backfill_perp_token_amounts():
         # Find affected positions
         cursor.execute(f"""
             SELECT position_id, strategy_type, l_b, deployment_usd,
-                   entry_price_3b, entry_token_amount_3b
+                   entry_token4_price, entry_token4_amount
             FROM positions
             WHERE strategy_type IN ('perp_borrowing', 'perp_borrowing_recursive')
-              AND (entry_token_amount_3b = 0 OR entry_token_amount_3b IS NULL)
-              AND entry_price_3b IS NOT NULL
-              AND entry_price_3b > 0
+              AND (entry_token4_amount = 0 OR entry_token4_amount IS NULL)
+              AND entry_token4_price IS NOT NULL
+              AND entry_token4_price > 0
         """)
         rows = cursor.fetchall()
 
@@ -58,15 +58,15 @@ def backfill_perp_token_amounts():
         print(f"Found {len(rows)} perp_borrowing position(s) to backfill:\n")
 
         updated = 0
-        for position_id, strategy_type, l_b, deployment_usd, entry_price_3b, old_3b in rows:
-            correct_amount = float(l_b) * float(deployment_usd) / float(entry_price_3b)
+        for position_id, strategy_type, l_b, deployment_usd, entry_token4_price, old_3b in rows:
+            correct_amount = float(l_b) * float(deployment_usd) / float(entry_token4_price)
             print(f"  {position_id[:8]}... [{strategy_type}]")
-            print(f"    l_b={l_b}, deployment=${deployment_usd:,.2f}, entry_price_3b={entry_price_3b:.6f}")
-            print(f"    entry_token_amount_3b: {old_3b} → {correct_amount:,.2f}")
+            print(f"    l_b={l_b}, deployment=${deployment_usd:,.2f}, entry_token4_price={entry_token4_price:.6f}")
+            print(f"    entry_token4_amount: {old_3b} → {correct_amount:,.2f}")
 
             cursor.execute(f"""
                 UPDATE positions
-                SET entry_token_amount_3b = {ph}
+                SET entry_token4_amount = {ph}
                 WHERE position_id = {ph}
             """, (correct_amount, position_id))
             updated += 1

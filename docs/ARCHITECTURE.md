@@ -2968,6 +2968,36 @@ This will be added in a future update to complete the architecture map.
 
 ---
 
+## Position Leg Token Convention
+
+Each of the four position multipliers maps to a dedicated token slot in the `positions` table.
+This is a universal invariant across all strategy types.
+
+| Weight | DB slot | Token columns | Always represents |
+|--------|---------|---------------|-------------------|
+| `L_A`  | `1A`    | `token1` / `token1_contract` | Lend in protocol_A |
+| `B_A`  | `2A`    | `token2` / `token2_contract` | Borrow from protocol_A (NULL if unused) |
+| `L_B`  | `2B`    | `token3` / `token3_contract` | Lend or long in protocol_B (NULL if unused) |
+| `B_B`  | `3B`    | `token4` / `token4_contract` | Borrow or short in protocol_B (NULL if unused) |
+
+### Per-strategy token assignments
+
+| Strategy | token1 | token2 | token3 | token4 |
+|----------|--------|--------|--------|--------|
+| `recursive_lending` | stablecoin | volatile | volatile (= token2) | closing stablecoin |
+| `noloop_cross_protocol` | stablecoin | volatile | volatile (= token2) | NULL |
+| `stablecoin_lending` | stablecoin | NULL | NULL | NULL |
+| `perp_lending` | spot token | NULL | NULL | perp proxy (short) |
+| `perp_borrowing` | stablecoin | volatile | perp proxy (long) | NULL |
+| `perp_borrowing_recursive` | stablecoin | volatile | perp proxy (long) | NULL |
+| future long+short perp | ? | ? | long perp proxy | short perp proxy |
+
+NULL means the leg is unused (weight = 0). Code must always guard for NULL before looking up rates or prices for token2/3/4.
+
+See [DESIGN_NOTES.md](DESIGN_NOTES.md) Design Note #18 for the authoritative rule.
+
+---
+
 ## Summary
 
 This architecture map documents the complete data flow and caching architecture of the Sui Lending Bot:

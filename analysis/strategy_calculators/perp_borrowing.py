@@ -203,12 +203,18 @@ class PerpBorrowingCalculator(StrategyCalculatorBase):
         _t2_a = b_a / price_2A if price_2A > 0 else 0.0
 
         return {
-            # Identity
+            # Identity (universal leg convention)
+            # L_A = token1 (stablecoin lent at protocol_A)
+            # B_A = token2 (volatile borrowed from protocol_A, sold spot)
+            # L_B = token3 (perp proxy = long perp, market-neutral offset)
+            # B_B = None  (no borrow from protocol_B)
             'token1': token1, 'token2': token2, 'token3': token3,
+            'token4': None,   # B_B unused
             'protocol_a': protocol_a, 'protocol_b': protocol_b,
             'token1_contract': kwargs.get('token1_contract'),
             'token2_contract': kwargs.get('token2_contract'),
             'token3_contract': kwargs.get('token3_contract'),
+            'token4_contract': None,
 
             # Positions
             'l_a': l_a, 'b_a': b_a, 'l_b': l_b, 'b_b': 0.0,
@@ -239,31 +245,32 @@ class PerpBorrowingCalculator(StrategyCalculatorBase):
             'max_size':             max_size,
 
             # Prices
-            'P1_A': price_1A,
-            'P2_A': price_2A,
-            'P2_B': price_2A,   # token2 not on Bluefin spot; reuse same price
-            'P3_B': price_3B,
+            'token1_price': price_1A,
+            'token2_price': price_2A,
+            'token3_price': price_3B,   # L_B: perp price (bug fix: was price_2A)
+            'token4_price': None,       # B_B unused (bug fix: was price_3B)
 
-            # Token amounts (tokens per $1 deployed) — token-count matching for perp leg
-            'T1_A': l_a / price_1A if price_1A > 0 else 0.0,
-            'T2_A': _t2_a,
-            'T2_B': 0.0,  # tokens were sold, not transferred to Protocol B
-            'T3_B': _t2_a,  # perp = borrowed token count
+            # Token amounts (tokens per $1 deployed)
+            'token1_units': l_a / price_1A if price_1A > 0 else 0.0,
+            'token2_units': _t2_a,
+            'token3_units': _t2_a,  # L_B: perp contracts = borrowed token count (bug fix: was 0.0)
+            'token4_units': None,   # B_B unused (bug fix: was _t2_a)
 
             # Rates
-            'lend_rate_1a':   lend_total_apr_1A,
-            'borrow_rate_2a': borrow_total_apr_2A,
-            'lend_rate_2b':   0.0,
-            'borrow_rate_3b': lend_total_apr_3B,
+            'token1_rate': lend_total_apr_1A,
+            'token2_rate': borrow_total_apr_2A,
+            'token3_rate': lend_total_apr_3B,   # L_B: perp funding rate (bug fix: was 0.0)
+            'token4_rate': None,                # B_B unused (bug fix: was lend_total_apr_3B)
 
             # Collateral / liquidation
-            'collateral_ratio_1a':      collateral_ratio_1A,
-            'liquidation_threshold_1a': liquidation_threshold_1A,
+            'token1_collateral_ratio':      collateral_ratio_1A,
+            'token1_liquidation_threshold': liquidation_threshold_1A,
 
             # Fees / liquidity
-            'borrow_fee_2a':       borrow_fee_2A,
-            'available_borrow_2a': available_borrow,
-            'borrow_weight_2a':    borrow_weight_2A,
+            'token2_borrow_fee':       borrow_fee_2A,
+            'token2_available_borrow': available_borrow,
+            'token2_borrow_weight':    borrow_weight_2A,
+            'available_borrow_3b':     None,  # B_B unused
 
             # Metadata
             'valid':         True,
@@ -273,10 +280,10 @@ class PerpBorrowingCalculator(StrategyCalculatorBase):
             'net_apr': net_apr,
 
             # Fields not applicable to perp_borrowing — store as NULL in DB
-            'collateral_ratio_2b': None,
-            'liquidation_threshold_2b': None,
-            'borrow_fee_3b': None,
-            'borrow_weight_3b': None,
+            'token3_collateral_ratio': None,
+            'token3_liquidation_threshold': None,
+            'token4_borrow_fee': None,
+            'token4_borrow_weight': None,
         }
 
     def calculate_rebalance_amounts(self, position, current_prices,

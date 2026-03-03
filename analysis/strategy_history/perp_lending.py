@@ -29,11 +29,11 @@ class PerpLendingHistoryHandler(HistoryHandlerBase):
         """
         perp_lending needs 2 legs:
         - Leg 1A: token1 at protocol_a (spot lending)
-        - Leg 3B: token3 at protocol_b (perp short — funding rate stored as borrow_total_apr)
+        - Leg 3B: token4 at protocol_b (B_B = perp short — funding rate stored as borrow_total_apr)
         """
         return [
             (strategy['token1_contract'], strategy['protocol_a']),  # Leg 1A: spot lending
-            (strategy['token3_contract'], strategy['protocol_b']),  # Leg 3B: perp short
+            (strategy['token4_contract'], strategy['protocol_b']),  # Leg 3B: perp short (B_B = token4)
         ]
 
     def build_market_data_dict(self, row_group: pd.DataFrame, strategy: Dict) -> Optional[Dict]:
@@ -55,7 +55,7 @@ class PerpLendingHistoryHandler(HistoryHandlerBase):
 
             if contract == strategy['token1_contract'] and protocol == strategy['protocol_a']:
                 leg_1a = row
-            elif contract == strategy['token3_contract'] and protocol == strategy['protocol_b']:
+            elif contract == strategy['token4_contract'] and protocol == strategy['protocol_b']:
                 leg_3b = row
 
         if leg_1a is None or leg_3b is None:
@@ -69,11 +69,11 @@ class PerpLendingHistoryHandler(HistoryHandlerBase):
 
         try:
             return {
-                # Identity
+                # Identity (universal leg convention: B_B = token4 = perp short)
                 'token1':          strategy['token1'],
-                'token3':          strategy['token3'],
+                'token4':          strategy['token4'],   # B_B = perp short proxy
                 'token1_contract': strategy['token1_contract'],
-                'token3_contract': strategy['token3_contract'],
+                'token4_contract': strategy['token4_contract'],
                 'protocol_a':      strategy['protocol_a'],
                 'protocol_b':      strategy['protocol_b'],
 
@@ -105,9 +105,9 @@ class PerpLendingHistoryHandler(HistoryHandlerBase):
     def validate_strategy_dict(self, strategy: Dict) -> Tuple[bool, str]:
         """
         Validate perp_lending strategy requires:
-        token1, token3, token1_contract, token3_contract, protocol_a, protocol_b.
+        token1, token4 (B_B = perp short), token1_contract, token4_contract, protocol_a, protocol_b.
         """
-        required = ['token1', 'token3', 'token1_contract', 'token3_contract', 'protocol_a', 'protocol_b']
+        required = ['token1', 'token4', 'token1_contract', 'token4_contract', 'protocol_a', 'protocol_b']
         missing = [f for f in required if f not in strategy or strategy[f] is None]
 
         if missing:

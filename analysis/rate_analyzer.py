@@ -797,7 +797,7 @@ class RateAnalyzer:
             else:
                 excluded_token1s.append((stablecoin, max_lend_rate))
 
-        # Pre-filter token3 (stablecoin) candidates based on maximum borrow threshold
+        # Pre-filter token4 (closing stablecoin = B_B leg) candidates
         all_stablecoin_lend_rates = []
         for stablecoin in self.STABLECOINS:
             for protocol in self.protocols:
@@ -812,8 +812,8 @@ class RateAnalyzer:
         max_stablecoin_lend = max(all_stablecoin_lend_rates)
         max_borrow_threshold = max_stablecoin_lend - spread_threshold
 
-        valid_token3s = []
-        excluded_token3s = []
+        valid_token4s = []
+        excluded_token4s = []
 
         for stablecoin in self.STABLECOINS:
             borrow_rates = [self.get_rate(self.borrow_rates, stablecoin, p) for p in self.protocols]
@@ -822,9 +822,9 @@ class RateAnalyzer:
                 continue
             min_borrow_rate = min(borrow_rates)
             if min_borrow_rate <= max_borrow_threshold:
-                valid_token3s.append(stablecoin)
+                valid_token4s.append(stablecoin)
             else:
-                excluded_token3s.append((stablecoin, min_borrow_rate))
+                excluded_token4s.append((stablecoin, min_borrow_rate))
 
         results = []
         analyzed = 0
@@ -838,8 +838,8 @@ class RateAnalyzer:
                 if token1 == token2:
                     continue
 
-                for token3 in valid_token3s:
-                    if token3 == token2:
+                for token4 in valid_token4s:  # token4 = B_B closing stablecoin
+                    if token4 == token2:
                         continue
 
                     for protocol_a in self.protocols:
@@ -854,11 +854,11 @@ class RateAnalyzer:
                             if np.isnan(borrow_rate_2A): continue
                             lend_rate_2B = self.get_rate(self.lend_rates, token2, protocol_b)
                             if np.isnan(lend_rate_2B): continue
-                            borrow_rate_3B = self.get_rate(self.borrow_rates, token3, protocol_b)
-                            if np.isnan(borrow_rate_3B): continue
+                            borrow_rate_4B = self.get_rate(self.borrow_rates, token4, protocol_b)
+                            if np.isnan(borrow_rate_4B): continue
 
                             token2_spread = lend_rate_2B - borrow_rate_2A
-                            token1_spread = lend_rate_1A - borrow_rate_3B
+                            token1_spread = lend_rate_1A - borrow_rate_4B
 
                             if token2_spread < spread_threshold and token1_spread < spread_threshold:
                                 self.excluded_by_rate_spread += 1
@@ -871,55 +871,54 @@ class RateAnalyzer:
                             price_1A = self.get_price(token1, protocol_a)
                             price_2A = self.get_price(token2, protocol_a)
                             price_2B = self.get_price(token2, protocol_b)
-                            price_3B = self.get_price(token3, protocol_b)
+                            price_4B = self.get_price(token4, protocol_b)  # B_B: closing stablecoin
                             available_borrow_2A = self.get_available_borrow(token2, protocol_a)
-                            available_borrow_3B = self.get_available_borrow(token3, protocol_b)
+                            available_borrow_4B = self.get_available_borrow(token4, protocol_b)
                             borrow_fee_2A = self.get_borrow_fee(token2, protocol_a)
-                            borrow_fee_3B = self.get_borrow_fee(token3, protocol_b)
+                            borrow_fee_4B = self.get_borrow_fee(token4, protocol_b)
                             borrow_weight_2A = self.get_borrow_weight(token2, protocol_a)
-                            borrow_weight_3B = self.get_borrow_weight(token3, protocol_b)
+                            borrow_weight_4B = self.get_borrow_weight(token4, protocol_b)
 
                             if any(np.isnan([lend_rate_1A, borrow_rate_2A, lend_rate_2B,
-                                            borrow_rate_3B, collateral_1A, collateral_2B,
+                                            borrow_rate_4B, collateral_1A, collateral_2B,
                                             liquidation_threshold_1A, liquidation_threshold_2B,
-                                            price_1A, price_2A, price_2B, price_3B])):
+                                            price_1A, price_2A, price_2B, price_4B])):
                                 continue
                             if collateral_1A <= 1e-9 or collateral_2B <= 1e-9:
                                 continue
                             if liquidation_threshold_1A <= 1e-9 or liquidation_threshold_2B <= 1e-9:
                                 continue
-                            if any(p <= 1e-9 for p in [price_1A, price_2A, price_2B, price_3B]):
+                            if any(p <= 1e-9 for p in [price_1A, price_2A, price_2B, price_4B]):
                                 continue
 
-                            result = self.calculator.analyze_strategy(
+                            result = calculator.analyze_strategy(
                                 token1=token1,
                                 token2=token2,
-                                token3=token3,
+                                token4=token4,  # B_B closing stablecoin
                                 protocol_a=protocol_a,
                                 protocol_b=protocol_b,
-                                lend_rate_token1_A=lend_rate_1A,
-                                borrow_rate_token2_A=borrow_rate_2A,
-                                lend_rate_token2_B=lend_rate_2B,
-                                borrow_rate_token3_B=borrow_rate_3B,
-                                collateral_ratio_token1_A=collateral_1A,
-                                collateral_ratio_token2_B=collateral_2B,
-                                liquidation_threshold_token1_A=liquidation_threshold_1A,
-                                liquidation_threshold_token2_B=liquidation_threshold_2B,
-                                price_token1_A=price_1A,
-                                price_token2_A=price_2A,
-                                price_token2_B=price_2B,
-                                price_token3_B=price_3B,
+                                lend_total_apr_1A=lend_rate_1A,
+                                borrow_total_apr_2A=borrow_rate_2A,
+                                lend_total_apr_2B=lend_rate_2B,
+                                borrow_total_apr_3B=borrow_rate_4B,
+                                collateral_ratio_1A=collateral_1A,
+                                collateral_ratio_2B=collateral_2B,
+                                liquidation_threshold_1A=liquidation_threshold_1A,
+                                liquidation_threshold_2B=liquidation_threshold_2B,
+                                price_1A=price_1A,
+                                price_2A=price_2A,
+                                price_2B=price_2B,
+                                price_3B=price_4B,
                                 available_borrow_2A=available_borrow_2A,
-                                available_borrow_3B=available_borrow_3B,
+                                available_borrow_3B=available_borrow_4B,
                                 borrow_fee_2A=borrow_fee_2A,
-                                borrow_fee_3B=borrow_fee_3B,
+                                borrow_fee_3B=borrow_fee_4B,
                                 borrow_weight_2A=borrow_weight_2A,
-                                borrow_weight_3B=borrow_weight_3B
+                                borrow_weight_3B=borrow_weight_4B,
+                                token1_contract=self.get_contract(token1, protocol_a),
+                                token2_contract=self.get_contract(token2, protocol_a),
+                                token4_contract=self.get_contract(token4, protocol_b),
                             )
-
-                            result['token1_contract'] = self.get_contract(token1, protocol_a)
-                            result['token2_contract'] = self.get_contract(token2, protocol_a)
-                            result['token3_contract'] = self.get_contract(token3, protocol_b)
 
                             if result['valid']:
                                 valid += 1
@@ -1034,7 +1033,7 @@ class RateAnalyzer:
                     basis_bid    = self.get_basis_bid(perp_contract_key, spot_contract)
                     basis_ask    = self.get_basis_ask(perp_contract_key, spot_contract)
 
-                    # Call calculator
+                    # Call calculator (perp proxy is B_B = token4 slot)
                     result = calculator.analyze_strategy(
                         token1=spot_token,
                         token1_contract=token1_contract,
@@ -1044,8 +1043,8 @@ class RateAnalyzer:
                         borrow_total_apr_3B=borrow_total_apr_3B,
                         price_1A=price_1A,
                         price_3B=price_3B,
-                        token3=perp_token,
-                        token3_contract=perp_contract,
+                        token4=perp_token,
+                        token4_contract=perp_contract,
                         liquidation_distance=self.liquidation_distance,
                         timestamp=self.timestamp,
                         basis_spread=basis_spread,
@@ -1264,18 +1263,20 @@ class RateAnalyzer:
         
         # Determine strategy type
         is_stablecoin_only = best['token1'] in self.STABLECOINS and best['token2'] in self.STABLECOINS
-        has_conversion = best['token1'] != best['token3']
-        
+        # has_conversion: closing B_B token (token4) differs from starting L_A token (token1)
+        token4 = best.get('token4')
+        has_conversion = token4 is not None and best['token1'] != token4
+
         if is_stablecoin_only:
             strategy_type = "Stablecoin-only"
         else:
             strategy_type = "Stablecoin + High-yield"
-        
+
         if has_conversion:
             strategy_type += " (with conversion)"
-        
+
         conversion_str = f" -> {best['token1']}" if has_conversion else ""
-        print(f"[BEST STRATEGY] {best['protocol_a']}/{best['protocol_b']}: {best['token1']}/{best['token2']}/{best['token3']}{conversion_str} @ {best['apr_net'] * 100:.2f}% APR")
+        print(f"[BEST STRATEGY] {best['protocol_a']}/{best['protocol_b']}: {best['token1']}/{best.get('token2')}/{best.get('token3')}/{best.get('token4')}{conversion_str} @ {best['apr_net'] * 100:.2f}% APR")
         
         return best['protocol_a'], best['protocol_b'], all_results
 
