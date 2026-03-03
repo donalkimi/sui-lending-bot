@@ -1386,7 +1386,7 @@ class RecursiveLendingRenderer(StrategyRendererBase):
         # ========== LEG 1: Protocol A - Lend token1 ==========
         detail_data.append(RecursiveLendingRenderer._build_lend_leg_row(
             position=position,
-            leg_id='leg_1a',
+            leg_id='token1',
             token=position['token1'],
             protocol=position['protocol_a'],
             weight=position['l_a'],
@@ -1408,7 +1408,7 @@ class RecursiveLendingRenderer(StrategyRendererBase):
         # ========== LEG 2: Protocol A - Borrow token2 ==========
         detail_data.append(RecursiveLendingRenderer._build_borrow_leg_row(
             position=position,
-            leg_id='leg_2a',
+            leg_id='token2',
             token=position['token2'],
             protocol=position['protocol_a'],
             weight=position['b_a'],
@@ -1445,7 +1445,7 @@ class RecursiveLendingRenderer(StrategyRendererBase):
 
         detail_data.append(RecursiveLendingRenderer._build_lend_leg_row(
             position=position,
-            leg_id='leg_2b',
+            leg_id='token3',
             token=position['token2'],
             protocol=position['protocol_b'],
             weight=position['l_b'],
@@ -1469,7 +1469,7 @@ class RecursiveLendingRenderer(StrategyRendererBase):
         if has_leg4:
             detail_data.append(RecursiveLendingRenderer._build_borrow_leg_row(
                 position=position,
-                leg_id='leg_3b',
+                leg_id='token4',
                 token=position['token4'],
                 protocol=position['protocol_b'],
                 weight=position['b_b'],
@@ -1676,14 +1676,14 @@ class RecursiveLendingRenderer(StrategyRendererBase):
         if not is_live_segment:
             # REBALANCE SEGMENT PATH: Use position_rebalances table
             # segment_data contains rebalance opening values (from build_rebalance_segment_data)
-            if leg_id == 'leg_1a':
+            if leg_id == 'token1':
                 segment_entry_rate = segment_data.get('opening_token1_rate')
                 segment_entry_price = segment_data.get('opening_token1_price')
                 token_amount = segment_data.get('opening_token1_amount')
                 # Use closing values for "exit" price/rate
                 live_rate = float(segment_data.get('closing_token1_rate')) if segment_data.get('closing_token1_rate') is not None else None
                 live_price = float(segment_data.get('closing_token1_price')) if segment_data.get('closing_token1_price') is not None else None
-            elif leg_id == 'leg_2b':
+            elif leg_id == 'token3':
                 segment_entry_rate = segment_data.get('opening_token3_rate')
                 segment_entry_price = segment_data.get('opening_token3_price')
                 token_amount = segment_data.get('opening_token3_amount')
@@ -1697,11 +1697,11 @@ class RecursiveLendingRenderer(StrategyRendererBase):
             live_price = get_price_with_fallback(token, protocol)
 
             # Map leg_id to field names
-            if leg_id == 'leg_1a':
+            if leg_id == 'token1':
                 segment_entry_rate = segment_data.get('opening_token1_rate')
                 segment_entry_price = segment_data.get('opening_token1_price')
                 token_amount = segment_data.get('opening_token1_amount')
-            elif leg_id == 'leg_2b':
+            elif leg_id == 'token3':
                 segment_entry_rate = segment_data.get('opening_token3_rate')
                 segment_entry_price = segment_data.get('opening_token3_price')
                 token_amount = segment_data.get('opening_token3_amount')
@@ -1738,11 +1738,11 @@ class RecursiveLendingRenderer(StrategyRendererBase):
                 # Get loan leg token amount based on which lend leg this is
                 loan_token_amount = None
                 if segment_data:
-                    if leg_id == 'leg_1a':
-                        # Leg 1A lends, Leg 2A borrows
+                    if leg_id == 'token1':
+                        # token1 lends, token2 borrows
                         loan_token_amount = segment_data.get('opening_token2_amount')
-                    elif leg_id == 'leg_2b':
-                        # Leg 2B lends, Leg 3B borrows
+                    elif leg_id == 'token3':
+                        # token3 lends, token4 borrows
                         loan_token_amount = segment_data.get('opening_token4_amount')
 
                 # Collateral is this lend leg's tokens at live price
@@ -1894,14 +1894,14 @@ class RecursiveLendingRenderer(StrategyRendererBase):
         if not is_live_segment:
             # REBALANCE SEGMENT PATH: Use position_rebalances table
             # segment_data contains rebalance opening values (from build_rebalance_segment_data)
-            if leg_id == 'leg_2a':
+            if leg_id == 'token2':
                 segment_entry_rate = segment_data.get('opening_token2_rate')
                 segment_entry_price = segment_data.get('opening_token2_price')
                 token_amount = segment_data.get('opening_token2_amount')
                 # Use closing values for "exit" price/rate
                 live_rate = float(segment_data.get('closing_token2_rate')) if segment_data.get('closing_token2_rate') is not None else None
                 live_price = float(segment_data.get('closing_token2_price')) if segment_data.get('closing_token2_price') is not None else None
-            elif leg_id == 'leg_3b':
+            elif leg_id == 'token4':
                 segment_entry_rate = segment_data.get('opening_token4_rate')
                 segment_entry_price = segment_data.get('opening_token4_price')
                 token_amount = segment_data.get('opening_token4_amount')
@@ -1918,11 +1918,11 @@ class RecursiveLendingRenderer(StrategyRendererBase):
             borrow_fee = get_borrow_fee(token, protocol)
 
             # Map leg_id to field names
-            if leg_id == 'leg_2a':
+            if leg_id == 'token2':
                 segment_entry_rate = segment_data.get('opening_token2_rate')
                 segment_entry_price = segment_data.get('opening_token2_price')
                 token_amount = segment_data.get('opening_token2_amount')
-            elif leg_id == 'leg_3b':
+            elif leg_id == 'token4':
                 segment_entry_rate = segment_data.get('opening_token4_rate')
                 segment_entry_price = segment_data.get('opening_token4_price')
                 token_amount = segment_data.get('opening_token4_amount')
@@ -1950,12 +1950,12 @@ class RecursiveLendingRenderer(StrategyRendererBase):
         collateral_leg_weight = 0.0
 
         if segment_data:
-            if leg_id == 'leg_2a':
-                # Leg 2A borrows, Leg 1A is collateral
+            if leg_id == 'token2':
+                # token2 borrows, token1 is collateral
                 collateral_token_amount = segment_data.get('opening_token1_amount')
                 collateral_leg_weight = position.get('l_a', 0.0)
-            elif leg_id == 'leg_3b':
-                # Leg 3B borrows, Leg 2B is collateral
+            elif leg_id == 'token4':
+                # token4 borrows, token3 is collateral
                 collateral_token_amount = segment_data.get('opening_token3_amount')
                 collateral_leg_weight = position.get('l_b', 0.0)
 
@@ -2401,7 +2401,7 @@ class StablecoinLendingRenderer(StrategyRendererBase):
         # Single leg: Lend token1 in Protocol A
         detail_data.append(RecursiveLendingRenderer._build_lend_leg_row(
             position=position,
-            leg_id='leg_1a',
+            leg_id='token1',
             token=position['token1'],
             protocol=position['protocol_a'],
             weight=position['l_a'],
@@ -2577,7 +2577,7 @@ class NoLoopCrossProtocolRenderer(StrategyRendererBase):
         # ========== LEG 1: Protocol A - Lend token1 ==========
         detail_data.append(RecursiveLendingRenderer._build_lend_leg_row(
             position=position,
-            leg_id='leg_1a',
+            leg_id='token1',
             token=position['token1'],
             protocol=position['protocol_a'],
             weight=position['l_a'],
@@ -2599,7 +2599,7 @@ class NoLoopCrossProtocolRenderer(StrategyRendererBase):
         # ========== LEG 2: Protocol A - Borrow token2 ==========
         detail_data.append(RecursiveLendingRenderer._build_borrow_leg_row(
             position=position,
-            leg_id='leg_2a',
+            leg_id='token2',
             token=position['token2'],
             protocol=position['protocol_a'],
             weight=position['b_a'],
@@ -2619,7 +2619,7 @@ class NoLoopCrossProtocolRenderer(StrategyRendererBase):
         # ========== LEG 3: Protocol B - Lend token2 ==========
         detail_data.append(RecursiveLendingRenderer._build_lend_leg_row(
             position=position,
-            leg_id='leg_2b',
+            leg_id='token3',
             token=position['token2'],
             protocol=position['protocol_b'],
             weight=position['l_b'],
@@ -2876,7 +2876,7 @@ class PerpLendingRenderer(StrategyRendererBase):
         # No borrow on this lend leg for perp lending → no liquidation distance
         detail_data.append(RecursiveLendingRenderer._build_lend_leg_row(
             position=position,
-            leg_id='leg_1a',
+            leg_id='token1',
             token=position['token1'],
             protocol=position['protocol_a'],
             weight=position['l_a'],
@@ -2916,8 +2916,8 @@ class PerpLendingRenderer(StrategyRendererBase):
                 return False
 
         if is_live_segment:
-            live_rate_3b = get_rate(position['token3'], position['protocol_b'], 'borrow_apr')
-            live_price_3b = get_price_with_fallback(position['token3'], position['protocol_b'])
+            live_rate_3b = get_rate(position['token4'], position['protocol_b'], 'borrow_apr')
+            live_price_3b = get_price_with_fallback(position['token4'], position['protocol_b'])
             segment_entry_rate_3b = segment_data.get('opening_token4_rate')
             segment_entry_token4_price = segment_data.get('opening_token4_price')
         else:
@@ -2954,6 +2954,7 @@ class PerpLendingRenderer(StrategyRendererBase):
                 'Protocol': position['protocol_b'],
                 'Token': position['token4'],  # B_B = short perp
                 'Action': 'Short Perp',
+                'Weight': f"{float(position['b_b']):.2f}",
                 'Position Entry Rate (%)': f"{entry_rate_3b * 100:.2f}" if safe_value(entry_rate_3b) else "N/A",
                 'Entry Rate (%)': f"{float(segment_entry_rate_3b) * 100:.2f}" if safe_value(segment_entry_rate_3b) else "N/A",
                 'Live Rate (%)': f"{float(live_rate_3b) * 100:.2f}" if safe_value(live_rate_3b) else "N/A",
@@ -2974,6 +2975,7 @@ class PerpLendingRenderer(StrategyRendererBase):
                 'Protocol': position['protocol_b'],
                 'Token': position['token4'],  # B_B = short perp
                 'Action': 'Short Perp',
+                'Weight': f"{float(position['b_b']):.2f}",
                 'Position Entry Rate (%)': f"{entry_rate_3b * 100:.2f}" if safe_value(entry_rate_3b) else "N/A",
                 'Segment Entry Rate (%)': f"{float(segment_entry_rate_3b) * 100:.2f}" if safe_value(segment_entry_rate_3b) else "N/A",
                 'Exit Rate (%)': f"{float(live_rate_3b) * 100:.2f}" if safe_value(live_rate_3b) else "N/A",
@@ -3239,7 +3241,7 @@ class PerpBorrowingRenderer(StrategyRendererBase):
         # ========== LEG 1: Protocol A - Lend Stablecoin (token1) ==========
         detail_data.append(RecursiveLendingRenderer._build_lend_leg_row(
             position=position,
-            leg_id='leg_1a',
+            leg_id='token1',
             token=position['token1'],
             protocol=position['protocol_a'],
             weight=position['l_a'],
@@ -3261,7 +3263,7 @@ class PerpBorrowingRenderer(StrategyRendererBase):
         # ========== LEG 2: Protocol A - Borrow Spot (token2) ==========
         detail_data.append(RecursiveLendingRenderer._build_borrow_leg_row(
             position=position,
-            leg_id='leg_2a',
+            leg_id='token2',
             token=position['token2'],
             protocol=position['protocol_a'],
             weight=position['b_a'],
@@ -3303,7 +3305,7 @@ class PerpBorrowingRenderer(StrategyRendererBase):
         entry_token3_price = position['entry_token3_price']
 
         if is_live_segment:
-            live_rate_3b = get_rate(position['token3'], position['protocol_b'], 'borrow_apr')
+            live_rate_3b = get_rate(position['token3'], position['protocol_b'], 'lend_apr')
             live_price_3b = get_price_with_fallback(position['token3'], position['protocol_b'])
             segment_entry_rate_3b = segment_data.get('opening_token3_rate')
             segment_entry_token3_price = segment_data.get('opening_token3_price')
@@ -3341,6 +3343,7 @@ class PerpBorrowingRenderer(StrategyRendererBase):
                 'Protocol': position['protocol_b'],
                 'Token': position['token3'],
                 'Action': 'Long Perp',
+                'Weight': f"{float(position['b_a']):.2f}",
                 'Position Entry Rate (%)': f"{entry_rate_3b * 100:.2f}" if safe_value(entry_rate_3b) else "N/A",
                 'Entry Rate (%)': f"{float(segment_entry_rate_3b) * 100:.2f}" if safe_value(segment_entry_rate_3b) else "N/A",
                 'Live Rate (%)': f"{float(live_rate_3b) * 100:.2f}" if safe_value(live_rate_3b) else "N/A",
@@ -3361,6 +3364,7 @@ class PerpBorrowingRenderer(StrategyRendererBase):
                 'Protocol': position['protocol_b'],
                 'Token': position['token3'],
                 'Action': 'Long Perp',
+                'Weight': f"{float(position['b_a']):.2f}",
                 'Position Entry Rate (%)': f"{entry_rate_3b * 100:.2f}" if safe_value(entry_rate_3b) else "N/A",
                 'Segment Entry Rate (%)': f"{float(segment_entry_rate_3b) * 100:.2f}" if safe_value(segment_entry_rate_3b) else "N/A",
                 'Exit Rate (%)': f"{float(live_rate_3b) * 100:.2f}" if safe_value(live_rate_3b) else "N/A",
