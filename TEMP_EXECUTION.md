@@ -257,19 +257,81 @@ Steps 3 and 4 could potentially be parallelized if Bluefin allows opening a posi
 
 ---
 
-## Open Questions / TODOs Before Building
+## Resolved: AlphaFi USDC Collateral + WAL Borrow (perp_borrowing leg)
 
-1. **AlphaLend SDK deposit API** — find exact function name/signature in `@alphafi/alphalend-sdk`. Check `data/alphalend/alphalend_reader-sdk.mjs` for initialization patterns to reuse.
+Progress on the AlphaFi-only leg (deposit USDC, borrow WAL) has been completed separately.
+Working script: `data/alphalend/execute_usdc_borrow_wal.mjs`
 
-2. **Bluefin SDK availability** — confirm `@bluefin-exchange/bluefin-v2-client` or `@bluefin-exchange/bluefin-client` exists in node_modules or needs installing.
+### Confirmed Market Data (from `rates_snapshot` + `token_registry`, 2026-03-03)
 
-3. **WAL contract address** — verify WAL contract on Sui mainnet (needed for 7K swap and AlphaFi deposit). Check `config/settings.py` or `BLUEFIN_TO_LENDINGS` mapping.
+| Token | AlphaFi marketId | Decimals | Contract | Collateral Ratio | Liq Threshold | Lend APR | Borrow APR |
+|-------|-----------------|----------|----------|-----------------|--------------|----------|------------|
+| USDC  | 6 | 6 | `0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC` | 85% | 90% | 5.16% | 6.29% |
+| WAL   | 7 | 9 | `0x356a26eb9e012a68958082340d4c4116e7f55615cf27affcff209cf0ae544f59::wal::WAL` | 80% | 85% | 23.55% | 14.62% |
 
-4. **Bluefin WAL-PERP market symbol** — confirm exact symbol string used by Bluefin API (seen `BLUEFIN_PERP_MARKETS = ["BTC", "ETH", "SOL", "SUI", "WAL", "DEEP"]` in settings — WAL is supported).
+**Note:** AlphaLend SDK `getAllMarkets()` returns APRs as decimals (e.g. `0.0516` = 5.16%). Do not multiply by 100 again.
 
-5. **7K SDK commission wallet** — the 7K aggregator requires a partner address for fee routing. Use a neutral address or zero-fee setup.
+### AlphaLend SDK — Confirmed Function Signatures
 
-6. **Private key management** — how is the wallet private key stored/accessed? Railway environment variable? Hardware wallet?
+```javascript
+// Supply collateral (positionCapId optional on first call — SDK creates new position)
+const supplyTx = await alphafi.supply({
+  marketId:  "6",        // USDC market
+  amount:    usdcRaw,    // BigInt, base units (6 decimals)
+  coinType:  USDC_TYPE,
+  address:   wallet,
+});
+
+// Borrow against collateral (positionCapId required — extract from supply tx object changes)
+const borrowTx = await alphafi.borrow({
+  marketId:             "7",       // WAL market
+  amount:               walRaw,    // BigInt, base units (9 decimals)
+  coinType:             WAL_TYPE,
+  positionCapId:        positionCapId,
+  address:              wallet,
+  priceUpdateCoinTypes: [USDC_TYPE, WAL_TYPE],  // all markets in position
+});
+```
+
+**positionCapId:** Created by the supply tx. Extract from `supplyResult.objectChanges` where `objectType` includes `PositionCap`. Must be saved — required for all future borrow/repay/withdraw calls. Store in `positions.on_chain_position_id`.
+
+### Position Sizing (perp_borrowing calculator, $10,000 / 20% liq distance)
+
+```
+liq_max = 0.20 / (1 - 0.20)           = 0.25
+r_safe  = 0.90 / ((1 + 0.25) × 1.0)  = 0.72   ← binding constraint (liq threshold)
+r       = min(0.72, 0.85)             = 0.72
+```
+
+| Multiplier | Action | USD | Tokens |
+|------------|--------|-----|--------|
+| l_a = 1.0 | Lend USDC → AlphaFi | $10,000 | 10,000 USDC |
+| b_a = 0.72 | Borrow WAL → AlphaFi | $7,200 | ~93,385 WAL @ $0.0771 |
+
+### Private Key Management
+
+- **Local dev:** `SUI_PRIVATE_KEY` in `data/alphalend/.env` (already in `.gitignore`). Script loads via `import 'dotenv/config'`.
+- **Production (Railway):** Add `SUI_PRIVATE_KEY` as a secret env var in Railway dashboard. Injected at runtime, never touches filesystem.
+- **Format:** Base64-encoded 32-byte Ed25519 private key. Obtain via `sui keytool export --key-identity <address>`.
+- **Never:** hardcode in script, commit to git, pass as CLI arg, or log it.
+
+### SDK Notes
+
+- All SDKs are in `data/alphalend/node_modules/` — not the root `node_modules/`.
+- `dotenv` is available there too.
+- Run scripts from `data/alphalend/` or adjust import paths accordingly.
+
+---
+
+## Open Questions / TODOs Before Building (perp_lending)
+
+1. **AlphaLend SDK — lend WAL (supply)** — for `perp_lending`, the supply token is WAL not USDC. Same `alphafi.supply()` call, marketId=7, WAL_TYPE. ✅ API confirmed above.
+
+2. **Bluefin SDK availability** — confirm `@bluefin-exchange/bluefin-v2-client` or `@bluefin-exchange/bluefin-client` exists in `data/alphalend/node_modules/@bluefin-exchange/`. Currently only `bluefin7k-aggregator-sdk` confirmed there.
+
+3. **7K SDK commission wallet** — the 7K aggregator requires a partner address for fee routing. Use a neutral address or zero-fee setup.
+
+4. **Bluefin WAL-PERP market symbol** — WAL is in `BLUEFIN_PERP_MARKETS` in settings. Confirm exact symbol string (`"WAL-PERP"` or `"WAL-USDC-PERP"`) against live Bluefin API.
 
 ---
 
