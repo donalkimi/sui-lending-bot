@@ -323,7 +323,6 @@ class RecursiveLendingCalculator(StrategyCalculatorBase):
                 # Take the minimum (most restrictive constraint)
                 max_size = min(max_size_2A, max_size_3B)
 
-            # Calculate net APR
             rates = {
                 'lend_total_apr_1A': lend_total_apr_1A,
                 'lend_total_apr_2B': lend_total_apr_2B,
@@ -331,17 +330,16 @@ class RecursiveLendingCalculator(StrategyCalculatorBase):
                 'borrow_total_apr_3B': borrow_total_apr_3B
             }
             fees = {
-                'borrow_fee_2A': borrow_fee_2A or 0.0,
-                'borrow_fee_3B': borrow_fee_3B or 0.0
+                'borrow_fee_2A': borrow_fee_2A,
+                'borrow_fee_3B': borrow_fee_3B
             }
-            net_apr = self.calculate_net_apr(positions, rates, fees)
-
-            # TODO: Calculate fee-adjusted APRs for different time horizons
-            # For now, use net_apr as placeholder
-            apr5 = net_apr
-            apr30 = net_apr
-            apr90 = net_apr
-            days_to_breakeven = 0.0
+            fee_adjusted_aprs = self.calculate_fee_adjusted_aprs(positions, rates, fees)
+            apr_gross = fee_adjusted_aprs['apr_gross']
+            net_apr = fee_adjusted_aprs['apr_net']
+            apr5 = fee_adjusted_aprs['apr5']
+            apr30 = fee_adjusted_aprs['apr30']
+            apr90 = fee_adjusted_aprs['apr90']
+            days_to_breakeven = fee_adjusted_aprs['days_to_breakeven']
 
             _t2_a = positions['b_a'] / price_2A if price_2A > 0 else 0.0
 

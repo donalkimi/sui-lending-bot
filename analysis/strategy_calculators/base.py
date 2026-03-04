@@ -5,8 +5,11 @@ All strategy calculators must inherit from StrategyCalculatorBase and implement
 the abstract methods for position calculation, APR calculation, and rebalancing.
 """
 
+import logging
 from abc import ABC, abstractmethod
 from typing import Dict, Any
+
+logger = logging.getLogger(__name__)
 
 
 class StrategyCalculatorBase(ABC):
@@ -257,8 +260,14 @@ class StrategyCalculatorBase(ABC):
         # Extract position multipliers and fees
         b_a = positions['b_a']
         b_b = positions['b_b']
-        borrow_fee_2A = fees.get('borrow_fee_2A') or 0.0
-        borrow_fee_3B = fees.get('borrow_fee_3B') or 0.0
+        borrow_fee_2A = fees.get('borrow_fee_2A')
+        if borrow_fee_2A is None:
+            logger.warning("Missing borrow_fee_2A in fees dict - assuming 0.0")
+            borrow_fee_2A = 0.0
+        borrow_fee_3B = fees.get('borrow_fee_3B')
+        if borrow_fee_3B is None:
+            logger.warning("Missing borrow_fee_3B in fees dict - assuming 0.0")
+            borrow_fee_3B = 0.0
 
         # Calculate annualized fee cost (for 365-day net APR)
         total_fee_cost = b_a * borrow_fee_2A + b_b * borrow_fee_3B

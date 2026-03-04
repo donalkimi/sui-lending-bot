@@ -15,7 +15,6 @@ logger = logging.getLogger(__name__)
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import settings
 from config.stablecoins import STABLECOIN_SYMBOLS
-from analysis.position_calculator import PositionCalculator
 from analysis.strategy_calculators import get_calculator, get_all_strategy_types
 from analysis.strategy_calculators.base import StrategyCalculatorBase
 
@@ -94,10 +93,7 @@ class RateAnalyzer:
         # ALL_TOKENS = all tokens in the merged data
         self.ALL_TOKENS = all_tokens_in_df
 
-        # Initialize calculator (legacy - for backward compatibility)
-        self.calculator = PositionCalculator(self.liquidation_distance)
-
-        # NEW: Multi-strategy support - load calculators for each strategy type
+        # Multi-strategy support - load calculators for each strategy type
         # FAIL LOUD: Require explicit strategy_types parameter
         if strategy_types is None:
             raise ValueError(
