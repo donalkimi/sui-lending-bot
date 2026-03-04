@@ -155,6 +155,9 @@ def calculate_position_statistics(
     live_total_earnings = live_base_earnings + live_reward_earnings
     live_pnl = live_total_earnings - live_fees
 
+    # Basis PnL (perp strategies only — None for all others)
+    basis_pnl = service.calculate_basis_pnl_at_timestamp(live_position, timestamp)
+
     # 4. Sum rebalanced segments (from database)
     rebalanced_pnl = 0.0
     rebalanced_total_earnings = 0.0
@@ -170,7 +173,7 @@ def calculate_position_statistics(
             closing_ts_rebal = to_seconds(rebal['closing_timestamp'])
 
             # Use stored fees (accurate from rebalance time)
-            rebalanced_fees += rebal.get('realised_fees', 0.0) or 0.0
+            rebalanced_fees += rebal['realised_fees']
 
             # DON'T use stored realised_pnl - we'll recalculate it for consistency
             # rebalanced_pnl += rebal.get('realised_pnl', 0.0) or 0.0  # ← REMOVED
@@ -229,12 +232,14 @@ def calculate_position_statistics(
             rebalanced_total_earnings += segment_total_earnings
 
             # Calculate segment PnL: earnings - fees (ensures consistency)
-            segment_fees = rebal.get('realised_fees', 0.0) or 0.0
+            segment_fees = rebal['realised_fees']
             segment_pnl = segment_total_earnings - segment_fees
             rebalanced_pnl += segment_pnl  # ← RECALCULATED for consistency
 
     # 5. Calculate totals (Real + Unreal)
     total_pnl = live_pnl + rebalanced_pnl
+    if basis_pnl is not None:
+        total_pnl += basis_pnl
     total_earnings = live_total_earnings + rebalanced_total_earnings
     base_earnings = live_base_earnings + rebalanced_base_earnings
     reward_earnings = live_reward_earnings + rebalanced_reward_earnings
@@ -301,5 +306,6 @@ def calculate_position_statistics(
         'current_apr': current_apr,
         'live_pnl': live_pnl,
         'realized_pnl': rebalanced_pnl,  # Note: variable is called rebalanced_pnl in calculation
+        'basis_pnl': basis_pnl,          # None for non-perp strategies
         'calculation_timestamp': int(time.time())  # Unix seconds when calculated
     }

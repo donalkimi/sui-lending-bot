@@ -1,7 +1,7 @@
 import sqlite3
 import uuid
 import time
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Callable, Dict, List, Optional, Tuple, Union
 import pandas as pd
 from datetime import datetime
 import sys
@@ -26,6 +26,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils.time_helpers import to_datetime_str, to_seconds
 from analysis.position_calculator import PositionCalculator
 from analysis.strategy_calculators import get_calculator
+from config import settings
 
 
 class PositionService:
@@ -705,8 +706,8 @@ class PositionService:
         b_a = position['b_a']
         L_B = position['l_b']
         b_b = position['b_b']
-        entry_fee_2a = position.get('entry_token2_borrow_fee') or 0
-        entry_fee_3b = position.get('entry_token4_borrow_fee') or 0
+        entry_token2_borrow_fee = position.get('entry_token2_borrow_fee') or 0
+        entry_token4_borrow_fee = position.get('entry_token4_borrow_fee') or 0
 
         # Position legs
         token1 = position['token1']
@@ -730,52 +731,41 @@ class PositionService:
                 'periods_count': 0
             }
 
-        # Query all unique timestamps from rates_snapshot
+        # Query all rates for all 4 legs across the full timestamp range in one query
         start_str = to_datetime_str(start_timestamp)
         end_str = to_datetime_str(end_timestamp)
 
         ph = self._get_placeholder()
-        query_timestamps = f"""
-        SELECT DISTINCT timestamp
+        all_rates_query = f"""
+        SELECT timestamp, protocol, token, lend_base_apr, lend_reward_apr,
+               borrow_base_apr, borrow_reward_apr
         FROM rates_snapshot
         WHERE timestamp >= {ph} AND timestamp <= {ph}
           AND use_for_pnl = TRUE
+          AND ((protocol = {ph} AND token = {ph}) OR
+               (protocol = {ph} AND token = {ph}) OR
+               (protocol = {ph} AND token = {ph}) OR
+               (protocol = {ph} AND token = {ph}))
         ORDER BY timestamp ASC
         """
-        timestamps_df = pd.read_sql_query(query_timestamps, self.engine, params=(start_str, end_str))
+        params = (start_str, end_str,
+                  protocol_a, token1,
+                  protocol_a, token2,
+                  protocol_b, token2,
+                  protocol_b, token3)
+        all_rates_df = pd.read_sql_query(all_rates_query, self.engine, params=params)
 
-        if timestamps_df.empty:
+        if all_rates_df.empty:
             raise ValueError(f"No rate data found between {start_str} and {end_str}")
 
-        # For each timestamp, get rates for all 4 legs
-        rates_data = []
-        for ts_str in timestamps_df['timestamp']:
-            # Build query for all 4 legs (levered)
-            ph = self._get_placeholder()
-            leg_query = f"""
-            SELECT protocol, token, lend_base_apr, lend_reward_apr,
-                   borrow_base_apr, borrow_reward_apr
-            FROM rates_snapshot
-            WHERE timestamp = {ph}
-              AND use_for_pnl = TRUE
-              AND ((protocol = {ph} AND token = {ph}) OR
-                   (protocol = {ph} AND token = {ph}) OR
-                   (protocol = {ph} AND token = {ph}) OR
-                   (protocol = {ph} AND token = {ph}))
-            """
-            params = (ts_str,
-                     protocol_a, token1,
-                     protocol_a, token2,
-                     protocol_b, token2,
-                     protocol_b, token3)
-
-            leg_rates = pd.read_sql_query(leg_query, self.engine, params=params)
-
-            rates_data.append({
-                'timestamp': to_seconds(ts_str),
-                'timestamp_str': ts_str,
-                'rates': leg_rates
-            })
+        rates_data = [
+            {
+                'timestamp': to_seconds(ts),
+                'timestamp_str': ts,
+                'rates': all_rates_df[all_rates_df['timestamp'] == ts].copy()
+            }
+            for ts in sorted(all_rates_df['timestamp'].unique())
+        ]
 
         # Helper to get rate
         def get_rate(df, protocol, token, rate_type):
@@ -940,7 +930,15 @@ class PositionService:
         # Calculate FEES - One-Time Upfront Fees
         # For rebalance segments, fees are calculated separately based on token deltas
         if include_initial_fees:
-            fees = deployment * (b_a * entry_fee_2a + b_b * entry_fee_3b)
+            strategy_type = position.get('strategy_type', '')
+            borrow_fees = deployment * (b_a * entry_token2_borrow_fee + b_b * entry_token4_borrow_fee)
+            if strategy_type == 'perp_lending':
+                perp_trading_fees = deployment * b_b * 2.0 * settings.BLUEFIN_TAKER_FEE
+            elif strategy_type in ('perp_borrowing', 'perp_borrowing_recursive'):
+                perp_trading_fees = deployment * L_B * 2.0 * settings.BLUEFIN_TAKER_FEE
+            else:
+                perp_trading_fees = 0.0
+            fees = borrow_fees + perp_trading_fees
         else:
             fees = 0
 
@@ -1123,6 +1121,103 @@ class PositionService:
             reward_total += usd_value * reward_apr * period_years
 
         return base_total, reward_total
+
+    # ==================== Basis PnL ====================
+
+    def calculate_basis_pnl_at_timestamp(
+        self, position: pd.Series, timestamp: int
+    ) -> Optional[float]:
+        """Calculate basis PnL using prices from rates_snapshot at timestamp."""
+        strategy_type = position.get('strategy_type', '')
+        _perp = ('perp_lending', 'perp_borrowing', 'perp_borrowing_recursive')
+        if strategy_type not in _perp:
+            return None
+
+        timestamp_str = to_datetime_str(timestamp)
+        ph = self._get_placeholder()
+        price_query = f"""
+            SELECT protocol, token, price_usd FROM rates_snapshot
+            WHERE timestamp = {ph}
+        """
+        price_df = pd.read_sql_query(price_query, self.engine, params=(timestamp_str,))
+        price_lookup = {
+            (row['token'], row['protocol']): float(row['price_usd'])
+            for _, row in price_df.iterrows()
+            if row['price_usd'] is not None
+        }
+
+        def _get_price(token, protocol):
+            return price_lookup[(token, protocol)]  # KeyError if missing — fail loudly
+
+        return PositionService.calculate_basis_pnl(position, _get_price)
+
+    @staticmethod
+    def calculate_basis_pnl(
+        position: pd.Series,
+        get_price_with_fallback: Callable
+    ) -> Optional[float]:
+        """
+        Calculate unrealised basis PnL for perp strategies.
+
+        Returns the dollar PnL from spot/perp price divergence since entry,
+        or None if live prices are unavailable.
+        """
+        strategy_type = position['strategy_type']
+
+        if strategy_type == 'perp_lending':
+            spot_tokens      = float(position['entry_token1_amount'])
+            perp_tokens      = float(position['entry_token4_amount'])
+            entry_spot_price = float(position['entry_token1_price'])
+            entry_perp_price = float(position['entry_token4_price'])
+            live_spot_price  = get_price_with_fallback(position['token1'], position['protocol_a'])
+            live_perp_price  = get_price_with_fallback(position['token4'], position['protocol_b'])
+            if live_spot_price is None or live_perp_price is None:
+                return None
+            return ((live_spot_price - entry_spot_price) * spot_tokens
+                   - (live_perp_price - entry_perp_price) * perp_tokens)
+        else:  # perp_borrowing / perp_borrowing_recursive
+            spot_tokens      = float(position['entry_token2_amount'])
+            perp_tokens      = float(position['entry_token3_amount'])
+            entry_spot_price = float(position['entry_token2_price'])
+            entry_perp_price = float(position['entry_token3_price'])
+            live_spot_price  = get_price_with_fallback(position['token2'], position['protocol_a'])
+            live_perp_price  = get_price_with_fallback(position['token3'], position['protocol_b'])
+            if live_spot_price is None or live_perp_price is None:
+                return None
+            return ((live_perp_price - entry_perp_price) * perp_tokens
+                   - (live_spot_price - entry_spot_price) * spot_tokens)
+
+    @staticmethod
+    def compute_basis_adjusted_current_apr(
+        position: pd.Series,
+        stats: Optional[Dict],
+        get_price_with_fallback: Callable
+    ) -> float:
+        """
+        Compute current_apr adjusted for unrealised basis PnL.
+
+        For perp strategies, basis_pnl captures the unrealised gain/loss from
+        spot/perp price divergence as a one-time dollar amount.
+        Adding basis_pnl / deployment_usd converts it to an APR adjustment
+        (no time-scaling — basis_pnl is a fraction of capital, same as basis_cost).
+
+        Non-perp: returns current_apr unchanged.
+        """
+        current_apr = float(stats['current_apr']) if stats else 0.0
+        strategy_type = position['strategy_type']
+
+        if strategy_type not in ('perp_lending', 'perp_borrowing', 'perp_borrowing_recursive'):
+            return current_apr
+
+        deployment_usd = float(position['deployment_usd'])
+        if deployment_usd <= 0:
+            return current_apr
+
+        basis_pnl = PositionService.calculate_basis_pnl(position, get_price_with_fallback)
+        if basis_pnl is None:
+            return current_apr
+
+        return current_apr + basis_pnl / deployment_usd
 
     # ==================== Rebalance Management ====================
 

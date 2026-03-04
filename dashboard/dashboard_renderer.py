@@ -775,15 +775,15 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
         _pb = strategy.get('protocol_b')
 
         _rate_map = {
-            (_t1, _pa): {'lend_apr': _safe_float(strategy.get('token1_rate', 0.0)), 'borrow_apr': 0.0},
-            (_t2, _pa): {'lend_apr': 0.0, 'borrow_apr': _safe_float(strategy.get('token2_rate', 0.0))},
-            (_t2, _pb): {'lend_apr': _safe_float(strategy.get('token3_rate', 0.0)), 'borrow_apr': 0.0},
-            (_t4, _pb): {'lend_apr': 0.0, 'borrow_apr': _safe_float(strategy.get('token4_rate', 0.0))},
+            (_t1, _pa): {'lend_apr': _safe_float(strategy['token1_rate']), 'borrow_apr': None},
+            (_t2, _pa): {'lend_apr': None, 'borrow_apr': _safe_float(strategy['token2_rate'])},
+            (_t3, _pb): {'lend_apr': _safe_float(strategy['token3_rate']), 'borrow_apr': None},
+            (_t4, _pb): {'lend_apr': None, 'borrow_apr': _safe_float(strategy['token4_rate'])},
         }
         _price_map = {
             (_t1, _pa): strategy['token1_price'],
             (_t2, _pa): strategy.get('token2_price'),
-            (_t2, _pb): strategy.get('token3_price'),
+            (_t3, _pb): strategy.get('token3_price'),
             (_t4, _pb): strategy.get('token4_price'),
         }
         _fee_map = {
@@ -802,7 +802,7 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
 
         # Build get_basis callback: returns current basis data from strategy dict
         _strategy_type = strategy.get('strategy_type', '')
-        def _get_basis(token3_contract, token3):
+        def _get_basis(perp_proxy):
             if _strategy_type == 'perp_lending':
                 bid = strategy.get('basis_bid')
                 ask = strategy.get('basis_ask')

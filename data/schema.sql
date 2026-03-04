@@ -611,6 +611,7 @@ CREATE TABLE IF NOT EXISTS position_statistics (
     -- Segment Breakdown
     live_pnl DECIMAL(20, 10),                     -- PnL from current live segment
     realized_pnl DECIMAL(20, 10),                 -- PnL from all closed rebalance segments
+    basis_pnl DECIMAL(20, 10),                    -- Spot/perp price divergence PnL; NULL for non-perp
 
     -- Metadata
     calculation_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,  -- When this was calculated
