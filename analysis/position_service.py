@@ -1154,36 +1154,45 @@ class PositionService:
     @staticmethod
     def calculate_basis_pnl(
         position: pd.Series,
-        get_price_with_fallback: Callable
+        get_basis: Callable
     ) -> Optional[float]:
         """
         Calculate unrealised basis PnL for perp strategies.
 
         Returns the dollar PnL from spot/perp price divergence since entry,
         or None if live prices are unavailable.
+
+        Uses exit-side bid/ask prices from spot_perp_basis (via get_basis) to
+        match the directional pricing used at entry.
         """
         strategy_type = position['strategy_type']
 
         if strategy_type == 'perp_lending':
+            bd = get_basis(position['token1_contract'])
+            if bd is None:
+                return None
+            live_spot_price = bd.get('spot_bid')   # exit: sell spot at bid
+            live_perp_price = bd.get('perp_ask')   # exit: cover short at ask
+            if live_spot_price is None or live_perp_price is None:
+                return None
             spot_tokens      = float(position['entry_token1_amount'])
             perp_tokens      = float(position['entry_token4_amount'])
             entry_spot_price = float(position['entry_token1_price'])
             entry_perp_price = float(position['entry_token4_price'])
-            live_spot_price  = get_price_with_fallback(position['token1'], position['protocol_a'])
-            live_perp_price  = get_price_with_fallback(position['token4'], position['protocol_b'])
-            if live_spot_price is None or live_perp_price is None:
-                return None
             return ((live_spot_price - entry_spot_price) * spot_tokens
                    - (live_perp_price - entry_perp_price) * perp_tokens)
         else:  # perp_borrowing / perp_borrowing_recursive
+            bd = get_basis(position['token2_contract'])
+            if bd is None:
+                return None
+            live_spot_price = bd.get('spot_ask')   # exit: buy spot to return at ask
+            live_perp_price = bd.get('perp_bid')   # exit: close long at bid
+            if live_spot_price is None or live_perp_price is None:
+                return None
             spot_tokens      = float(position['entry_token2_amount'])
             perp_tokens      = float(position['entry_token3_amount'])
             entry_spot_price = float(position['entry_token2_price'])
             entry_perp_price = float(position['entry_token3_price'])
-            live_spot_price  = get_price_with_fallback(position['token2'], position['protocol_a'])
-            live_perp_price  = get_price_with_fallback(position['token3'], position['protocol_b'])
-            if live_spot_price is None or live_perp_price is None:
-                return None
             return ((live_perp_price - entry_perp_price) * perp_tokens
                    - (live_spot_price - entry_spot_price) * spot_tokens)
 
@@ -1191,7 +1200,7 @@ class PositionService:
     def compute_basis_adjusted_current_apr(
         position: pd.Series,
         stats: Optional[Dict],
-        get_price_with_fallback: Callable
+        get_basis: Callable
     ) -> float:
         """
         Compute current_apr adjusted for unrealised basis PnL.
@@ -1213,7 +1222,7 @@ class PositionService:
         if deployment_usd <= 0:
             return current_apr
 
-        basis_pnl = PositionService.calculate_basis_pnl(position, get_price_with_fallback)
+        basis_pnl = PositionService.calculate_basis_pnl(position, get_basis)
         if basis_pnl is None:
             return current_apr
 
