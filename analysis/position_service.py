@@ -1664,10 +1664,10 @@ class PositionService:
         """
         params = (
             timestamp_str,
-            position['protocol_a'], position['token1_contract'],
-            position['protocol_a'], position['token2_contract'],
-            position['protocol_b'], position['token2_contract'],
-            position['protocol_b'], position['token3_contract']
+            position['protocol_a'], position['token1_contract'],   # token1 = L_A
+            position['protocol_a'], position['token2_contract'],   # token2 = B_A
+            position['protocol_b'], position['token3_contract'],   # token3 = L_B
+            position['protocol_b'], position['token4_contract']    # token4 = B_B
         )
 
         rates_df = pd.read_sql_query(query, self.engine, params=params)
@@ -1699,8 +1699,8 @@ class PositionService:
 
         leg_1a = get_leg_data(position['protocol_a'], position['token1_contract'])
         leg_2a = get_leg_data(position['protocol_a'], position['token2_contract'])
-        leg_2b = get_leg_data(position['protocol_b'], position['token2_contract'])
-        leg_3b = get_leg_data(position['protocol_b'], position['token3_contract'])
+        leg_2b = get_leg_data(position['protocol_b'], position['token3_contract'])   # token3 = L_B
+        leg_3b = get_leg_data(position['protocol_b'], position['token4_contract'])   # token4 = B_B
 
         return {
             'token1_rate': leg_1a['lend_rate'],

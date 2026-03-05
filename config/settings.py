@@ -188,6 +188,8 @@ DEFAULT_STABLECOIN_PREFERENCES = {
     'AUSD': 0.90,      # 10% APR penalty
     'FDUSD': 0.90,     # 10% APR penalty
     'suiUSDT': 0.90,   # 10% APR penalty
+    'suiUSDe': 0.90,   # 10% APR penalty
+    'USDsui': 0.90,   # 10% APR penalty
 }
 
 # Default allocation constraints for portfolio construction

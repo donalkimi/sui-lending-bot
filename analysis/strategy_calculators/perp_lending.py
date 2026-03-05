@@ -368,13 +368,106 @@ class PerpLendingCalculator(StrategyCalculatorBase):
             # Note: Price PnL calculated separately via calculate_price_pnl()
         }
 
-    def calculate_rebalance_amounts(
-        self,
-        position: Dict,
-        current_prices: Dict[str, float],
-        target_liquidation_distance: float,
-        **kwargs
-    ) -> Dict:
-        """Calculate rebalance needed to restore target liquidation distance."""
-        # To be implemented when rebalancing is needed
-        pass
+    def calculate_rebalance_amounts(self, position: Dict, live_rates: Dict, live_prices: Dict) -> Dict:
+        """
+        Calculate whether rebalancing is needed and the actions to restore target liq distance.
+
+        Trigger: short perp liq distance has shrunk by >= REBALANCE_THRESHOLD from entry.
+        Action:  reduce spot lending + cover part of short perp, sell tokens, deposit USDC
+                 into Bluefin collateral to restore liq_dist = d.
+        """
+        from config.settings import REBALANCE_THRESHOLD
+
+        # Map to universal token names (token4 = B_B = short perp at Bluefin)
+        price_token1 = live_prices.get('price_1a')   # spot token (token1 = L_A)
+        price_token4 = live_prices.get('price_3b')   # perp price (token4 = B_B)
+
+        d = float(position['entry_liquidation_distance'])
+        entry_token4_price  = position['entry_token4_price']
+        entry_token1_amount = float(position['entry_token1_amount'])
+        deployment_usd      = float(position['deployment_usd'])
+
+        # Baseline: at entry, liq dist = d (by design)
+        baseline_liq_dist = d
+
+        if not entry_token4_price or float(entry_token4_price) <= 0:
+            return {
+                'requires_rebalance': False,
+                'actions': [],
+                'reason': 'Cannot check: entry_token4_price (perp entry price) is missing'
+            }
+        entry_token4_price = float(entry_token4_price)
+
+        if not price_token1 or price_token1 <= 0:
+            return {
+                'requires_rebalance': False,
+                'actions': [],
+                'reason': 'Cannot check: no live token1 (spot) price available'
+            }
+
+        if not price_token4 or price_token4 <= 0:
+            return {
+                'requires_rebalance': False,
+                'actions': [],
+                'reason': 'Cannot check: no live token4 (perp) price available'
+            }
+
+        # Short perp liq price is fixed at entry: rises by d from entry perp price
+        liq_price_token4 = entry_token4_price * (1 + d)
+        live_liq_dist = (liq_price_token4 - price_token4) / price_token4
+
+        delta = abs(baseline_liq_dist) - abs(live_liq_dist)
+        requires_rebalance = delta >= REBALANCE_THRESHOLD
+
+        reason = (
+            f'Short perp liq dist: baseline {baseline_liq_dist:.1%}, '
+            f'live {live_liq_dist:.1%}, delta {delta:.1%} '
+            f'(threshold {REBALANCE_THRESHOLD:.1%})'
+        )
+
+        actions = []
+        if requires_rebalance:
+            # To restore liq_dist = d at current price:
+            #   new_token1_amount = deployment_usd / (price_token1 × (1 + d))
+            #   Δ_tokens = entry_token1_amount − new_token1_amount  (tokens to withdraw + cover)
+            #   Δ_usdc   = Δ_tokens × price_token1                  (USDC to deposit into Bluefin)
+            new_token1_amount = deployment_usd / (price_token1 * (1 + d))
+            delta_tokens = entry_token1_amount - new_token1_amount
+            delta_usdc   = delta_tokens * price_token1
+            actions = [
+                {
+                    'protocol': position['protocol_a'],
+                    'action': 'withdraw_lending',
+                    'token': position['token1'],
+                    'amount': delta_tokens,
+                    'description': f'Withdraw {delta_tokens:.4f} {position["token1"]} from {position["protocol_a"]} lending'
+                },
+                {
+                    'protocol': position['protocol_b'],
+                    'action': 'close_short_perp',
+                    'token': position['token4'],
+                    'amount': delta_tokens,
+                    'description': f'Cover {delta_tokens:.4f} notional of {position["token4"]} short perp'
+                },
+                {
+                    'protocol': 'AMM',
+                    'action': 'sell_spot',
+                    'token': position['token1'],
+                    'amount': delta_tokens,
+                    'receive_usdc': delta_usdc,
+                    'description': f'Sell {delta_tokens:.4f} {position["token1"]} → {delta_usdc:.2f} USDC'
+                },
+                {
+                    'protocol': position['protocol_b'],
+                    'action': 'deposit_collateral',
+                    'token': 'USDC',
+                    'amount': delta_usdc,
+                    'description': f'Deposit {delta_usdc:.2f} USDC into Bluefin as perp margin'
+                },
+            ]
+
+        return {
+            'requires_rebalance': requires_rebalance,
+            'actions': actions,
+            'reason': reason
+        }

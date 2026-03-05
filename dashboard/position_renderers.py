@@ -390,13 +390,21 @@ def render_positions_batch(
     basis_lookup: Dict = {}
     try:
         basis_query = f"""
-        SELECT spot_contract, basis_bid, basis_ask
+        SELECT spot_contract, basis_bid, basis_ask,
+               perp_bid, perp_ask, spot_bid, spot_ask
         FROM spot_perp_basis
         WHERE timestamp = {ph}
         """
         basis_df = pd.read_sql_query(basis_query, engine, params=(timestamp_str,))
         basis_lookup = {
-            row['spot_contract']: {'basis_bid': row['basis_bid'], 'basis_ask': row['basis_ask']}
+            row['spot_contract']: {
+                'basis_bid': row['basis_bid'],
+                'basis_ask': row['basis_ask'],
+                'perp_bid':  row['perp_bid'],
+                'perp_ask':  row['perp_ask'],
+                'spot_bid':  row['spot_bid'],
+                'spot_ask':  row['spot_ask'],
+            }
             for _, row in basis_df.iterrows()
         }
     except Exception as _e:
@@ -1641,7 +1649,8 @@ class RecursiveLendingRenderer(StrategyRendererBase):
         borrow_price_entry: float = None,
         borrow_weight_value: float = None,
         liquidation_threshold: float = None,
-        borrow_weight: float = 1.0
+        borrow_weight: float = 1.0,
+        live_price_override: float = None
     ) -> Dict:
         """Build table row for a lending leg (16-column structure)."""
 
@@ -1688,7 +1697,7 @@ class RecursiveLendingRenderer(StrategyRendererBase):
             # LIVE SEGMENT PATH: Use positions table + current rates
             # segment_data already contains position entry values (from build_live_segment_data)
             live_rate = get_rate(token, protocol, 'lend_apr')
-            live_price = get_price_with_fallback(token, protocol)
+            live_price = live_price_override if live_price_override is not None else get_price_with_fallback(token, protocol)
 
             # Map leg_id to field names
             if leg_id == 'token1':
@@ -1872,7 +1881,8 @@ class RecursiveLendingRenderer(StrategyRendererBase):
         collateral_token: str = None,
         collateral_price_live: float = None,
         collateral_price_entry: float = None,
-        borrow_weight: float = 1.0
+        borrow_weight: float = 1.0,
+        live_price_override: float = None
     ) -> Dict:
         """Build table row for a borrowing leg (16-column structure) with liquidation calculations."""
 
@@ -1924,7 +1934,7 @@ class RecursiveLendingRenderer(StrategyRendererBase):
             # LIVE SEGMENT PATH: Use positions table + current rates
             # segment_data already contains position entry values (from build_live_segment_data)
             live_rate = get_rate(token, protocol, 'borrow_apr')
-            live_price = get_price_with_fallback(token, protocol)
+            live_price = live_price_override if live_price_override is not None else get_price_with_fallback(token, protocol)
             borrow_fee = get_borrow_fee(token, protocol)
 
             # Map leg_id to field names
@@ -2901,6 +2911,11 @@ class PerpLendingRenderer(StrategyRendererBase):
 
         detail_data = []
 
+        # Get basis data early — needed for live prices on both legs
+        basis_data = None
+        if get_basis is not None and is_live_segment:
+            basis_data = get_basis(position['token1_contract'])
+
         # ========== LEG 1: Protocol A - Spot Lend token1 ==========
         # No borrow on this lend leg for perp lending → no liquidation distance
         detail_data.append(RecursiveLendingRenderer._build_lend_leg_row(
@@ -2921,7 +2936,8 @@ class PerpLendingRenderer(StrategyRendererBase):
             borrow_price_entry=None,
             borrow_weight_value=None,
             liquidation_threshold=None,
-            borrow_weight=1.0
+            borrow_weight=1.0,
+            live_price_override=basis_data.get('spot_bid') if basis_data else None
         ))
 
         # ========== LEG 2: Protocol B - Short Perp token4 (B_B) ==========
@@ -2946,7 +2962,7 @@ class PerpLendingRenderer(StrategyRendererBase):
 
         if is_live_segment:
             live_rate_token4 = get_rate(position['token4'], position['protocol_b'], 'borrow_apr')
-            live_price_token4 = get_price_with_fallback(position['token4'], position['protocol_b'])
+            live_price_token4 = basis_data.get('perp_ask') if basis_data else get_price_with_fallback(position['token4'], position['protocol_b'])
             segment_entry_rate_token4 = segment_data.get('opening_token4_rate')
             segment_entry_token4_price = segment_data.get('opening_token4_price')
         else:
@@ -2981,11 +2997,9 @@ class PerpLendingRenderer(StrategyRendererBase):
         entry_basis_str = f"{entry_basis * 100:.3f}%" if safe_value(entry_basis) else "N/A"
 
         live_basis_str = "N/A"
-        if get_basis is not None and is_live_segment:
-            basis_data = get_basis(position['token1_contract'])
-            if basis_data is not None:
-                lb = basis_data.get('basis_ask')
-                live_basis_str = f"{lb * 100:.3f}%" if lb is not None else "N/A"
+        if basis_data is not None:
+            lb = basis_data.get('basis_ask')
+            live_basis_str = f"{lb * 100:.3f}%" if lb is not None else "N/A"
 
         if is_live_segment:
             perp_row = {
@@ -3283,12 +3297,17 @@ class PerpBorrowingRenderer(StrategyRendererBase):
 
         is_live_segment = segment_data['is_live_segment']
 
+        # Get basis data early — needed for live prices on spot and perp legs
+        basis_data = None
+        if get_basis is not None and is_live_segment:
+            basis_data = get_basis(position['token2_contract'])
+
         # Get live prices for leg 1A/2A (needed for borrow leg liq calculation)
         if segment_type == 'historical' and segment_data:
             token2_price_live = float(segment_data.get('closing_token2_price')) if segment_data.get('closing_token2_price') is not None else None
             token1_price_live = float(segment_data.get('closing_token1_price')) if segment_data.get('closing_token1_price') is not None else None
         else:
-            token2_price_live = get_price_with_fallback(position['token2'], position['protocol_a'])
+            token2_price_live = basis_data.get('spot_ask') if basis_data else get_price_with_fallback(position['token2'], position['protocol_a'])
             token1_price_live = get_price_with_fallback(position['token1'], position['protocol_a'])
 
         detail_data = []
@@ -3335,7 +3354,8 @@ class PerpBorrowingRenderer(StrategyRendererBase):
             collateral_token=position['token1'],
             collateral_price_live=token1_price_live,
             collateral_price_entry=position['entry_token1_price'],
-            borrow_weight=position.get('entry_token2_borrow_weight', 1.0)
+            borrow_weight=position.get('entry_token2_borrow_weight', 1.0),
+            live_price_override=basis_data.get('spot_ask') if basis_data else None
         ))
 
         # ========== LEG 3: Protocol B - Long Perp (token3) ==========
@@ -3361,7 +3381,7 @@ class PerpBorrowingRenderer(StrategyRendererBase):
 
         if is_live_segment:
             live_rate_token3 = get_rate(position['token3'], position['protocol_b'], 'lend_apr')
-            live_price_token3 = get_price_with_fallback(position['token3'], position['protocol_b'])
+            live_price_token3 = basis_data.get('perp_bid') if basis_data else get_price_with_fallback(position['token3'], position['protocol_b'])
             segment_entry_rate_token3 = segment_data.get('opening_token3_rate')
             segment_entry_token3_price = segment_data.get('opening_token3_price')
         else:
@@ -3396,11 +3416,9 @@ class PerpBorrowingRenderer(StrategyRendererBase):
         entry_basis_str = f"{entry_basis * 100:.3f}%" if safe_value(entry_basis) else "N/A"
 
         live_basis_str = "N/A"
-        if get_basis is not None and is_live_segment:
-            basis_data = get_basis(position['token2_contract'])
-            if basis_data is not None:
-                lb = basis_data.get('basis_bid')
-                live_basis_str = f"{lb * 100:.3f}%" if lb is not None else "N/A"
+        if basis_data is not None:
+            lb = basis_data.get('basis_bid')
+            live_basis_str = f"{lb * 100:.3f}%" if lb is not None else "N/A"
 
         if is_live_segment:
             perp_row = {

@@ -74,6 +74,7 @@ fetchMetadata();
             input=script,
             capture_output=True,
             text=True,
+            encoding='utf-8',
             timeout=10,
             cwd=str(project_root / "data" / "suilend")  # Run in suilend directory for node_modules
         )
