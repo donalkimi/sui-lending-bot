@@ -1127,7 +1127,7 @@ class PositionService:
     def calculate_basis_pnl_at_timestamp(
         self, position: pd.Series, timestamp: int
     ) -> Optional[float]:
-        """Calculate basis PnL using prices from rates_snapshot at timestamp."""
+        """Calculate basis PnL using bid/ask prices from spot_perp_basis at timestamp."""
         strategy_type = position.get('strategy_type', '')
         _perp = ('perp_lending', 'perp_borrowing', 'perp_borrowing_recursive')
         if strategy_type not in _perp:
@@ -1135,21 +1135,26 @@ class PositionService:
 
         timestamp_str = to_datetime_str(timestamp)
         ph = self._get_placeholder()
-        price_query = f"""
-            SELECT protocol, token, price_usd FROM rates_snapshot
+        basis_query = f"""
+            SELECT spot_contract, perp_bid, perp_ask, spot_bid, spot_ask
+            FROM spot_perp_basis
             WHERE timestamp = {ph}
         """
-        price_df = pd.read_sql_query(price_query, self.engine, params=(timestamp_str,))
-        price_lookup = {
-            (row['token'], row['protocol']): float(row['price_usd'])
-            for _, row in price_df.iterrows()
-            if row['price_usd'] is not None
+        basis_df = pd.read_sql_query(basis_query, self.engine, params=(timestamp_str,))
+        basis_lookup = {
+            row['spot_contract']: {
+                'perp_bid': row['perp_bid'],
+                'perp_ask': row['perp_ask'],
+                'spot_bid': row['spot_bid'],
+                'spot_ask': row['spot_ask'],
+            }
+            for _, row in basis_df.iterrows()
         }
 
-        def _get_price(token, protocol):
-            return price_lookup[(token, protocol)]  # KeyError if missing — fail loudly
+        def _get_basis(spot_contract):
+            return basis_lookup.get(spot_contract)
 
-        return PositionService.calculate_basis_pnl(position, _get_price)
+        return PositionService.calculate_basis_pnl(position, _get_basis)
 
     @staticmethod
     def calculate_basis_pnl(
