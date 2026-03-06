@@ -1391,10 +1391,10 @@ class PositionService:
         self,
         position: pd.Series,
         live_timestamp: int,
-        rebalanced_token1_amount: float = None,
-        rebalanced_token2_amount: float = None,
-        rebalanced_token3_amount: float = None,
-        rebalanced_token4_amount: float = None,
+        exit_token1_amount: float = None,
+        exit_token2_amount: float = None,
+        exit_token3_amount: float = None,
+        exit_token4_amount: float = None,
     ) -> Dict:
         """
         Capture current position state before rebalancing.
