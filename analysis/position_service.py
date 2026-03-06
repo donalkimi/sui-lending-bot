@@ -837,7 +837,7 @@ class PositionService:
                 'borrow_3b': {'base': None, 'reward': None}
             }
 
-            for i, period_data in enumerate(rates_data_input):
+            for period_data in rates_data_input:
                 rates_df = period_data['rates']
                 forward_filled = {}
 
@@ -1204,31 +1204,32 @@ class PositionService:
     @staticmethod
     def compute_basis_adjusted_current_apr(
         position: pd.Series,
-        stats: Optional[Dict],
-        get_basis: Callable
+        stats: Dict,
     ) -> float:
         """
         Compute current_apr adjusted for unrealised basis PnL.
 
-        For perp strategies, basis_pnl captures the unrealised gain/loss from
-        spot/perp price divergence as a one-time dollar amount.
-        Adding basis_pnl / deployment_usd converts it to an APR adjustment
-        (no time-scaling — basis_pnl is a fraction of capital, same as basis_cost).
+        basis_pnl / deployment_usd converts the one-time basis gain/loss to an
+        APR adjustment (no time-scaling — same convention as basis_cost).
 
-        Non-perp: returns current_apr unchanged.
+        Non-perp or zero basis_pnl: returns current_apr unchanged.
         """
-        current_apr = float(stats['current_apr']) if stats else 0.0
-        strategy_type = position['strategy_type']
+        from config import settings
 
-        if strategy_type not in ('perp_lending', 'perp_borrowing', 'perp_borrowing_recursive'):
+        current_apr = float(stats['current_apr'])
+
+        strategy_type = position['strategy_type']
+        if strategy_type not in settings.PERP_STRATEGIES:
             return current_apr
 
         deployment_usd = float(position['deployment_usd'])
         if deployment_usd <= 0:
-            return current_apr
+            raise ValueError(
+                f"Position {position['position_id']}: deployment_usd is {deployment_usd} — must be > 0."
+            )
 
-        basis_pnl = PositionService.calculate_basis_pnl(position, get_basis)
-        if basis_pnl is None:
+        basis_pnl = stats['basis_pnl']
+        if basis_pnl is None or basis_pnl == 0:
             return current_apr
 
         return current_apr + basis_pnl / deployment_usd

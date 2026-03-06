@@ -20,6 +20,7 @@ from typing import Dict, List, Optional, Callable, Tuple
 from utils.time_helpers import to_seconds, to_datetime_str
 from dashboard.dashboard_utils import format_days_to_breakeven
 from analysis.position_service import PositionService
+from config import settings
 
 
 # ============================================================================
@@ -429,7 +430,7 @@ def render_positions_batch(
             rebalances = all_rebalances.get(position_id, [])
 
             # Determine strategy type (default to recursive_lending)
-            strategy_type = position.get('strategy_type', 'recursive_lending')
+            strategy_type = position.get('strategy_type')
 
             # Render using existing function
             render_position_expander(
@@ -847,13 +848,13 @@ def build_position_expander_title(
         entry_ts_str = to_datetime_str(to_seconds(position['entry_timestamp']))
         title_parts.append(entry_ts_str)
 
-    _perp_strategies = ('perp_lending', 'perp_borrowing', 'perp_borrowing_recursive')
+    _perp_strategies = settings.PERP_STRATEGIES
     if strategy_type in _perp_strategies and current_apr_incl_basis is not None:
         current_apr_str = f"Current {current_apr:.2f}% | Basis-adj {current_apr_incl_basis * 100:.2f}%"
     else:
         current_apr_str = f"Current {current_apr:.2f}%"
 
-    _perp_strategies = ('perp_lending', 'perp_borrowing', 'perp_borrowing_recursive')
+    _perp_strategies = settings.PERP_STRATEGIES
     title_parts.extend([
         token_flow,
         protocol_pair,
@@ -897,7 +898,7 @@ def render_strategy_summary_metrics(
     metrics_layout = list(renderer.get_metrics_layout())
 
     # Inject basis_pnl between reward_earnings and total_fees for perp strategies
-    _perp_strategies = ('perp_lending', 'perp_borrowing', 'perp_borrowing_recursive')
+    _perp_strategies = settings.PERP_STRATEGIES
     if strategy_type in _perp_strategies and basis_pnl is not None:
         if 'reward_earnings' in metrics_layout and 'total_fees' in metrics_layout:
             insert_at = metrics_layout.index('total_fees')
@@ -2214,7 +2215,7 @@ def render_position_expander(
         rate_lookup, oracle_prices
     )
 
-    _perp_strategies = ('perp_lending', 'perp_borrowing', 'perp_borrowing_recursive')
+    _perp_strategies = settings.PERP_STRATEGIES
 
     def get_basis(perp_proxy):
         if basis_lookup is None:
@@ -2222,9 +2223,7 @@ def render_position_expander(
         return basis_lookup.get(perp_proxy)
 
     # Compute basis-adjusted current APR and basis PnL (perp strategies only)
-    current_apr_incl_basis = PositionService.compute_basis_adjusted_current_apr(
-        position, stats, get_basis
-    )
+    current_apr_incl_basis = PositionService.compute_basis_adjusted_current_apr(position, stats)
     basis_pnl = stats.get('basis_pnl') if stats else None
     if basis_pnl is None and strategy_type in _perp_strategies:
         basis_pnl = PositionService.calculate_basis_pnl(position, get_basis)
@@ -2318,7 +2317,163 @@ def render_position_expander(
         elif context == 'portfolio2':
             render_position_actions_portfolio(
                 position, timestamp_seconds, service, portfolio_id)
-# Append these renderer classes to the end of dashboard/position_renderers.py
+def render_position_expander2(
+    position: pd.Series,
+    stats: Optional[Dict],
+    rebalances: Optional[List],
+    rates_dict: Dict,
+    prices_dict: Dict,
+    service,
+    timestamp_seconds: int,
+    context: str = 'standalone',
+    portfolio_id: Optional[str] = None,
+    expanded: bool = False,
+) -> None:
+    """
+    Render complete position expander (any strategy type).
+
+    Args:
+        position:          Position record (pd.Series from positions table)
+        stats:             Pre-calculated statistics — must have 'basis_pnl' key (0 for non-perp)
+        rebalances:        Rebalance history (list of dicts from position_rebalances)
+        rates_dict:        Rate lookup {token_contract: {lend_rate, borrow_rate, ...}}
+        prices_dict:       All prices for this position:
+                             'price_token1/2/3/4'           — oracle prices (all strategies)
+                             'spot_price_token1/2_bid/ask'  — AMM spot (perp only, else None)
+                             'perp_price_token3/4_bid/ask'  — perp orderbook (perp only, else None)
+        service:           PositionService instance
+        timestamp_seconds: Dashboard timestamp — NEVER datetime.now()
+        context:           'standalone' or 'portfolio'
+        portfolio_id:      Portfolio ID when context='portfolio'
+        expanded:          Expand by default
+    """
+    # Read strategy type from position — fail loudly if missing (Design Note #2)
+    try:
+        strategy_type = position['strategy_type']
+    except KeyError:
+        raise ValueError(
+            f"Position record is missing 'strategy_type'. "
+            f"position_id={position.get('position_id', 'unknown')}"
+        )
+    if not strategy_type or pd.isna(strategy_type):
+        raise ValueError(
+            f"Position {position['position_id']} has null/empty 'strategy_type'."
+        )
+
+    # Get strategy-specific renderer
+    try:
+        renderer = get_strategy_renderer(strategy_type)
+    except ValueError as e:
+        raise ValueError(f"Position {position['position_id']}: {str(e)}") from e
+
+    # Validate position has required fields for this strategy
+    if not renderer.validate_position_data(position):
+        raise ValueError(
+            f"Position {position['position_id']} has invalid data "
+            f"for strategy type '{strategy_type}'."
+        )
+
+    # basis_pnl from pre-calculated stats — must be present, never None
+    # position_statistics_calculator initialises to 0 for non-perp strategies
+    basis_pnl = stats['basis_pnl']
+    if basis_pnl is None:
+        raise ValueError(
+            f"Position {position['position_id']}: stats['basis_pnl'] is None. "
+            "Must be initialised to 0 in position_statistics_calculator."
+        )
+
+    current_apr_incl_basis = PositionService.compute_basis_adjusted_current_apr(position, stats)
+
+    # Build title
+    title = build_position_expander_title(
+        position, stats, strategy_type, include_timestamp=True,
+        current_apr_incl_basis=current_apr_incl_basis,
+        basis_pnl=basis_pnl
+    )
+
+    # ── REST COPIED FROM render_position_expander — update rate/price lookups as refactor proceeds ──
+
+    _perp_strategies = settings.PERP_STRATEGIES
+
+    # TODO: replace get_rate/get_borrow_fee/get_price_with_fallback with rates_dict/prices_dict
+    get_rate, get_borrow_fee, get_price_with_fallback = create_rate_helpers(
+        rates_dict, {k: v for k, v in prices_dict.items() if k.startswith('price_token')}
+    )
+
+    # TODO: replace get_basis with prices_dict lookup
+    def get_basis(perp_proxy):
+        return None  # placeholder — prices_dict has basis data directly
+
+    with st.expander(title, expanded=expanded):
+        st.caption(f"📊 Strategy: {renderer.get_strategy_name()}")
+        st.caption(f"🔑 Position ID: {position['position_id']}")
+
+        st.markdown("#### Total Position Summary (All Segments)")
+        render_strategy_summary_metrics(stats, position['deployment_usd'], strategy_type, basis_pnl=basis_pnl)
+
+        st.markdown("---")
+
+        if isinstance(rebalances, pd.DataFrame):
+            rebalances_list = rebalances.to_dict('records') if not rebalances.empty else []
+        elif isinstance(rebalances, list):
+            rebalances_list = rebalances
+        else:
+            rebalances_list = []
+
+        if not rebalances_list or len(rebalances_list) == 0:
+            try:
+                position_id = position['position_id']
+                rebalances_df = service.get_rebalance_history(position_id)
+                if not rebalances_df.empty:
+                    rebalances_list = rebalances_df.to_dict('records')
+                    print(f"ℹ️  [REBALANCES] Fetched {len(rebalances_list)} rebalance(s) for position {position_id[:8]}...")
+            except Exception as e:
+                print(f"⚠️  [REBALANCES] Failed to fetch rebalances for position {position.get('position_id', 'unknown')}: {e}")
+                import traceback
+                traceback.print_exc()
+
+        st.markdown("#### Live Segment (Current)")
+
+        _kwargs = {'get_basis': get_basis} if strategy_type in _perp_strategies else {}
+        renderer.render_detail_table(
+            position,
+            get_rate,
+            get_borrow_fee,
+            get_price_with_fallback,
+            rebalances_list,
+            **_kwargs
+        )
+
+        if rebalances_list and len(rebalances_list) > 0:
+            st.markdown("---")
+            st.markdown("#### Historical Segments")
+
+            for idx in reversed(range(len(rebalances_list))):
+                rebalance = rebalances_list[idx]
+                sequence_num = rebalance.get('sequence_number', idx + 1)
+
+                render_historical_segment(
+                    position=position,
+                    rebalance=rebalance,
+                    sequence_number=sequence_num,
+                    get_rate=get_rate,
+                    get_borrow_fee=get_borrow_fee,
+                    get_price_with_fallback=get_price_with_fallback,
+                    strategy_type=strategy_type
+                )
+
+        st.markdown("---")
+
+        render_position_history_chart(position, timestamp_seconds, context=context)
+
+        st.markdown("---")
+
+        if context == 'standalone':
+            render_position_actions_standalone(position, timestamp_seconds, service)
+        elif context == 'portfolio2':
+            render_position_actions_portfolio(
+                position, timestamp_seconds, service, portfolio_id)
+
 
 # ============================================================================
 # STABLECOIN LENDING RENDERER (1-LEG)

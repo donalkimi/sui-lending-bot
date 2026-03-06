@@ -167,8 +167,9 @@ def calculate_position_statistics(
     live_total_earnings = live_base_earnings + live_reward_earnings
     live_pnl = live_total_earnings - live_fees
 
-    # Basis PnL (perp strategies only — None for all others)
-    basis_pnl = service.calculate_basis_pnl_at_timestamp(live_position, timestamp)
+    # Basis PnL — always present; 0 for non-perp strategies (never None)
+    _raw_basis_pnl = service.calculate_basis_pnl_at_timestamp(live_position, timestamp)
+    basis_pnl = _raw_basis_pnl if _raw_basis_pnl is not None else 0.0
 
     # 4. Sum rebalanced segments (from database)
     rebalanced_pnl = 0.0
@@ -318,6 +319,6 @@ def calculate_position_statistics(
         'current_apr': current_apr,
         'live_pnl': live_pnl,
         'realized_pnl': rebalanced_pnl,  # Note: variable is called rebalanced_pnl in calculation
-        'basis_pnl': basis_pnl,          # None for non-perp strategies
+        'basis_pnl': basis_pnl,           # 0 for non-perp strategies (never None)
         'calculation_timestamp': int(time.time())  # Unix seconds when calculated
     }

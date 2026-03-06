@@ -54,6 +54,9 @@ if not SLACK_WEBHOOK_URL:
 # STRATEGY PARAMETERS (Can be overridden via environment variables)
 # ==============================================================================
 
+# Strategy type groupings
+PERP_STRATEGIES = ('perp_lending', 'perp_borrowing', 'perp_borrowing_recursive')
+
 DEFAULT_LIQUIDATION_DISTANCE = float(os.getenv('DEFAULT_LIQUIDATION_DISTANCE', '0.20'))
 MIN_NET_APR_THRESHOLD = float(os.getenv('MIN_NET_APR_THRESHOLD', '-1'))
 RATE_SPREAD_THRESHOLD = float(os.getenv('RATE_SPREAD_THRESHOLD', '0.00'))
