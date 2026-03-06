@@ -286,6 +286,72 @@ class PerpBorrowingCalculator(StrategyCalculatorBase):
             'token4_borrow_weight': None,
         }
 
-    def calculate_rebalance_amounts(self, position, current_prices,
-                                    target_liquidation_distance, **kwargs):
-        return {'requires_rebalance': False}
+    def calculate_rebalance_amounts(self, position: Dict, live_rates: Dict, live_prices: Dict) -> Dict:
+        l_a = float(position['l_a'])
+        b_a = float(position['b_a'])
+        D   = float(position['deployment_usd'])
+
+        p1 = live_prices['price_token1']   # oracle USDC price
+        p2 = live_prices['price_token2']   # oracle DEEP spot price
+        p3 = live_prices['price_token3']   # oracle DEEP perp price
+
+        if not p1 or not p2 or not p3:
+            return {
+                'requires_rebalance': True,
+                'actions': [],
+                'reason': 'Missing live prices — cannot compute rebalance amounts',
+                'exit_token1_amount': None, 'exit_token2_amount': None,
+                'exit_token3_amount': None, 'exit_token4_amount': None,
+            }
+
+        # Ideal amounts at current prices (weights × deployment / price)
+        rebalanced_token1_amount = D * l_a / p1
+        rebalanced_token2_amount = D * b_a / p2
+        rebalanced_token3_amount = rebalanced_token2_amount  # matched to token2 by design
+
+        # Deltas vs current segment opening amounts
+        delta1 = rebalanced_token1_amount - float(position['entry_token1_amount'])
+        delta2 = rebalanced_token2_amount - float(position['entry_token2_amount'])
+        delta3 = rebalanced_token3_amount - float(position['entry_token3_amount'])
+        # delta2 == delta3 by construction
+
+        # token1 (USDC): flag only if depeg > 25bps of deployment
+        DEPEG_THRESHOLD = 0.0025 * D
+        if delta1 > DEPEG_THRESHOLD:
+            action1 = f'{position["token1"]} fallen >25bps — lend more'
+        elif delta1 < -DEPEG_THRESHOLD:
+            action1 = f'{position["token1"]} risen >25bps — reduce lending'
+        else:
+            action1 = None
+
+        token1 = position['token1']
+        token2 = position['token2']
+        token3 = position['token3']
+
+        # token2: borrow+short/send token1, or receive token1/buy to cover+repay
+        if delta2 > 0:
+            action2 = f'Borrow {abs(delta2):.4f} {token2} + short / send {token1} to perp margin'
+        elif delta2 < 0:
+            action2 = f'Receive {token1} from perp / buy to cover {abs(delta2):.4f} {token2} + repay'
+        else:
+            action2 = None
+
+        # token3: receive token1/add to long, or send token1/close longs
+        if delta3 > 0:
+            action3 = f'Receive {token1} / add {abs(delta3):.4f} {token3} to long'
+        elif delta3 < 0:
+            action3 = f'Send {token1} / close {abs(delta3):.4f} {token3} long'
+        else:
+            action3 = None
+
+        actions = [a for a in [action1, action2, action3] if a is not None]
+
+        return {
+            'requires_rebalance': True,
+            'actions': actions,
+            'reason': f'token2 delta={delta2:.4f}, token3 delta={delta3:.4f}',
+            'exit_token1_amount': rebalanced_token1_amount,
+            'exit_token2_amount': rebalanced_token2_amount,
+            'exit_token3_amount': rebalanced_token3_amount,
+            'exit_token4_amount': None,
+        }

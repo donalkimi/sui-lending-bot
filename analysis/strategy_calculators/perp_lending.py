@@ -379,8 +379,8 @@ class PerpLendingCalculator(StrategyCalculatorBase):
         from config.settings import REBALANCE_THRESHOLD
 
         # Map to universal token names (token4 = B_B = short perp at Bluefin)
-        price_token1 = live_prices.get('price_1a')   # spot token (token1 = L_A)
-        price_token4 = live_prices.get('price_3b')   # perp price (token4 = B_B)
+        price_token1 = live_prices.get('price_token1')   # spot token (token1 = L_A)
+        price_token4 = live_prices.get('price_token4')   # perp price (token4 = B_B)
 
         d = float(position['entry_liquidation_distance'])
         entry_token4_price  = position['entry_token4_price']

@@ -322,7 +322,7 @@ FROM reward_token_prices;
 -- Stores paper trading position records (Phase 1) with support for real capital (Phase 2)
 CREATE TABLE IF NOT EXISTS positions (
     -- Position Identification
-    position_id TEXT PRIMARY KEY,
+    position_id TEXT NOT NULL,
     status TEXT NOT NULL CHECK (status IN ('active', 'closed', 'liquidated')),
     strategy_type TEXT NOT NULL DEFAULT 'recursive_lending',
 
@@ -438,8 +438,7 @@ CREATE TABLE IF NOT EXISTS positions (
     token4 TEXT,
     token4_contract TEXT,
 
-    CONSTRAINT positions_pkey PRIMARY KEY (position_id),
-    CONSTRAINT fk_positions_portfolio FOREIGN KEY (portfolio_id) REFERENCES portfolios(portfolio_id) ON DELETE SET NULL
+    CONSTRAINT positions_pkey PRIMARY KEY (position_id)
 );
 
 -- Indexes for positions
@@ -470,7 +469,7 @@ USING (true);
 -- Each row = one completed time segment. Zero rows = position never rebalanced.
 CREATE TABLE IF NOT EXISTS position_rebalances (
     -- Rebalance Identification
-    rebalance_id TEXT,
+    rebalance_id TEXT NOT NULL,
     position_id TEXT NOT NULL,
     sequence_number INTEGER NOT NULL,
 

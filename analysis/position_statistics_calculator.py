@@ -95,7 +95,10 @@ def calculate_position_statistics(
         last_rebalance = closed_rebalances.iloc[-1]
         segment_start_ts = to_seconds(last_rebalance['closing_timestamp'])
 
-        # Use exit token amounts from last closed rebalance as starting point for live segment
+        # Use exit token amounts + closing prices/rates from last rebalance as live segment state.
+        # closing_token*_price = the reference prices for the new segment start.
+        # closing_token*_rate  = the rates at the rebalance time (used by calculate_leg_earnings_split).
+        # entry_liquidation_distance is position-level and never changes.
         live_position = pd.Series({
             'deployment_usd': position['deployment_usd'],
             'l_a': position['l_a'], 'b_a': position['b_a'],
@@ -111,7 +114,16 @@ def calculate_position_statistics(
             'entry_token1_amount': last_rebalance['exit_token1_amount'],
             'entry_token2_amount': last_rebalance['exit_token2_amount'],
             'entry_token3_amount': last_rebalance['exit_token3_amount'],
-            'entry_token4_amount': last_rebalance['exit_token4_amount']
+            'entry_token4_amount': last_rebalance['exit_token4_amount'],
+            'entry_token1_price': last_rebalance['closing_token1_price'],
+            'entry_token2_price': last_rebalance['closing_token2_price'],
+            'entry_token3_price': last_rebalance['closing_token3_price'],
+            'entry_token4_price': last_rebalance['closing_token4_price'],
+            'entry_token1_rate': last_rebalance['closing_token1_rate'],
+            'entry_token2_rate': last_rebalance['closing_token2_rate'],
+            'entry_token3_rate': last_rebalance['closing_token3_rate'],
+            'entry_token4_rate': last_rebalance['closing_token4_rate'],
+            'entry_liquidation_distance': position['entry_liquidation_distance'],
         })
     else:
         # No closed rebalances — position is in its initial state.
