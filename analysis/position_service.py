@@ -1216,6 +1216,9 @@ class PositionService:
         """
         from config import settings
 
+        if stats is None:
+            return None  # no stats available yet — caller treats None as "N/A"
+
         current_apr = float(stats['current_apr'])
 
         strategy_type = position['strategy_type']
