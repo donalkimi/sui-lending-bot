@@ -128,16 +128,16 @@ def fetch_rates_from_database(
 
 
 def fetch_basis_history(
-    perp_proxy: str,
+    perp_contract: str,
     spot_contract: str,
     start_timestamp: Optional[int] = None,
     end_timestamp: Optional[int] = None,
 ) -> pd.DataFrame:
     """
-    Fetch basis_mid history from spot_perp_basis for a specific perp/spot pair.
+    Fetch basis_bid/ask/mid history from spot_perp_basis for a specific perp/spot pair.
 
     Args:
-        perp_proxy:       Perp proxy contract key (e.g. '0xBTC-USDC-PERP_bluefin')
+        perp_contract:    Perp contract key (e.g. '0xBTC-USDC-PERP_bluefin'); matches perp_proxy column in DB
         spot_contract:    On-chain spot token contract address
         start_timestamp:  Start time (Unix seconds), inclusive
         end_timestamp:    End time (Unix seconds), inclusive
@@ -145,7 +145,9 @@ def fetch_basis_history(
     Returns:
         DataFrame with columns:
         - timestamp (Unix seconds, index)
-        - basis_mid (decimal, e.g. -0.0003 = -0.03%)
+        - basis_bid (decimal, e.g. -0.0003 = -0.03%)
+        - basis_ask (decimal)
+        - basis_mid (decimal)
         Empty DataFrame if no data is available.
     """
     engine = get_db_engine()
@@ -153,7 +155,7 @@ def fetch_basis_history(
 
     placeholder = '%s' if settings.USE_CLOUD_DB else '?'
 
-    params: list = [perp_proxy, spot_contract]
+    params: list = [perp_contract, spot_contract]
     time_clause = ""
     if start_timestamp is not None:
         time_clause += f" AND timestamp >= {placeholder}"
@@ -163,7 +165,7 @@ def fetch_basis_history(
         params.append(to_datetime_str(end_timestamp))
 
     query = f"""
-        SELECT timestamp, basis_mid
+        SELECT timestamp, basis_bid, basis_ask, basis_mid
         FROM spot_perp_basis
         WHERE perp_proxy = {placeholder}
           AND spot_contract = {placeholder}
@@ -174,10 +176,10 @@ def fetch_basis_history(
     try:
         df = pd.read_sql(query, engine, params=tuple(params))
         if df.empty:
-            return pd.DataFrame(columns=['timestamp', 'basis_mid']).set_index('timestamp')
+            return pd.DataFrame(columns=['timestamp', 'basis_bid', 'basis_ask', 'basis_mid']).set_index('timestamp')
         df['timestamp'] = df['timestamp'].apply(to_seconds)
         df = df.set_index('timestamp')
         return df
     except Exception as e:
         logger.warning(f"Failed to fetch basis history: {e}")
-        return pd.DataFrame(columns=['timestamp', 'basis_mid']).set_index('timestamp')
+        return pd.DataFrame(columns=['timestamp', 'basis_bid', 'basis_ask', 'basis_mid']).set_index('timestamp')

@@ -8,6 +8,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from analysis.strategy_history.strategy_history import get_strategy_history
+from config import settings
 from config.stablecoins import STABLECOIN_SYMBOLS
 
 
@@ -214,6 +215,8 @@ def _render_rate_table(history_df: pd.DataFrame, strategy: dict) -> None:
             record['APR 5d'] = _fmt(row.get('apr5'))
             record['APR 30d'] = _fmt(row.get('apr30'))
             record['APR 90d'] = _fmt(row.get('apr90'))
+            record['Basis Bid'] = _fmt(row.get('basis_bid'))
+            record['Basis Ask'] = _fmt(row.get('basis_ask'))
             record['Mid Basis'] = _fmt(row.get('basis_mid'))
 
         elif is_perp_borrowing:
@@ -226,6 +229,8 @@ def _render_rate_table(history_df: pd.DataFrame, strategy: dict) -> None:
             record['APR 5d'] = _fmt(row.get('apr5'))
             record['APR 30d'] = _fmt(row.get('apr30'))
             record['APR 90d'] = _fmt(row.get('apr90'))
+            record['Basis Bid'] = _fmt(row.get('basis_bid'))
+            record['Basis Ask'] = _fmt(row.get('basis_ask'))
             record['Mid Basis'] = _fmt(row.get('basis_mid'))
 
         else:
@@ -300,6 +305,65 @@ def _render_apr_chart(history_df: pd.DataFrame) -> None:
     )
 
     st.plotly_chart(fig, width="stretch")   # Design Note #6: width= not use_container_width=
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Basis chart (perp strategies only)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _render_basis_chart(history_df: pd.DataFrame) -> None:
+    """
+    Line chart of basis_bid, basis_ask, and basis_mid for perp strategies.
+    Each series toggled via checkboxes (all default True).
+    Y-axis values in % (Design Note #7 — conversion at display layer only).
+    """
+    col1, col2, col3 = st.columns(3)
+    show_bid = col1.checkbox("Basis Bid", value=True, key="analysis_show_basis_bid")
+    show_ask = col2.checkbox("Basis Ask", value=True, key="analysis_show_basis_ask")
+    show_mid = col3.checkbox("Mid Basis", value=True, key="analysis_show_basis_mid")
+
+    # Convert Unix-second index to display strings (Design Note #5: conversion at display boundary)
+    ts_display = [datetime.fromtimestamp(int(ts)).strftime('%Y-%m-%d %H:%M')
+                  for ts in history_df.index]
+
+    fig = go.Figure()
+
+    if show_bid and 'basis_bid' in history_df and history_df['basis_bid'].notna().any():
+        fig.add_trace(go.Scatter(
+            x=ts_display,
+            y=(history_df['basis_bid'] * 100).round(4),
+            name='Basis Bid',
+            line=dict(color='#4fc3f7', width=1.5),
+            hovertemplate='%{x}<br>Basis Bid: %{y:.3f}%<extra></extra>',
+        ))
+
+    if show_ask and 'basis_ask' in history_df and history_df['basis_ask'].notna().any():
+        fig.add_trace(go.Scatter(
+            x=ts_display,
+            y=(history_df['basis_ask'] * 100).round(4),
+            name='Basis Ask',
+            line=dict(color='#ff9800', width=1.5),
+            hovertemplate='%{x}<br>Basis Ask: %{y:.3f}%<extra></extra>',
+        ))
+
+    if show_mid and 'basis_mid' in history_df and history_df['basis_mid'].notna().any():
+        fig.add_trace(go.Scatter(
+            x=ts_display,
+            y=(history_df['basis_mid'] * 100).round(4),
+            name='Mid Basis',
+            line=dict(color='#e91e63', width=2, dash='dash'),
+            hovertemplate='%{x}<br>Mid Basis: %{y:.3f}%<extra></extra>',
+        ))
+
+    fig.update_layout(
+        yaxis_title='Basis (%)',
+        hovermode='x unified',
+        height=400,
+        legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1),
+        margin=dict(l=40, r=20, t=40, b=40),
+    )
+
+    st.plotly_chart(fig, width="stretch")   # Design Note #6
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -397,3 +461,9 @@ def render_analysis_tab(all_results: pd.DataFrame, timestamp_seconds: int) -> No
     st.markdown("---")
     st.markdown("#### APR Chart")
     _render_apr_chart(history_df)
+
+    # ── Basis chart (perp strategies only) ────────────────────────────────
+    if strategy_dict.get('strategy_type') in settings.PERP_STRATEGIES:
+        st.markdown("---")
+        st.markdown("#### Basis Chart")
+        _render_basis_chart(history_df)

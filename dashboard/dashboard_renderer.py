@@ -629,6 +629,8 @@ def _build_preview_position(strategy: dict, deployment_usd: float) -> dict:
         'entry_token3_collateral_ratio': _safe_float(strategy.get('token3_collateral_ratio', 0.0)),
         'entry_token2_borrow_weight': _safe_float(strategy.get('token2_borrow_weight', 1.0)),
         'entry_token4_borrow_weight': _safe_float(strategy.get('token4_borrow_weight', 1.0)),
+        'entry_token2_borrow_fee': _safe_float(strategy.get('token2_borrow_fee', 0.0)),
+        'entry_token4_borrow_fee': _safe_float(strategy.get('token4_borrow_fee', 0.0)),
         # Token amounts computed from deployment
         'entry_token1_amount': ta_1a,
         'entry_token2_amount': ta_2a,

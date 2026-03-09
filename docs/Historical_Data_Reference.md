@@ -28,16 +28,21 @@ analysis/
 │   ├── base.py                   # StrategyCalculatorBase
 │   ├── stablecoin_lending.py     # 1-leg calculator
 │   ├── noloop_cross_protocol.py  # 3-leg calculator
-│   └── recursive_lending.py      # 4-leg calculator
+│   ├── recursive_lending.py      # 4-leg calculator
+│   ├── perp_lending.py           # 2-leg perp calculator
+│   ├── perp_borrowing.py         # 3-leg perp calculator
+│   └── perp_borrowing_recursive.py # 3-leg recursive perp calculator
 │
-└── strategy_history/              # NEW - Historical data fetching
+└── strategy_history/              # Historical data fetching
     ├── __init__.py               # Registry: get_handler()
     ├── base.py                   # HistoryHandlerBase (abstract)
     ├── data_fetcher.py           # Database query utilities
     ├── strategy_history.py       # Orchestration functions
     ├── stablecoin_lending.py     # 1-leg history handler
     ├── noloop_cross_protocol.py  # 3-leg history handler
-    └── recursive_lending.py      # 4-leg history handler
+    ├── recursive_lending.py      # 4-leg history handler
+    ├── perp_lending.py           # 2-leg perp history handler
+    └── perp_borrowing.py         # 3-leg perp history handler (shared by perp_borrowing_recursive)
 ```
 
 **Parallel Structure**: Each strategy type has TWO classes:
@@ -154,7 +159,9 @@ Three concrete implementations, one for each strategy type:
 
 **Location**: [`analysis/strategy_history/data_fetcher.py`](../analysis/strategy_history/data_fetcher.py)
 
-**Function**: `fetch_rates_from_database(token_protocol_pairs, start_timestamp, end_timestamp)`
+Two functions:
+
+#### `fetch_rates_from_database(token_protocol_pairs, start_timestamp, end_timestamp)`
 
 **Purpose**: Query the `rates_snapshot` table for specified token/protocol pairs within a time range.
 
@@ -165,6 +172,8 @@ Three concrete implementations, one for each strategy type:
 - `borrow_total_apr`, `borrow_base_apr`, `borrow_reward_apr`
 - `price_usd`
 - `collateral_ratio`, `liquidation_threshold`, `borrow_fee`
+- `avg8hr_lend_total_apr`, `avg8hr_borrow_total_apr` (Bluefin perp rows only)
+- `avg24hr_lend_total_apr`, `avg24hr_borrow_total_apr` (Bluefin perp rows only)
 
 **Key Features**:
 - ✅ Parameterized SQL queries (prevents injection)
@@ -172,6 +181,27 @@ Three concrete implementations, one for each strategy type:
 - ✅ Filters to `use_for_pnl = TRUE` (hourly snapshots only)
 - ✅ Always fetches collateral_ratio AND liquidation_threshold together (Design Principle #10)
 - ✅ Includes APR breakdown (base + reward components)
+
+#### `fetch_basis_history(perp_contract, spot_contract, start_timestamp, end_timestamp)`
+
+**Purpose**: Query the `spot_perp_basis` table for a specific (perp contract, spot contract) pair over a time range. Called automatically for perp strategies in `get_strategy_history()`.
+
+**Parameters**:
+- `perp_contract`: Perp proxy key (e.g. `'0xBTC-USDC-PERP_bluefin'`) — matches `perp_proxy` column in DB
+- `spot_contract`: On-chain spot token contract address
+
+**Perp strategy mapping**:
+| Strategy type | `spot_contract` | `perp_contract` |
+|---|---|---|
+| `perp_lending` | `token1_contract` (spot token being lent) | `token4_contract` (perp short) |
+| `perp_borrowing*` | `token2_contract` (volatile token borrowed & sold) | `token3_contract` (perp long) |
+
+**Returns**: DataFrame indexed by timestamp with columns:
+- `basis_bid` (decimal) — `(perp_bid - spot_ask) / perp_bid` — exit-side basis
+- `basis_ask` (decimal) — `(perp_ask - spot_bid) / perp_ask` — entry-side basis
+- `basis_mid` (decimal) — `(basis_bid + basis_ask) / 2` — mid-market estimate
+
+Timestamps are joined **exactly** (left join on Unix-second index) to the APR timeseries — no fuzzy matching.
 
 ---
 
@@ -191,21 +221,34 @@ handler = get_handler(strategy_type)          # Registry lookup
     ↓
 token_pairs = handler.get_required_tokens()   # Handler knows which tokens
     ↓
-raw_df = fetch_rates_from_database()          # Query database
+raw_df = fetch_rates_from_database()          # Query rates_snapshot
     ↓
 For each timestamp:
     market_data = handler.build_market_data_dict()  # Handler transforms rows
     calculator = get_calculator(strategy_type)      # Get calculator
     result = calculator.analyze_strategy()          # Calculator computes APR
     ↓
-Return pd.DataFrame[timestamp, net_apr, gross_apr, strategy_type]
+apr_df = pd.DataFrame[timestamp, net_apr, net_avg8hr_apr, net_avg24hr_apr,
+                       gross_apr, apr5, apr30, apr90, token2_price,
+                       lend_total_apr_1A, borrow_total_apr_2A,
+                       perp_rate_3B, avg8hr_perp_rate_3B, avg24hr_perp_rate_3B]
+    ↓
+If strategy_type in settings.PERP_STRATEGIES:
+    basis_df = fetch_basis_history(perp_contract, spot_contract, ...)
+    apr_df LEFT JOIN basis_df ON timestamp  →  adds basis_bid, basis_ask, basis_mid
+Else:
+    basis_bid = basis_ask = basis_mid = None
+    ↓
+Return apr_df
 ```
 
-**Returns**: DataFrame with:
-- `timestamp` (Unix seconds) - index
-- `net_apr` (decimal, e.g., 0.05 = 5%)
-- `gross_apr` (decimal, if available)
+**Returns**: DataFrame indexed by `timestamp` (Unix seconds) with:
+- `net_apr`, `net_avg8hr_apr`, `net_avg24hr_apr` (decimals)
+- `gross_apr`, `apr5`, `apr30`, `apr90` (decimals)
 - `strategy_type` (str)
+- `token2_price` (USD float, if token2 exists)
+- Per-leg raw rates: `lend_total_apr_1A`, `borrow_total_apr_2A`, `perp_rate_3B`, etc.
+- `basis_bid`, `basis_ask`, `basis_mid` (decimals, perp strategies only; `None` for spot strategies)
 
 ---
 
@@ -349,26 +392,20 @@ register_handler(SimpleBorrowHistoryHandler)
 
 ## Features
 
-### Current Capabilities (Phase 1 & 2)
+### Current Capabilities (All Phases Complete)
 
 - ✅ **Registry-based architecture** - Extensible without modifying existing code
-- ✅ **Three strategy types** - Stablecoin (1-leg), NoLoop (3-leg), Recursive (4-leg)
+- ✅ **Five strategy types** - Stablecoin (1-leg), NoLoop (3-leg), Recursive (4-leg), Perp Lending (2-leg), Perp Borrowing (3-leg, shared handler for `perp_borrowing` and `perp_borrowing_recursive`)
 - ✅ **Historical APR timeseries** - Query any time range from database
 - ✅ **APR breakdown** - Includes base and reward APR components
-- ✅ **Graceful error handling** - Skips incomplete timestamps, logs errors
-- ✅ **DESIGN_NOTES.md compliant** - Follows all 16 design principles
+- ✅ **Rolling average APRs** - 8hr and 24hr net APR overlays for perp strategies
+- ✅ **Basis data for perp strategies** - `basis_bid`, `basis_ask`, `basis_mid` joined from `spot_perp_basis`
+- ✅ **Basis chart** - Separate interactive Plotly chart for perp basis (Analysis tab only)
+- ✅ **Graceful error handling** - Skips incomplete timestamps, fails loudly on missing keys (Design Notes #13, #16)
+- ✅ **DESIGN_NOTES.md compliant** - Follows all 18 design principles
 - ✅ **Single source of truth** - Uses existing calculators for APR computation
 - ✅ **Parameterized queries** - SQL injection protection
 - ✅ **Timestamp conversion** - Seamless Unix ↔ datetime string conversion
-
-### Planned Capabilities (Phase 3)
-
-- ⏳ **Interactive charts** - Plotly visualizations for APR over time
-- ⏳ **Dashboard integration** - Chart buttons on All Strategies and Positions tabs
-- ⏳ **Multi-strategy comparison** - Side-by-side APR comparison charts
-- ⏳ **Statistical summaries** - Min/max/avg/quantile tables
-- ⏳ **APR volatility analysis** - Measure rate stability over time
-- ⏳ **Reward APR tracking** - Separate base vs reward charts
 
 ---
 
@@ -689,3 +726,12 @@ Position charts include token2 price for correlation analysis:
 - ✅ Time range selector (7d, 30d, 90d, all)
 - ✅ On-demand chart generation (button-triggered, no caching)
 - ✅ Full DESIGN_NOTES.md compliance (width="stretch" not use_container_width)
+
+### Phase 4 — Perp Strategy Basis (Complete, March 2026)
+- ✅ Added `perp_lending.py` and `perp_borrowing.py` history handlers
+- ✅ Fixed `perp_proxy` key bug: `perp_lending` now correctly uses `token4_contract` (not `token3_contract`) as the perp contract key
+- ✅ Renamed `perp_proxy` → `perp_contract` in `fetch_basis_history()` parameter (DB column `perp_proxy` unchanged)
+- ✅ `fetch_basis_history()` now returns `basis_bid`, `basis_ask`, and `basis_mid` (was `basis_mid` only)
+- ✅ Analysis tab Historical Rates table shows Basis Bid, Basis Ask, Mid Basis columns for perp strategies
+- ✅ Analysis tab renders a separate Basis Chart below the APR chart for perp strategies (3 toggleable series)
+- ✅ Replaced hardcoded `perp_types` set with `settings.PERP_STRATEGIES` throughout

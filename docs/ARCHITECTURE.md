@@ -1156,9 +1156,13 @@ analysis/strategy_calculators/     analysis/strategy_history/
 ├── base.py                         ├── base.py
 ├── stablecoin_lending.py           ├── stablecoin_lending.py
 ├── noloop_cross_protocol.py        ├── noloop_cross_protocol.py
-└── recursive_lending.py            └── recursive_lending.py
+├── recursive_lending.py            ├── recursive_lending.py
+├── perp_lending.py                 ├── perp_lending.py
+├── perp_borrowing.py               ├── perp_borrowing.py  (perp_borrowing + perp_borrowing_recursive)
+└── perp_borrowing_recursive.py     ├── data_fetcher.py
+                                    └── strategy_history.py
 
-Calculators: Compute APR          Handlers: Fetch & Transform Data
+Calculators: Compute APR          Handlers: Fetch & Transform Data + Basis Join
 ```
 
 ### Data Flow: Strategy History Retrieval
@@ -1202,11 +1206,20 @@ User: get_strategy_history(strategy_dict, start_ts, end_ts)
 │         'timestamp': ts,
 │         'net_apr': result['net_apr'],
 │         'gross_apr': result['gross_apr'],
-│         'token2_price': token2_price
+│         'token2_price': token2_price,
+│         'lend_total_apr_1A', 'borrow_total_apr_2A', 'perp_rate_3B', ...
 │       })
 │
-└─ 6. Return DataFrame
-   return pd.DataFrame(results).set_index('timestamp')
+├─ 6. For perp strategies: Join Basis Data
+│  if strategy_type in settings.PERP_STRATEGIES:
+│    perp_contract = token4_contract (perp_lending) | token3_contract (perp_borrowing*)
+│    spot_contract = token1_contract (perp_lending) | token2_contract (perp_borrowing*)
+│    basis_df = fetch_basis_history(perp_contract, spot_contract, start_ts, end_ts)
+│    apr_df LEFT JOIN basis_df ON timestamp  →  adds basis_bid, basis_ask, basis_mid
+│  Fails loudly (KeyError) if perp_contract/spot_contract keys missing (Design Notes #13, #16)
+│
+└─ 7. Return DataFrame
+   return apr_df  # includes basis_bid/ask/mid for perp strategies
 ```
 
 ### Handler Responsibilities
@@ -1240,6 +1253,12 @@ Charts are integrated into three tabs using on-demand generation:
 - Dual-axis chart: APR + token2 price
 - Time range: 7d, 30d, Since Position Open (defaults to Since Position Open)
 - Limited to position's lifetime (starts from `opening_timestamp`)
+
+**Analysis Tab** (`dashboard/analysis_tab.py`)
+- Dedicated strategy rate analysis tab with time range selector (7d, 30d, 90d, All)
+- Historical Rates table: per-timestamp breakdown of all leg rates + basis columns (perp strategies only)
+- APR Chart: Net APR (spot) + 8hr/24hr rolling average overlays with per-series checkboxes
+- Basis Chart (perp strategies only): Separate chart below APR chart showing `basis_bid`, `basis_ask`, `basis_mid` with per-series checkboxes; only rendered when `strategy_type in settings.PERP_STRATEGIES`
 
 ### Chart Generation (`chart_utils.py`)
 
@@ -1280,10 +1299,14 @@ create_history_chart(
 
 - `analysis/strategy_history/__init__.py` - Registry (`get_handler()`)
 - `analysis/strategy_history/base.py` - `HistoryHandlerBase` abstract class
-- `analysis/strategy_history/data_fetcher.py` - Database queries
+- `analysis/strategy_history/data_fetcher.py` - `fetch_rates_from_database()` + `fetch_basis_history()`
 - `analysis/strategy_history/strategy_history.py` - Orchestration (`get_strategy_history()`)
 - `analysis/strategy_history/chart_utils.py` - Chart generation
-- `analysis/strategy_history/{strategy}_lending.py` - Strategy-specific handlers (3 files)
+- `analysis/strategy_history/stablecoin_lending.py` - 1-leg handler
+- `analysis/strategy_history/noloop_cross_protocol.py` - 3-leg handler
+- `analysis/strategy_history/recursive_lending.py` - 4-leg handler
+- `analysis/strategy_history/perp_lending.py` - 2-leg perp handler (token1=spot lend, token4=perp short)
+- `analysis/strategy_history/perp_borrowing.py` - 3-leg perp handler (shared by `perp_borrowing` + `perp_borrowing_recursive`)
 
 **Reference**: See [`docs/Historical_Data_Reference.md`](Historical_Data_Reference.md) for complete API documentation.
 

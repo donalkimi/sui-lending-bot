@@ -7,6 +7,7 @@ import logging
 from analysis.strategy_history import get_handler
 from analysis.strategy_history.data_fetcher import fetch_rates_from_database, fetch_basis_history
 from analysis.strategy_calculators import get_calculator
+from config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -85,29 +86,44 @@ def get_strategy_history(
     # Step 7: Add strategy_type column
     apr_df['strategy_type'] = strategy_type
 
-    # Step 8: For perp strategies, left-join basis_mid from spot_perp_basis.
-    # spot_contract is token1_contract for perp_lending, token2_contract for perp_borrowing*.
-    perp_types = {'perp_lending', 'perp_borrowing', 'perp_borrowing_recursive'}
-    if strategy_type in perp_types:
-        perp_proxy    = strategy.get('token3_contract')
-        spot_contract = (strategy.get('token1_contract')
-                         if strategy_type == 'perp_lending'
-                         else strategy.get('token2_contract'))
+    # Step 8: For perp strategies, left-join basis_bid/ask/mid from spot_perp_basis.
+    # perp_lending:   perp_contract = token4_contract, spot_contract = token1_contract
+    # perp_borrowing*: perp_contract = token3_contract, spot_contract = token2_contract
+    if strategy_type in settings.PERP_STRATEGIES:
+        try:
+            perp_contract = (strategy['token4_contract']
+                             if strategy_type == 'perp_lending'
+                             else strategy['token3_contract'])
+            spot_contract = (strategy['token1_contract']
+                             if strategy_type == 'perp_lending'
+                             else strategy['token2_contract'])
 
-        if perp_proxy and spot_contract:
             basis_df = fetch_basis_history(
-                perp_proxy=perp_proxy,
+                perp_contract=perp_contract,
                 spot_contract=spot_contract,
                 start_timestamp=start_timestamp,
                 end_timestamp=end_timestamp,
             )
             if not basis_df.empty:
-                apr_df = apr_df.join(basis_df[['basis_mid']], how='left')
+                apr_df = apr_df.join(basis_df[['basis_bid', 'basis_ask', 'basis_mid']], how='left')
             else:
+                logger.warning(
+                    f"No basis data found for {strategy_type} "
+                    f"perp_contract={perp_contract} spot_contract={spot_contract}"
+                )
+                apr_df['basis_bid'] = None
+                apr_df['basis_ask'] = None
                 apr_df['basis_mid'] = None
-        else:
+
+        except KeyError as e:
+            logger.error(f"KeyError fetching basis for strategy_type={strategy_type}: {e}")
+            logger.error(f"    Available strategy keys: {list(strategy.keys())}")
+            apr_df['basis_bid'] = None
+            apr_df['basis_ask'] = None
             apr_df['basis_mid'] = None
     else:
+        apr_df['basis_bid'] = None
+        apr_df['basis_ask'] = None
         apr_df['basis_mid'] = None
 
     logger.info(f"Calculated APR for {len(apr_df)} timestamps")

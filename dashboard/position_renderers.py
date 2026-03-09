@@ -728,22 +728,21 @@ def build_segment_data_from_position(position: pd.Series) -> Dict:
 
 def build_segment_data_from_rebalance(rebalance: Dict) -> Dict:
     """
-    Build segment data from rebalance record.
+    Build segment data from a completed rebalance record (historical segments only).
 
-    This extracts the entry/opening_* fields from a rebalance record.
-    Use this for rendering ANY segment (historical or live) - the last rebalance
-    in the database is the current/live segment.
+    Every row in position_rebalances is a completed segment — closing_timestamp is
+    always set.  Use this only when rendering historical segments.
+    For the live segment, always use build_segment_data_from_position(position).
 
     Args:
         rebalance: Rebalance record (dict from position_rebalances table)
 
     Returns:
         Dict with opening_token_amount_*, opening_price_*, opening_*_rate,
-        and closing_price_* fields (for historical segments)
+        and closing_price_* fields.
     """
-    # A segment is still live if it has no closing_timestamp (initial deployment or open segment).
     ct = rebalance.get('closing_timestamp')
-    _is_live = ct is None or (isinstance(ct, float) and ct != ct)  # None or NaN
+    _is_live = ct is None or (isinstance(ct, float) and ct != ct)  # None or NaN — should always be False
 
     segment_data = {
         # REQUIRED: Explicit flag for segment type detection
@@ -1360,15 +1359,11 @@ class RecursiveLendingRenderer(StrategyRendererBase):
 
         deployment = position['deployment_usd']
 
-        # Build segment_data from last rebalance
-        # If position has rebalances, use the last one's entry values
-        # The LAST rebalance in the list is always the current/live segment
+        # Live segment: positions table is always current (rolled forward after each rebalance).
+        # Historical segment: rebalances[-1] is the specific completed segment being rendered.
         if not rebalances or len(rebalances) == 0:
-            # No rebalances yet - use position's entry data directly
             segment_data = build_segment_data_from_position(position)
         else:
-            # ALWAYS use last rebalance's ENTRY values (start of current segment)
-            # Last rebalance = current/live segment (has closing_timestamp=NULL)
             segment_data = build_segment_data_from_rebalance(rebalances[-1])
 
         detail_data = []
@@ -1883,7 +1878,8 @@ class RecursiveLendingRenderer(StrategyRendererBase):
         collateral_price_live: float = None,
         collateral_price_entry: float = None,
         borrow_weight: float = 1.0,
-        live_price_override: float = None
+        live_price_override: float = None,
+        entry_borrow_fee: Optional[float] = None
     ) -> Dict:
         """Build table row for a borrowing leg (16-column structure) with liquidation calculations."""
 
@@ -1929,14 +1925,15 @@ class RecursiveLendingRenderer(StrategyRendererBase):
                 # Use closing values for "exit" price/rate
                 live_rate = float(segment_data.get('closing_token4_rate')) if segment_data.get('closing_token4_rate') is not None else None
                 live_price = float(segment_data.get('closing_token4_price')) if segment_data.get('closing_token4_price') is not None else None
-            # Get borrow fee (always from current market - not stored in rebalance history)
-            borrow_fee = get_borrow_fee(token, protocol)
+            # Borrow fee: use caller-supplied entry fee if provided, otherwise fall back to live rate
+            borrow_fee = entry_borrow_fee if entry_borrow_fee is not None else get_borrow_fee(token, protocol)
         else:
             # LIVE SEGMENT PATH: Use positions table + current rates
             # segment_data already contains position entry values (from build_live_segment_data)
             live_rate = get_rate(token, protocol, 'borrow_apr')
             live_price = live_price_override if live_price_override is not None else get_price_with_fallback(token, protocol)
-            borrow_fee = get_borrow_fee(token, protocol)
+            # Borrow fee: use caller-supplied entry fee if provided, otherwise fall back to live rate
+            borrow_fee = entry_borrow_fee if entry_borrow_fee is not None else get_borrow_fee(token, protocol)
 
             # Map leg_id to field names
             if leg_id == 'token2':
@@ -2279,12 +2276,12 @@ def render_position_expander(
             get_rate,
             get_borrow_fee,
             get_price_with_fallback,
-            rebalances_list,
+            None,  # Live segment always built from positions table — never from rebalance records
             **_kwargs
         )
 
         # === HISTORICAL SEGMENTS ===
-        # Show all CLOSED segments (all rebalances EXCEPT the last one, which is the current/live segment)
+        # All rebalance records are completed segments (closing_timestamp always set).
         if rebalances_list and len(rebalances_list) > 0:
             st.markdown("---")
             st.markdown("#### Historical Segments")
@@ -2440,7 +2437,7 @@ def render_position_expander2(
             get_rate,
             get_borrow_fee,
             get_price_with_fallback,
-            rebalances_list,
+            None,  # Live segment always built from positions table — never from rebalance records
             **_kwargs
         )
 
@@ -2581,7 +2578,8 @@ class StablecoinLendingRenderer(StrategyRendererBase):
 
         deployment = position['deployment_usd']
 
-        # Build segment_data from last rebalance (if any)
+        # Live segment: positions table is always current (rolled forward after each rebalance).
+        # Historical segment: rebalances[-1] is the specific completed segment being rendered.
         if not rebalances or len(rebalances) == 0:
             segment_data = build_segment_data_from_position(position)
         else:
@@ -2752,7 +2750,8 @@ class NoLoopCrossProtocolRenderer(StrategyRendererBase):
 
         deployment = position['deployment_usd']
 
-        # Build segment_data from last rebalance
+        # Live segment: positions table is always current (rolled forward after each rebalance).
+        # Historical segment: rebalances[-1] is the specific completed segment being rendered.
         if not rebalances or len(rebalances) == 0:
             segment_data = build_segment_data_from_position(position)
         else:
@@ -3056,7 +3055,8 @@ class PerpLendingRenderer(StrategyRendererBase):
         """Render 2-leg detail table: Spot Lend (token1) + Short Perp (token4)."""
         deployment = position['deployment_usd']
 
-        # Build segment_data (same pattern as RecursiveLendingRenderer)
+        # Live segment: positions table is always current (rolled forward after each rebalance).
+        # Historical segment: rebalances[-1] is the specific completed segment being rendered.
         if not rebalances or len(rebalances) == 0:
             segment_data = build_segment_data_from_position(position)
         else:
@@ -3444,7 +3444,8 @@ class PerpBorrowingRenderer(StrategyRendererBase):
         """Render 3-leg detail table: Stablecoin Lend (token1) + Spot Borrow (token2) + Long Perp (token3)."""
         deployment = position['deployment_usd']
 
-        # Build segment_data (same pattern as RecursiveLendingRenderer)
+        # Live segment: positions table is always current (rolled forward after each rebalance).
+        # Historical segment: rebalances[-1] is the specific completed segment being rendered.
         if not rebalances or len(rebalances) == 0:
             segment_data = build_segment_data_from_position(position)
         else:
@@ -3510,7 +3511,8 @@ class PerpBorrowingRenderer(StrategyRendererBase):
             collateral_price_live=token1_price_live,
             collateral_price_entry=position['entry_token1_price'],
             borrow_weight=position.get('entry_token2_borrow_weight', 1.0),
-            live_price_override=basis_data.get('spot_ask') if basis_data else None
+            live_price_override=basis_data.get('spot_ask') if basis_data else None,
+            entry_borrow_fee=position['entry_token2_borrow_fee']
         ))
 
         # ========== LEG 3: Protocol B - Long Perp (token3) ==========
@@ -3546,7 +3548,9 @@ class PerpBorrowingRenderer(StrategyRendererBase):
             live_price_token3 = float(segment_data.get('closing_token3_price')) if segment_data.get('closing_token3_price') is not None else None
 
         token_amount_token3 = segment_data.get('opening_token3_amount')  # L_B slot = perp long amount
-        perp_fee = get_borrow_fee(position['token3'], position['protocol_b'])
+        # Bluefin trading fees are not in rates_snapshot — use the constant directly.
+        # Round-trip cost = entry + exit = 2 × taker fee.
+        perp_fee = 2.0 * settings.BLUEFIN_TAKER_FEE
 
         # Long perp liq: price must DROP by liq_dist to liquidate.
         # Liq price is fixed at entry: entry_price * (1 - liq_dist).
