@@ -7,9 +7,28 @@ the abstract methods for position calculation, APR calculation, and rebalancing.
 
 import logging
 from abc import ABC, abstractmethod
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
+
+# Minimum token delta below which a rebalance action is considered "No change"
+MIN_TOKEN_DELTA = 0.0001
+
+
+def _format_lend_action(delta: float, token: str, min_delta: float = MIN_TOKEN_DELTA) -> str:
+    """Format a lend-leg rebalance action string from a token delta."""
+    if abs(delta) < min_delta:
+        return 'No change'
+    n = abs(delta)
+    return f'Add {n:.4f} {token}' if delta > 0 else f'Withdraw {n:.4f} {token}'
+
+
+def _format_borrow_action(delta: float, token: str, min_delta: float = MIN_TOKEN_DELTA) -> str:
+    """Format a borrow-leg rebalance action string from a token delta."""
+    if abs(delta) < min_delta:
+        return 'No change'
+    n = abs(delta)
+    return f'Borrow {n:.4f} {token}' if delta > 0 else f'Repay {n:.4f} {token}'
 
 
 class StrategyCalculatorBase(ABC):
@@ -245,7 +264,7 @@ class StrategyCalculatorBase(ABC):
         Returns:
             Dict with:
                 - apr_gross: Earnings - borrowing costs (before fees)
-                - apr_net: Net APR (365-day, after fees)
+                - net_apr: Net APR (365-day, after fees)
                 - apr5: 5-day time-adjusted APR
                 - apr30: 30-day time-adjusted APR
                 - apr90: 90-day time-adjusted APR
@@ -285,7 +304,7 @@ class StrategyCalculatorBase(ABC):
 
         return {
             'apr_gross': gross_apr,
-            'apr_net': apr_net,
+            'net_apr': apr_net,
             'apr5': apr5,
             'apr30': apr30,
             'apr90': apr90,

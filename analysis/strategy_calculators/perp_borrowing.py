@@ -1,5 +1,5 @@
 from typing import Dict, Any
-from .base import StrategyCalculatorBase
+from .base import StrategyCalculatorBase, MIN_TOKEN_DELTA
 from config import settings
 
 
@@ -221,7 +221,7 @@ class PerpBorrowingCalculator(StrategyCalculatorBase):
 
             # APR
             'apr_gross': gross_apr,
-            'apr_net':   net_apr,
+            'net_apr':   net_apr,
             'stablecoin_lending_apr': l_a * lend_total_apr_1A,
             'token2_borrow_apr':      b_a * borrow_total_apr_2A,
             'funding_rate_apr':       l_b * lend_total_apr_3B,
@@ -276,9 +276,6 @@ class PerpBorrowingCalculator(StrategyCalculatorBase):
             'valid':         True,
             'strategy_type': self.get_strategy_type(),
 
-            # Backwards compat alias (create_position reads 'net_apr'; all other calculators use 'apr_net')
-            'net_apr': net_apr,
-
             # Fields not applicable to perp_borrowing — store as NULL in DB
             'token3_collateral_ratio': None,
             'token3_liquidation_threshold': None,
@@ -302,6 +299,8 @@ class PerpBorrowingCalculator(StrategyCalculatorBase):
                 'reason': 'Missing live prices — cannot compute rebalance amounts',
                 'exit_token1_amount': None, 'exit_token2_amount': None,
                 'exit_token3_amount': None, 'exit_token4_amount': None,
+                'action_token1': None, 'action_token2': None,
+                'action_token3': None, 'action_token4': None,
             }
 
         # Ideal amounts at current prices (weights × deployment / price)
@@ -346,6 +345,16 @@ class PerpBorrowingCalculator(StrategyCalculatorBase):
 
         actions = [a for a in [action1, action2, action3] if a is not None]
 
+        MIN = MIN_TOKEN_DELTA
+
+        # Per-leg action strings using agreed multi-step format
+        action2 = ('No change' if abs(delta2) < MIN
+                   else f'Borrow {abs(delta2):.4f} {token2} \u2192 Sell' if delta2 > 0
+                   else f'Buy {abs(delta2):.4f} {token2} \u2192 Repay borrow')
+        action3 = ('No change' if abs(delta3) < MIN
+                   else f'Transfer in USDC \u2192 Open long {abs(delta3):.4f} {token3}' if delta3 > 0
+                   else f'Close long {abs(delta3):.4f} {token3} \u2192 Transfer out USDC')
+
         return {
             'requires_rebalance': True,
             'actions': actions,
@@ -354,4 +363,8 @@ class PerpBorrowingCalculator(StrategyCalculatorBase):
             'exit_token2_amount': rebalanced_token2_amount,
             'exit_token3_amount': rebalanced_token3_amount,
             'exit_token4_amount': None,
+            'action_token1': 'No change',
+            'action_token2': action2,
+            'action_token3': action3,
+            'action_token4': None,
         }

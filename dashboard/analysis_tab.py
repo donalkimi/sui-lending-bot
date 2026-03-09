@@ -43,7 +43,7 @@ def _strategy_label(row: pd.Series) -> str:
     t4     = row.get('token4', '')
     pa     = row.get('protocol_a', '')
     pb     = row.get('protocol_b', '')
-    apr    = row.get('apr_net', 0)
+    apr    = row.get('net_apr', 0)
 
     if stype == 'perp_lending':
         tokens = f"{t1} ↔ {t4}"
@@ -135,7 +135,7 @@ def _render_strategy_summary(strategy: dict, timestamp_seconds: int) -> None:
         'Time':       to_datetime_str(timestamp_seconds),
         'Token Flow': token_flow,
         'Protocols':  f"{strategy.get('protocol_a', '')} ↔ {strategy.get('protocol_b', '')}",
-        'Net APR':    f"{_sf('apr_net') * 100:.2f}%",
+        'Net APR':    f"{_sf('net_apr') * 100:.2f}%",
         'APR 5d':     f"{_sf('apr5')    * 100:.2f}%",
         'APR 30d':    f"{_sf('apr30')   * 100:.2f}%",
         'Liq Dist':   f"{_sf('liquidation_distance') * 100:.2f}%",

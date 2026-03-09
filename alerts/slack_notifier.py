@@ -71,11 +71,9 @@ def format_strategy_summary_line(strategy: Dict, liq_dist: float) -> str:
     # Format max size
     max_size_str = format_max_size_millions(max_size)
 
-    # Get APR values — use NaN-safe fallback so that when a field exists but is NaN
-    # (e.g. recursive_lending rows have apr_net=NaN in a mixed-type DataFrame), we
-    # correctly fall through to the next candidate instead of propagating NaN.
-    net_apr_value = _first_valid_apr(strategy, 'apr_net', 'net_apr')
-    apr5_value    = _first_valid_apr(strategy, 'apr5', 'net_apr', 'apr_net')
+    # Get APR values — all calculators now use 'net_apr' as the standard key.
+    net_apr_value = _first_valid_apr(strategy, 'net_apr')
+    apr5_value    = _first_valid_apr(strategy, 'apr5', 'net_apr')
 
     # Determine emoji indicators based on positive/negative values
     net_apr_indicator = "🟢" if net_apr_value >= 0 else "🔴"
@@ -347,10 +345,7 @@ class SlackNotifier:
         try:
             print(f"[DEBUG] Starting strategy filtering...")
             
-            # Determine which APR column to sort by — all calculators except recursive_lending
-            # historically used 'apr_net'; recursive_lending used 'net_apr'. After the fix in
-            # recursive_lending both exist, but fall back gracefully if only one is present.
-            _apr_col = 'apr_net' if 'apr_net' in all_results.columns else 'net_apr'
+            _apr_col = 'net_apr'
             print(f"[DEBUG] Using APR sort column: {_apr_col}")
 
             # Filter Set 1: All strategies (top 3 by APR)

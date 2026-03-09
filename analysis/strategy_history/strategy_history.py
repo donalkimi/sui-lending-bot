@@ -180,7 +180,7 @@ def calculate_apr_timeseries(
             result = calculator.analyze_strategy(**market_data)
 
             # Extract APR values
-            net_apr = result.get('net_apr', result.get('apr_net'))
+            net_apr = result['net_apr']
 
             if net_apr is None:
                 logger.warning(f"No APR returned for timestamp {timestamp}")
@@ -202,14 +202,14 @@ def calculate_apr_timeseries(
             if avg8hr_key and spot_key and market_data.get(avg8hr_key) is not None:
                 try:
                     r8 = calculator.analyze_strategy(**{**market_data, spot_key: market_data[avg8hr_key]})
-                    net_avg8hr_apr = r8.get('net_apr', r8.get('apr_net'))
+                    net_avg8hr_apr = r8['net_apr']
                 except Exception:
                     pass
 
             if avg24hr_key and spot_key and market_data.get(avg24hr_key) is not None:
                 try:
                     r24 = calculator.analyze_strategy(**{**market_data, spot_key: market_data[avg24hr_key]})
-                    net_avg24hr_apr = r24.get('net_apr', r24.get('apr_net'))
+                    net_avg24hr_apr = r24['net_apr']
                 except Exception:
                     pass
 

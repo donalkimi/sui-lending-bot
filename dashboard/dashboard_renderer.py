@@ -137,7 +137,7 @@ def display_apr_table(strategy_row: Union[pd.Series, Dict[str, Any]], deployment
     token3 = strategy_row['token3']
 
     # Extract levered APR values
-    apr_net_levered = strategy_row['apr_net']
+    apr_net_levered = strategy_row['net_apr']
     apr90_levered = strategy_row['apr90']
     apr30_levered = strategy_row['apr30']
     apr5_levered = strategy_row['apr5']
@@ -414,7 +414,7 @@ def display_strategies_table(
             'Token Pair': token_pair,
             'Protocol A': row['protocol_a'],
             'Protocol B': row['protocol_b'],
-            'Net APR': row['apr_net'] * 100,  # Convert decimal to percentage
+            'Net APR': row['net_apr'] * 100,  # Convert decimal to percentage
             'APR 5d': row.get('apr5', 0) * 100,  # APR if exit after 5 days
             'APR 30d': row.get('apr30', 0) * 100,  # 30-day average
             'Basis (bps)': basis_spread * 10000 if basis_spread is not None else None,
@@ -513,7 +513,7 @@ def calculate_position_returns(strategy: Dict, deployment_usd: float) -> Dict:
     - All rates stored as decimals (DESIGN_NOTES.md #7)
     - Position sizes = multiplier × deployment_usd (DESIGN_NOTES.md #3)
     """
-    net_apr = strategy['apr_net']  # Decimal (0.1185 = 11.85%)
+    net_apr = strategy['net_apr']  # Decimal (0.1185 = 11.85%)
 
     # Position sizes (multiplier × deployment)
     # All strategies are 4-leg levered strategies
@@ -704,7 +704,7 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
             'Time': to_datetime_str(timestamp_seconds),
             'Token Flow': token_flow,
             'Protocols': protocol_pair,
-            'Net APR': f"{strategy['apr_net'] * 100:.2f}%",
+            'Net APR': f"{strategy['net_apr'] * 100:.2f}%",
             'APR 5d': f"{strategy['apr5'] * 100:.2f}%",
             'APR 30d': f"{strategy['apr30'] * 100:.2f}%",
             'Liq Dist': f"{strategy['liquidation_distance'] * 100:.2f}%",
@@ -812,7 +812,11 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
                 spread = strategy.get('basis_spread')
                 if bid is None and mid is None:
                     return None
-                return {'basis_bid': bid, 'basis_ask': ask, 'basis_mid': mid, 'basis_spread': spread}
+                return {
+                    'basis_bid': bid, 'basis_ask': ask, 'basis_mid': mid, 'basis_spread': spread,
+                    'perp_ask': strategy.get('token4_price'),  # short perp price (modal uses mid as proxy)
+                    'spot_bid': strategy.get('token1_price'),  # spot lend price
+                }
             elif _strategy_type in ('perp_borrowing', 'perp_borrowing_recursive'):
                 bid = strategy.get('basis_bid')
                 ask = strategy.get('basis_ask')
@@ -820,7 +824,11 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
                 spread = strategy.get('basis_spread')
                 if ask is None and mid is None:
                     return None
-                return {'basis_bid': bid, 'basis_ask': ask, 'basis_mid': mid, 'basis_spread': spread}
+                return {
+                    'basis_bid': bid, 'basis_ask': ask, 'basis_mid': mid, 'basis_spread': spread,
+                    'perp_bid': strategy.get('token3_price'),  # long perp price (modal uses mid as proxy)
+                    'spot_ask': strategy.get('token2_price'),  # spot borrow price
+                }
             return None
 
         _is_perp = _strategy_type in ('perp_lending', 'perp_borrowing', 'perp_borrowing_recursive')
@@ -2044,8 +2052,8 @@ def render_zero_liquidity_tab(zero_liquidity_results: pd.DataFrame, deployment_u
                 max_size_text = " | No Liquidity Data"
 
             token_flow = f"{row['token1']} → {row['token2']} → {row['token3']}"
-            net_apr_value = row['apr_net']
-            apr5_value = row.get('apr5', row['apr_net'])
+            net_apr_value = row['net_apr']
+            apr5_value = row.get('apr5', row['net_apr'])
 
             net_apr_indicator = "🟢" if net_apr_value >= 0 else "🔴"
             apr5_indicator = "🟢" if apr5_value >= 0 else "🔴"
@@ -4186,7 +4194,7 @@ def render_dashboard(data_loader: DataLoader, mode: str):
         ]
 
     # Sort filtered results
-    apr_col = 'apr_net'
+    apr_col = 'net_apr'
 
     if not filtered_results.empty:
         filtered_results = filtered_results.sort_values(by=apr_col, ascending=False)

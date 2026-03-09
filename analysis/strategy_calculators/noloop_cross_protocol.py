@@ -6,7 +6,7 @@ Lend token1 → Borrow token2 → Lend token2 (no loop back to token1).
 
 import logging
 from typing import Dict, Any
-from .base import StrategyCalculatorBase
+from .base import StrategyCalculatorBase, _format_lend_action, _format_borrow_action
 
 logger = logging.getLogger(__name__)
 
@@ -262,7 +262,7 @@ class NoLoopCrossProtocolCalculator(StrategyCalculatorBase):
 
         # Extract all APR values from single source of truth
         apr_gross = fee_adjusted_aprs['apr_gross']
-        apr_net = fee_adjusted_aprs['apr_net']
+        apr_net = fee_adjusted_aprs['net_apr']
         apr5 = fee_adjusted_aprs['apr5']
         apr30 = fee_adjusted_aprs['apr30']
         apr90 = fee_adjusted_aprs['apr90']
@@ -304,7 +304,7 @@ class NoLoopCrossProtocolCalculator(StrategyCalculatorBase):
             'b_b': positions['b_b'],
 
             # APR metrics
-            'apr_net': apr_net,
+            'net_apr': apr_net,
             'apr5': apr5,
             'apr30': apr30,
             'apr90': apr90,
@@ -367,14 +367,11 @@ class NoLoopCrossProtocolCalculator(StrategyCalculatorBase):
             live_prices: Current prices
 
         Returns:
-            Dict with rebalance structure (requires_rebalance, actions, etc.)
+            Dict with rebalance structure (requires_rebalance, actions, exit_token*_amount, action_token*)
 
         Raises:
             ValueError: If position data or prices are invalid
-
-        TODO: Full implementation pending - needs tolerance threshold logic
         """
-        # FAIL LOUD: Validate inputs
         if not position:
             raise ValueError("Position dict cannot be None or empty")
         if live_rates is None:
@@ -382,18 +379,52 @@ class NoLoopCrossProtocolCalculator(StrategyCalculatorBase):
         if live_prices is None:
             raise ValueError("live_prices cannot be None")
 
-        # TODO: Implement full rebalancing logic
-        # 1. Calculate target USD values: deployment × L_A, deployment × B_A, deployment × L_B
-        # 2. Calculate current USD values using live prices
-        # 3. Calculate drift percentage
-        # 4. Check if drift exceeds tolerance threshold (e.g., 5%)
-        # 5. If yes, calculate token amount deltas to restore targets
-        # 6. Check liquidation distance on leg 2A
+        D   = float(position['deployment_usd'])
+        l_a = float(position['l_a'])
+        b_a = float(position['b_a'])
+        l_b = float(position['l_b'])
 
-        # STUB: For now, always return no rebalancing needed
-        # This will be replaced with actual tolerance-check logic
+        p1 = live_prices.get('price_token1')  # stablecoin
+        p2 = live_prices.get('price_token2')  # volatile
+        p3 = live_prices.get('price_token3')  # volatile (= token2)
+
+        if not p2 or not p3:
+            return {
+                'requires_rebalance': True,
+                'actions': [],
+                'reason': 'Missing live volatile prices — cannot compute rebalance amounts',
+                'exit_token1_amount': None, 'exit_token2_amount': None,
+                'exit_token3_amount': None, 'exit_token4_amount': None,
+                'action_token1': None, 'action_token2': None,
+                'action_token3': None, 'action_token4': None,
+            }
+
+        exit_token1 = D * l_a / p1 if p1 else float(position['entry_token1_amount'])
+        exit_token2 = D * b_a / p2
+        exit_token3 = D * l_b / p3
+
+        delta1 = exit_token1 - float(position['entry_token1_amount'])
+        delta2 = exit_token2 - float(position['entry_token2_amount'])
+        delta3 = exit_token3 - float(position['entry_token3_amount'])
+
+        t1 = position.get('token1', 'token1')
+        t2 = position.get('token2', 'token2')
+        t3 = position.get('token3', 'token3')
+
+        action1 = _format_lend_action(delta1, t1)
+        action2 = _format_borrow_action(delta2, t2)
+        action3 = _format_lend_action(delta3, t3)
+
         return {
-            "requires_rebalance": False,
-            "actions": [],
-            "reason": "Position weights within acceptable tolerance (stub implementation)"
+            'requires_rebalance': True,
+            'actions': [a for a in [action2, action3] if a and a != 'No change'],
+            'reason': f'token2 delta={delta2:.4f}, token3 delta={delta3:.4f}',
+            'exit_token1_amount': exit_token1,
+            'exit_token2_amount': exit_token2,
+            'exit_token3_amount': exit_token3,
+            'exit_token4_amount': None,
+            'action_token1': action1,
+            'action_token2': action2,
+            'action_token3': action3,
+            'action_token4': None,
         }

@@ -145,7 +145,7 @@ class StablecoinLendingCalculator(StrategyCalculatorBase):
 
         # Extract all APR values from single source of truth
         apr_gross = fee_adjusted_aprs['apr_gross']
-        apr_net = fee_adjusted_aprs['apr_net']
+        apr_net = fee_adjusted_aprs['net_apr']
         apr5 = fee_adjusted_aprs['apr5']
         apr30 = fee_adjusted_aprs['apr30']
         apr90 = fee_adjusted_aprs['apr90']
@@ -176,7 +176,7 @@ class StablecoinLendingCalculator(StrategyCalculatorBase):
             'b_b': positions['b_b'],
 
             # APR metrics (all equal for stablecoin since no fees)
-            'apr_net': apr_net,
+            'net_apr': apr_net,
             'apr5': apr5,
             'apr30': apr30,
             'apr90': apr90,
@@ -243,5 +243,13 @@ class StablecoinLendingCalculator(StrategyCalculatorBase):
         return {
             "requires_rebalance": False,
             "actions": [],
-            "reason": "Single-leg strategy does not require rebalancing"
+            "reason": "Single-leg strategy does not require rebalancing",
+            "exit_token1_amount": float(position['entry_token1_amount']) if position.get('entry_token1_amount') else None,
+            "exit_token2_amount": None,
+            "exit_token3_amount": None,
+            "exit_token4_amount": None,
+            "action_token1": "No change",
+            "action_token2": None,
+            "action_token3": None,
+            "action_token4": None,
         }

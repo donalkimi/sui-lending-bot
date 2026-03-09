@@ -1358,6 +1358,10 @@ class PositionService:
             exit_token2_amount=rebalance_result['exit_token2_amount'],
             exit_token3_amount=rebalance_result['exit_token3_amount'],
             exit_token4_amount=rebalance_result['exit_token4_amount'],
+            action_token1=rebalance_result.get('action_token1'),
+            action_token2=rebalance_result.get('action_token2'),
+            action_token3=rebalance_result.get('action_token3'),
+            action_token4=rebalance_result.get('action_token4'),
         )
 
         # Create rebalance record
@@ -1399,6 +1403,10 @@ class PositionService:
         exit_token2_amount: float = None,
         exit_token3_amount: float = None,
         exit_token4_amount: float = None,
+        action_token1: Optional[str] = None,
+        action_token2: Optional[str] = None,
+        action_token3: Optional[str] = None,
+        action_token4: Optional[str] = None,
     ) -> Dict:
         """
         Capture current position state before rebalancing.
@@ -1573,10 +1581,12 @@ class PositionService:
         entry_action_token3 = "Initial deployment"
         entry_action_token4 = "Initial deployment"
 
-        exit_action_token1 = self._determine_rebalance_action('1a', entry_token1_amount, exit_token1_amount, 'Lend')
-        exit_action_token2 = self._determine_rebalance_action('2a', entry_token2_amount, exit_token2_amount, 'Borrow')
-        exit_action_token3 = self._determine_rebalance_action('2b', entry_token3_amount, exit_token3_amount, 'Lend')
-        exit_action_token4 = self._determine_rebalance_action('3b', entry_token4_amount, exit_token4_amount, 'Borrow')
+        # Use calculator-provided action strings when available (correct for all legs/strategies).
+        # Fall back to _determine_rebalance_action() only when not provided (e.g. close_position()).
+        exit_action_token1 = action_token1 if action_token1 is not None else self._determine_rebalance_action('1a', entry_token1_amount, exit_token1_amount, 'Lend')
+        exit_action_token2 = action_token2 if action_token2 is not None else self._determine_rebalance_action('2a', entry_token2_amount, exit_token2_amount, 'Borrow')
+        exit_action_token3 = action_token3 if action_token3 is not None else self._determine_rebalance_action('2b', entry_token3_amount, exit_token3_amount, 'Lend')
+        exit_action_token4 = action_token4 if action_token4 is not None else self._determine_rebalance_action('3b', entry_token4_amount, exit_token4_amount, 'Borrow')
 
         # 8. Calculate fees for rebalance segments
         # For first segment: pv_result already includes full initial fees
@@ -1983,7 +1993,7 @@ class PositionService:
             if closing_timestamp_str is not None:
                 cursor.execute(f"""
                     UPDATE positions
-                    SET accumulated_realised_pnl = {ph},
+                    SET accumulated_realised_pnl = {ph}, 
                         rebalance_count = {ph},
                         last_rebalance_timestamp = {ph},
                         entry_token1_rate = {ph},

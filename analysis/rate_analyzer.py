@@ -1233,7 +1233,7 @@ class RateAnalyzer:
             return pd.DataFrame()
 
         combined = pd.concat(all_strategies, ignore_index=True)
-        combined = combined.sort_values(by='apr_net', ascending=False)
+        combined = combined.sort_values(by='net_apr', ascending=False)
         print(f"[ANALYZER] Total strategies: {len(combined)}")
         return combined
     
@@ -1272,7 +1272,7 @@ class RateAnalyzer:
             strategy_type += " (with conversion)"
 
         conversion_str = f" -> {best['token1']}" if has_conversion else ""
-        print(f"[BEST STRATEGY] {best['protocol_a']}/{best['protocol_b']}: {best['token1']}/{best.get('token2')}/{best.get('token3')}/{best.get('token4')}{conversion_str} @ {best['apr_net'] * 100:.2f}% APR")
+        print(f"[BEST STRATEGY] {best['protocol_a']}/{best['protocol_b']}: {best['token1']}/{best.get('token2')}/{best.get('token3')}/{best.get('token4')}{conversion_str} @ {best['net_apr'] * 100:.2f}% APR")
         
         return best['protocol_a'], best['protocol_b'], all_results
 

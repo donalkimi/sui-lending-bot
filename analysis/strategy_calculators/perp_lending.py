@@ -1,5 +1,5 @@
 from typing import Dict, Optional
-from .base import StrategyCalculatorBase
+from .base import StrategyCalculatorBase, MIN_TOKEN_DELTA
 from config import settings
 
 class PerpLendingCalculator(StrategyCalculatorBase):
@@ -304,7 +304,7 @@ class PerpLendingCalculator(StrategyCalculatorBase):
             'b_b': positions['b_b'],
 
             # APR metrics
-            'apr_net': net_apr,
+            'net_apr': net_apr,
             'apr_gross': gross_apr,
             'spot_lending_apr': spot_lending_apr,
             'funding_rate_apr': funding_rate_apr,
@@ -351,9 +351,6 @@ class PerpLendingCalculator(StrategyCalculatorBase):
             'valid': True,
             'strategy_type': self.get_strategy_type(),
 
-            # Backwards compat alias (create_position reads 'net_apr'; all other calculators use 'apr_net')
-            'net_apr': net_apr,
-
             # Fields not applicable to perp_lending — store as NULL in DB
             'token1_collateral_ratio': None,
             'token1_liquidation_threshold': None,
@@ -390,27 +387,25 @@ class PerpLendingCalculator(StrategyCalculatorBase):
         # Baseline: at entry, liq dist = d (by design)
         baseline_liq_dist = d
 
+        no_data_response = {
+            'exit_token1_amount': entry_token1_amount, 'exit_token2_amount': None,
+            'exit_token3_amount': None, 'exit_token4_amount': entry_token1_amount,
+            'action_token1': 'No change', 'action_token2': None,
+            'action_token3': None, 'action_token4': 'No change',
+        }
+
         if not entry_token4_price or float(entry_token4_price) <= 0:
-            return {
-                'requires_rebalance': False,
-                'actions': [],
-                'reason': 'Cannot check: entry_token4_price (perp entry price) is missing'
-            }
+            return {'requires_rebalance': False, 'actions': [],
+                    'reason': 'Cannot check: entry_token4_price (perp entry price) is missing', **no_data_response}
         entry_token4_price = float(entry_token4_price)
 
         if not price_token1 or price_token1 <= 0:
-            return {
-                'requires_rebalance': False,
-                'actions': [],
-                'reason': 'Cannot check: no live token1 (spot) price available'
-            }
+            return {'requires_rebalance': False, 'actions': [],
+                    'reason': 'Cannot check: no live token1 (spot) price available', **no_data_response}
 
         if not price_token4 or price_token4 <= 0:
-            return {
-                'requires_rebalance': False,
-                'actions': [],
-                'reason': 'Cannot check: no live token4 (perp) price available'
-            }
+            return {'requires_rebalance': False, 'actions': [],
+                    'reason': 'Cannot check: no live token4 (perp) price available', **no_data_response}
 
         # Short perp liq price is fixed at entry: rises by d from entry perp price
         liq_price_token4 = entry_token4_price * (1 + d)
@@ -426,6 +421,10 @@ class PerpLendingCalculator(StrategyCalculatorBase):
         )
 
         actions = []
+        new_token1_amount = entry_token1_amount  # default: no change
+        t1 = position.get('token1', 'token1')
+        t4 = position.get('token4', 'token4')
+
         if requires_rebalance:
             # To restore liq_dist = d at current price:
             #   new_token1_amount = deployment_usd / (price_token1 × (1 + d))
@@ -466,8 +465,35 @@ class PerpLendingCalculator(StrategyCalculatorBase):
                 },
             ]
 
+        MIN = MIN_TOKEN_DELTA
+        delta1 = new_token1_amount - entry_token1_amount  # negative = reduce (price UP)
+
+        # leg 1 (spot lend): price UP → withdraw+sell; price DOWN → transfer in+buy+lend
+        if abs(delta1) < MIN:
+            action1 = 'No change'
+        elif delta1 < 0:
+            action1 = f'Withdraw {abs(delta1):.4f} {t1} \u2192 Sell'
+        else:
+            action1 = f'Transfer in USDC \u2192 Buy {abs(delta1):.4f} {t1} \u2192 Lend'
+
+        # leg 4 (short perp): moves in step with leg 1
+        if abs(delta1) < MIN:
+            action4 = 'No change'
+        elif delta1 < 0:
+            action4 = f'Buy to cover {abs(delta1):.4f} \u2192 Transfer in USDC'
+        else:
+            action4 = f'Add to short {abs(delta1):.4f} \u2192 Transfer out USDC'
+
         return {
             'requires_rebalance': requires_rebalance,
             'actions': actions,
-            'reason': reason
+            'reason': reason,
+            'exit_token1_amount': new_token1_amount,
+            'exit_token2_amount': None,
+            'exit_token3_amount': None,
+            'exit_token4_amount': new_token1_amount,  # market neutral: perp count = spot count
+            'action_token1': action1,
+            'action_token2': None,
+            'action_token3': None,
+            'action_token4': action4,
         }
