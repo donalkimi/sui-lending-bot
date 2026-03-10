@@ -534,8 +534,8 @@ class RateAnalyzer:
             for protocol_a in self.protocols:
                 # Early check: Does token1 exist in protocol_a for lending?
                 lend_total_apr_1A = self.get_rate(self.lend_rates, token1, protocol_a)
-                if np.isnan(lend_total_apr_1A) or lend_total_apr_1A <= 1e-9:
-                    continue  # token1 not lendable in protocol_a
+                if np.isnan(lend_total_apr_1A):
+                    continue  # token1 not present at protocol_a
 
                 # Get remaining rates and validate
                 lend_reward_apr_1A = self.get_rate(self.lend_rewards, token1, protocol_a)
@@ -630,13 +630,13 @@ class RateAnalyzer:
                 for protocol_a in self.protocols:
                     # Early check: Does token1 exist in protocol_a for lending?
                     lend_total_apr_1A = self.get_rate(self.lend_rates, token1, protocol_a)
-                    if np.isnan(lend_total_apr_1A) or lend_total_apr_1A <= 1e-9:
-                        continue  # token1 not lendable in protocol_a
+                    if np.isnan(lend_total_apr_1A):
+                        continue  # token1 not present at protocol_a
 
                     # Early check: Does token2 exist in protocol_a for borrowing?
                     borrow_total_apr_2A = self.get_rate(self.borrow_rates, token2, protocol_a)
-                    if np.isnan(borrow_total_apr_2A) or borrow_total_apr_2A <= 1e-9:
-                        continue  # token2 not borrowable in protocol_a
+                    if np.isnan(borrow_total_apr_2A):
+                        continue  # token2 not borrowable at protocol_a
 
                     for protocol_b in self.protocols:
                         # Skip if same protocol (cross-protocol strategy requires different protocols)
@@ -645,8 +645,8 @@ class RateAnalyzer:
 
                         # Early check: Does token2 exist in protocol_b for lending?
                         lend_total_apr_2B = self.get_rate(self.lend_rates, token2, protocol_b)
-                        if np.isnan(lend_total_apr_2B) or lend_total_apr_2B <= 1e-9:
-                            continue  # token2 not lendable in protocol_b
+                        if np.isnan(lend_total_apr_2B):
+                            continue  # token2 not present at protocol_b
 
                         # All tokens exist in required protocols - now get remaining data
                         collateral_ratio_1A = self.get_rate(self.collateral_ratios, token1, protocol_a)
@@ -942,17 +942,26 @@ class RateAnalyzer:
         """
         Generate perp lending strategies (spot + perp short).
 
+        Handles both perp_lending (2 legs) and perp_lending_recursive (3 legs).
+        Dispatched for all strategy_types in settings.PERP_LENDING_STRATEGIES.
+
         Iteration pattern:
         - token1 (spot tokens from Bluefin mappings) × protocol_a (lending protocols)
-        - token3 (perp tokens from Bluefin)
+        - token4 (perp tokens from Bluefin)
         - protocol_b (always 'Bluefin')
+        - token2 (stablecoin to borrow) — only when calculator.get_required_legs() >= 3
         """
         results = []
+
+        # Stablecoin inner loop: only for calculators that need the B_A borrow leg (>= 3 legs).
+        # For perp_lending (2 legs): stablecoins = [None] — loop runs once, no borrow params.
+        # For perp_lending_recursive (3 legs): iterates over all stablecoins as token2.
+        stablecoins = list(self.STABLECOINS) if calculator.get_required_legs() >= 3 else [None]
 
         # Get all Bluefin perp tokens from rates
         bluefin_tokens = [token for token in self.ALL_TOKENS if '-PERP' in token]
 
-        print(f"[ANALYZER] Perp: Found {len(bluefin_tokens)} perp tokens: {bluefin_tokens}")
+        print(f"[ANALYZER] Perp: Found {len(bluefin_tokens)} perp tokens, mapping to spot contracts...")
 
         if not bluefin_tokens:
             print("[ANALYZER] Perp: No Bluefin perp markets found in rates_snapshot")
@@ -968,8 +977,6 @@ class RateAnalyzer:
                 print(f"[ANALYZER] Perp: No borrow rate for {perp_token} on Bluefin - skipping")
                 continue
 
-            print(f"[ANALYZER] Perp: Processing {perp_token}, funding_rate={borrow_total_apr_3B:.4f}")
-
             perp_contract = self.get_contract(perp_token, 'Bluefin')
 
             # Get compatible spot tokens for this perp market
@@ -983,8 +990,6 @@ class RateAnalyzer:
                 continue
 
             compatible_spot_contracts = BLUEFIN_TO_LENDINGS.get(perp_contract_key, [])
-
-            print(f"[ANALYZER] Perp: {perp_token} -> key={perp_contract_key}, found {len(compatible_spot_contracts)} spot contracts")
 
             if not compatible_spot_contracts:
                 # Try alternative key formats
@@ -1003,54 +1008,105 @@ class RateAnalyzer:
                 if not spot_token:
                     continue
 
-                # For each lending protocol
-                for protocol_a in self.protocols:
-                    if protocol_a == 'Bluefin':
-                        continue  # Skip Bluefin as lending protocol
+                # Pre-filter to protocols where this spot contract is actually lendable.
+                # Uses contract address directly on in-memory DataFrame (Design Note #9).
+                # NaN = token absent at that protocol; 0.0 = present but zero rate (valid).
+                spot_row = self.lend_rates[self.lend_rates['Contract'] == spot_contract]
+                if spot_row.empty:
+                    # Every contract in BLUEFIN_TO_LENDINGS should appear in lend_rates.
+                    # If it doesn't, something is wrong upstream — alert loudly, then skip.
+                    print(f"⚠️  [ANALYZER] spot_contract {spot_contract!r} not found in lend_rates — "
+                          f"possible coding error (missing from protocol_merger or stale "
+                          f"BLUEFIN_TO_LENDINGS). Known contracts: "
+                          f"{list(self.lend_rates['Contract'].unique())}")
+                    continue
 
-                    # Get spot token lending rate
-                    lend_total_apr_1A = self.get_rate(self.lend_rates, spot_token, protocol_a)
-                    if np.isnan(lend_total_apr_1A) or lend_total_apr_1A <= 1e-9:
-                        continue
+                valid_protocols = [
+                    p for p in self.protocols
+                    if p != 'Bluefin' and p in spot_row.columns
+                    and pd.notna(spot_row[p].values[0])
+                ]
+                if not valid_protocols:
+                    continue
 
-                    # spot_ask: buying spot token to lend (perp_lending buys spot)
-                    # Fall back to lending protocol price if basis data unavailable
-                    price_1A_basis = self.get_perp_basis_price(perp_contract_key, spot_contract, 'spot_ask')
-                    price_1A = price_1A_basis if not np.isnan(price_1A_basis) else \
-                               self.get_rate(self.prices, spot_token, protocol_a)
-                    if np.isnan(price_1A) or price_1A <= 1e-9:
-                        continue
+                # Basis data is the same for all protocol_a / stablecoin combinations
+                # for a given (perp_contract_key, spot_contract) pair — compute once.
+                basis_spread = self.get_basis_spread(perp_contract_key, spot_contract)
+                basis_mid    = self.get_basis_mid(perp_contract_key, spot_contract)
+                basis_bid    = self.get_basis_bid(perp_contract_key, spot_contract)
+                basis_ask    = self.get_basis_ask(perp_contract_key, spot_contract)
 
+                # spot_ask: buying spot token to lend (perp_lending buys spot).
+                # Fall back to lending protocol price if basis data unavailable.
+                price_1A_basis = self.get_perp_basis_price(perp_contract_key, spot_contract, 'spot_ask')
+
+                for protocol_a in valid_protocols:
                     token1_contract = self.get_contract(spot_token, protocol_a)
 
-                    # Round-trip basis spread and mid (None if no basis data available)
-                    basis_spread = self.get_basis_spread(perp_contract_key, spot_contract)
-                    basis_mid    = self.get_basis_mid(perp_contract_key, spot_contract)
-                    basis_bid    = self.get_basis_bid(perp_contract_key, spot_contract)
-                    basis_ask    = self.get_basis_ask(perp_contract_key, spot_contract)
+                    lend_total_apr_1A = self.get_rate(self.lend_rates, spot_token, protocol_a)
+                    if np.isnan(lend_total_apr_1A):
+                        continue  # token absent at this protocol (should not happen after valid_protocols filter)
 
-                    # Call calculator (perp proxy is B_B = token4 slot)
-                    result = calculator.analyze_strategy(
-                        token1=spot_token,
-                        token1_contract=token1_contract,
-                        protocol_a=protocol_a,
-                        protocol_b='Bluefin',
-                        lend_total_apr_1A=lend_total_apr_1A,
-                        borrow_total_apr_3B=borrow_total_apr_3B,
-                        price_1A=price_1A,
-                        price_3B=price_3B,
-                        token4=perp_token,
-                        token4_contract=perp_contract,
-                        liquidation_distance=self.liquidation_distance,
-                        timestamp=self.timestamp,
-                        basis_spread=basis_spread,
-                        basis_mid=basis_mid,
-                        basis_bid=basis_bid,
-                        basis_ask=basis_ask
-                    )
+                    price_1A = price_1A_basis if not np.isnan(price_1A_basis) else \
+                               self.get_rate(self.prices, spot_token, protocol_a)
+                    if np.isnan(price_1A) or price_1A <= 0:
+                        continue
 
-                    if result.get('valid', False):
-                        results.append(result)
+                    for stablecoin in stablecoins:
+                        # borrow_params: populated for perp_lending_recursive (token2 = stablecoin),
+                        # empty for perp_lending (token2 = None, b_a = 0).
+                        borrow_params = {}
+                        if stablecoin is not None:
+                            borrow_total_apr_2A = self.get_rate(self.borrow_rates, stablecoin, protocol_a)
+                            if np.isnan(borrow_total_apr_2A):
+                                continue  # stablecoin not borrowable at this protocol
+
+                            collateral_ratio_1A      = self.get_rate(self.collateral_ratios, spot_token, protocol_a)
+                            liquidation_threshold_1A = self.get_liquidation_threshold(spot_token, protocol_a)
+                            if np.isnan(collateral_ratio_1A) or np.isnan(liquidation_threshold_1A):
+                                continue
+                            if collateral_ratio_1A <= 1e-9 or liquidation_threshold_1A <= 1e-9:
+                                continue  # protocol does not support this token as collateral
+
+                            price_2A = self.get_rate(self.prices, stablecoin, protocol_a)
+                            if np.isnan(price_2A):
+                                continue
+
+                            borrow_params = {
+                                'token2':                   stablecoin,
+                                'token2_contract':          self.get_contract(stablecoin, protocol_a),
+                                'collateral_ratio_1A':      collateral_ratio_1A,
+                                'liquidation_threshold_1A': liquidation_threshold_1A,
+                                'borrow_total_apr_2A':      borrow_total_apr_2A,
+                                'borrow_fee_2A':            self.get_borrow_fee(stablecoin, protocol_a),
+                                'available_borrow_2A':      self.get_available_borrow(stablecoin, protocol_a),
+                                'borrow_weight_2A':         self.get_borrow_weight(stablecoin, protocol_a),
+                                'price_2A':                 price_2A,
+                            }
+
+                        # Call calculator (perp proxy is B_B = token4 slot)
+                        result = calculator.analyze_strategy(
+                            token1=spot_token,
+                            token1_contract=token1_contract,
+                            protocol_a=protocol_a,
+                            protocol_b='Bluefin',
+                            lend_total_apr_1A=lend_total_apr_1A,
+                            borrow_total_apr_3B=borrow_total_apr_3B,
+                            price_1A=price_1A,
+                            price_3B=price_3B,
+                            token4=perp_token,
+                            token4_contract=perp_contract,
+                            liquidation_distance=self.liquidation_distance,
+                            timestamp=self.timestamp,
+                            basis_spread=basis_spread,
+                            basis_mid=basis_mid,
+                            basis_bid=basis_bid,
+                            basis_ask=basis_ask,
+                            **borrow_params
+                        )
+
+                        if result['valid']:
+                            results.append(result)
 
         print(f"[ANALYZER] Perp: Generated {len(results)} total strategies")
         df = pd.DataFrame(results)
@@ -1079,7 +1135,7 @@ class RateAnalyzer:
         results = []
         bluefin_tokens = [t for t in self.ALL_TOKENS if '-PERP' in t]
 
-        print(f"[ANALYZER] PerpBorrowing: Found {len(bluefin_tokens)} perp tokens: {bluefin_tokens}")
+        print(f"[ANALYZER] PerpBorrowing: Found {len(bluefin_tokens)} perp tokens, generating strategies...")
         if not bluefin_tokens:
             print("[ANALYZER] PerpBorrowing: No Bluefin perp markets found in rates_snapshot")
             return pd.DataFrame()
@@ -1091,8 +1147,6 @@ class RateAnalyzer:
             if np.isnan(lend_total_apr_3B):
                 print(f"[ANALYZER] PerpBorrowing: No lend rate for {perp_token} on Bluefin - skipping")
                 continue
-
-            print(f"[ANALYZER] PerpBorrowing: Processing {perp_token}, lend_rate={lend_total_apr_3B:.4f}")
 
             perp_contract = self.get_contract(perp_token, 'Bluefin')
             perp_key = perp_contract if perp_contract else f'0x{perp_token}_bluefin'
@@ -1124,12 +1178,12 @@ class RateAnalyzer:
                             continue
 
                         lend_total_apr_1A = self.get_rate(self.lend_rates, token1, protocol_a)
-                        if np.isnan(lend_total_apr_1A) or lend_total_apr_1A <= 1e-9:
-                            continue
+                        if np.isnan(lend_total_apr_1A):
+                            continue  # token1 not present at protocol_a
 
                         borrow_total_apr_2A = self.get_rate(self.borrow_rates, spot_token, protocol_a)
-                        if np.isnan(borrow_total_apr_2A) or borrow_total_apr_2A <= 1e-9:
-                            continue
+                        if np.isnan(borrow_total_apr_2A):
+                            continue  # spot token not borrowable at protocol_a
 
                         collateral_ratio_1A      = self.get_rate(self.collateral_ratios, token1, protocol_a)
                         liquidation_threshold_1A = self.get_liquidation_threshold(token1, protocol_a)
@@ -1216,9 +1270,9 @@ class RateAnalyzer:
                 strategies = self._generate_noloop_strategies(calculator)
             elif strategy_type == 'recursive_lending':
                 strategies = self._generate_recursive_strategies(calculator, tokens)
-            elif strategy_type == 'perp_lending':
+            elif strategy_type in settings.PERP_LENDING_STRATEGIES:
                 strategies = self._generate_perp_lending_strategies(calculator)
-            elif strategy_type in ('perp_borrowing', 'perp_borrowing_recursive'):
+            elif strategy_type in settings.PERP_BORROWING_STRATEGIES:
                 strategies = self._generate_perp_borrowing_strategies(calculator)
             else:
                 print(f"[ANALYZER] Unknown strategy type: {strategy_type}, skipping")

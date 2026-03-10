@@ -1129,8 +1129,7 @@ class PositionService:
     ) -> Optional[float]:
         """Calculate basis PnL using bid/ask prices from spot_perp_basis at timestamp."""
         strategy_type = position.get('strategy_type', '')
-        _perp = ('perp_lending', 'perp_borrowing', 'perp_borrowing_recursive')
-        if strategy_type not in _perp:
+        if strategy_type not in settings.PERP_STRATEGIES:
             return None
 
         timestamp_str = to_datetime_str(timestamp)
@@ -1282,6 +1281,7 @@ class PositionService:
 
         # PHASE 6: Strategy-specific rebalance validation
         # Get calculator for this position's strategy type
+        rebalance_result = None  # initialized here so it stays None if try block throws before assignment
         try:
             calculator = get_calculator(position['strategy_type'])
 
@@ -1352,17 +1352,43 @@ class PositionService:
             print(f"[WARNING] Proceeding with rebalance anyway")
 
         # Capture snapshot of current state, passing exit amounts from the calculator.
+        # rebalance_result may be None if validation threw before assignment (degraded path).
+        exit_amounts = rebalance_result or {}
         snapshot = self.capture_rebalance_snapshot(
             position, live_timestamp,
-            exit_token1_amount=rebalance_result['exit_token1_amount'],
-            exit_token2_amount=rebalance_result['exit_token2_amount'],
-            exit_token3_amount=rebalance_result['exit_token3_amount'],
-            exit_token4_amount=rebalance_result['exit_token4_amount'],
-            action_token1=rebalance_result.get('action_token1'),
-            action_token2=rebalance_result.get('action_token2'),
-            action_token3=rebalance_result.get('action_token3'),
-            action_token4=rebalance_result.get('action_token4'),
+            exit_token1_amount=exit_amounts.get('exit_token1_amount'),
+            exit_token2_amount=exit_amounts.get('exit_token2_amount'),
+            exit_token3_amount=exit_amounts.get('exit_token3_amount'),
+            exit_token4_amount=exit_amounts.get('exit_token4_amount'),
+            action_token1=exit_amounts.get('action_token1'),
+            action_token2=exit_amounts.get('action_token2'),
+            action_token3=exit_amounts.get('action_token3'),
+            action_token4=exit_amounts.get('action_token4'),
         )
+
+        # Compute per-leg earnings for this segment and add to snapshot.
+        # Segment: opening_timestamp → live_timestamp.
+        # Sign convention: lend slots +base, borrow slots -base; rewards always +reward.
+        _st = position.get('strategy_type', '')
+        _token3_action = 'LongPerp' if _st in settings.PERP_BORROWING_STRATEGIES else 'Lend'
+        _token4_action = 'ShortPerp' if _st in settings.PERP_LENDING_STRATEGIES else 'Borrow'
+        opening_ts = snapshot['opening_timestamp']
+        try:
+            base1, reward1 = self.calculate_leg_earnings_split(position, 'token1', 'Lend',       opening_ts, live_timestamp)
+            base2, reward2 = self.calculate_leg_earnings_split(position, 'token2', 'Borrow',     opening_ts, live_timestamp)
+            base3, reward3 = self.calculate_leg_earnings_split(position, 'token3', _token3_action, opening_ts, live_timestamp)
+            base4, reward4 = self.calculate_leg_earnings_split(position, 'token4', _token4_action, opening_ts, live_timestamp)
+            snapshot['token1_earnings'] =  base1
+            snapshot['token1_rewards']  =  reward1
+            snapshot['token2_earnings'] = -base2
+            snapshot['token2_rewards']  =  reward2
+            snapshot['token3_earnings'] =  base3
+            snapshot['token3_rewards']  =  reward3
+            snapshot['token4_earnings'] = -base4
+            snapshot['token4_rewards']  =  reward4
+        except Exception as _e:
+            print(f"⚠️ [REBALANCE] Could not compute per-leg earnings for {position_id}: {_e}")
+            # Continue — earnings will be NULL in the rebalance record
 
         # Create rebalance record
         rebalance_id = self.create_rebalance_record(
@@ -1797,10 +1823,10 @@ class PositionService:
         """
         strategy_type = position['strategy_type']
 
-        if strategy_type == 'perp_lending':
-            spot_contract = position['token1_contract']
-        elif strategy_type in ('perp_borrowing', 'perp_borrowing_recursive'):
-            spot_contract = position['token2_contract']
+        if strategy_type in settings.PERP_LENDING_STRATEGIES:
+            spot_contract = position['token1_contract']   # spot = token1 (B_B slot = token4)
+        elif strategy_type in settings.PERP_BORROWING_STRATEGIES:
+            spot_contract = position['token2_contract']   # spot = token2 (L_B slot = token3)
         else:
             return None
 
@@ -1832,12 +1858,12 @@ class PositionService:
 
         spot_bid, spot_ask, perp_bid, perp_ask = row[0], row[1], row[2], row[3]
 
-        if strategy_type == 'perp_lending':
+        if strategy_type in settings.PERP_LENDING_STRATEGIES:
             result['spot_price_token1_bid'] = spot_bid
             result['spot_price_token1_ask'] = spot_ask
             result['perp_price_token4_bid'] = perp_bid
             result['perp_price_token4_ask'] = perp_ask
-        elif strategy_type in ('perp_borrowing', 'perp_borrowing_recursive'):
+        elif strategy_type in settings.PERP_BORROWING_STRATEGIES:
             result['spot_price_token2_bid'] = spot_bid
             result['spot_price_token2_ask'] = spot_ask
             result['perp_price_token3_bid'] = perp_bid
@@ -1945,8 +1971,12 @@ class PositionService:
                     entry_token1_size_usd, entry_token2_size_usd, entry_token3_size_usd, entry_token4_size_usd,
                     exit_token1_size_usd, exit_token2_size_usd, exit_token3_size_usd, exit_token4_size_usd,
                     realised_fees, realised_pnl, realised_lend_earnings, realised_borrow_costs,
-                    rebalance_reason, rebalance_notes
-                ) VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
+                    rebalance_reason, rebalance_notes,
+                    token1_earnings, token1_rewards,
+                    token2_earnings, token2_rewards,
+                    token3_earnings, token3_rewards,
+                    token4_earnings, token4_rewards
+                ) VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
             """, (
                 rebalance_id, position_id, sequence_number,
                 opening_timestamp_str, closing_timestamp_str,
@@ -1979,7 +2009,15 @@ class PositionService:
                 convert_value('exit_token3_size_usd'), convert_value('exit_token4_size_usd'),
                 convert_value('realised_fees'), convert_value('realised_pnl'),
                 convert_value('realised_lend_earnings'), convert_value('realised_borrow_costs'),
-                rebalance_reason, rebalance_notes
+                rebalance_reason, rebalance_notes,
+                self._to_native_type(snapshot.get('token1_earnings')),
+                self._to_native_type(snapshot.get('token1_rewards')),
+                self._to_native_type(snapshot.get('token2_earnings')),
+                self._to_native_type(snapshot.get('token2_rewards')),
+                self._to_native_type(snapshot.get('token3_earnings')),
+                self._to_native_type(snapshot.get('token3_rewards')),
+                self._to_native_type(snapshot.get('token4_earnings')),
+                self._to_native_type(snapshot.get('token4_rewards')),
                 ))
 
             # Update positions table.

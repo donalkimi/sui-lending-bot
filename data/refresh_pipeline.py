@@ -187,7 +187,6 @@ def refresh_pipeline(
     token_summary = {"seen": 0, "inserted": 0, "updated": 0, "total": 0}  # Default if not saving
 
     if save_snapshots:
-        print("[DB] Saving snapshot to database...")
         tracker.save_snapshot(
             timestamp=ts,
             lend_rates=lend_rates,
@@ -232,8 +231,6 @@ def refresh_pipeline(
                 print("[ORACLE] Continuing with refresh - oracle IDs can be populated manually")
                 # Continue with refresh - not a critical failure
 
-        print("[DB] Snapshot saved successfully")
-
         # Note: If perp data was not available, it will be included in the next refresh
         # after main_perp_refresh.py populates the perp_margin_rates table
 
@@ -276,8 +273,6 @@ def refresh_pipeline(
             liquidation_distance=liquidation_distance,
             all_results=all_results
         )
-        print(f"[CACHE SAVE] Saved {len(all_results)} strategies to database")
-
         # Slack: notify once per run (if enabled)
         if send_slack_notifications:
             if all_results is None or all_results.empty:

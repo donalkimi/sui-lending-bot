@@ -120,7 +120,7 @@ class RecursiveLendingCalculator(StrategyCalculatorBase):
         context_B = f" [{protocol_b} - Lend {token2}]" if protocol_b and token2 else ""
 
         if effective_ltv_A > collateral_ratio_a:
-            logger.warning(
+            logger.debug(
                 f"Adjusting r_A{context_A}: effective_LTV_A ({effective_ltv_A:.4f}) > "
                 f"maxCF_A ({collateral_ratio_a:.4f}). Setting to {collateral_ratio_a * 0.995:.4f}"
             )
@@ -128,7 +128,7 @@ class RecursiveLendingCalculator(StrategyCalculatorBase):
             adjusted_A = True
 
         if effective_ltv_B > collateral_ratio_b:
-            logger.warning(
+            logger.debug(
                 f"Adjusting r_B{context_B}: effective_LTV_B ({effective_ltv_B:.4f}) > "
                 f"maxCF_B ({collateral_ratio_b:.4f}). Setting to {collateral_ratio_b * 0.995:.4f}"
             )

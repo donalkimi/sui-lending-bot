@@ -379,6 +379,7 @@ def display_strategies_table(
         'noloop_cross_protocol_lending': 'No-Loop',
         'recursive_lending': 'Recursive',
         'perp_lending': 'Perp Lending',
+        'perp_lending_recursive': 'Perp Lending (Recursive)',
         'perp_borrowing': 'Perp Borrowing',
         'perp_borrowing_recursive': 'Perp Borrowing (Recursive)',
     }
@@ -394,8 +395,11 @@ def display_strategies_table(
     for idx, row in all_results.iterrows():
         # Get token symbols for display (logic uses contracts)
         strategy_type = row.get('strategy_type', '') if 'strategy_type' in all_results.columns else ''
-        if strategy_type == 'perp_lending':
-            token_pair = f"{row['token1']} ↔ {row['token4']}"
+        if strategy_type in settings.PERP_LENDING_STRATEGIES:
+            if strategy_type == 'perp_lending_recursive':
+                token_pair = f"{row['token1']} ↔ {row['token2']} ↔ {row['token4']}"
+            else:
+                token_pair = f"{row['token1']} ↔ {row['token4']}"
         else:
             token_pair = f"{row['token1']}/{row['token2']}/{row['token3']}"
 
@@ -638,8 +642,8 @@ def _build_preview_position(strategy: dict, deployment_usd: float) -> dict:
         'entry_token4_amount': ta_3b,
         # Basis (perp strategies only)
         'entry_basis': (
-            strategy.get('basis_bid') if strategy_type == 'perp_lending'
-            else strategy.get('basis_ask') if strategy_type in ('perp_borrowing', 'perp_borrowing_recursive')
+            strategy.get('basis_bid') if strategy_type in settings.PERP_LENDING_STRATEGIES
+            else strategy.get('basis_ask') if strategy_type in settings.PERP_BORROWING_STRATEGIES
             else None
         ),
         'entry_basis_spread': strategy.get('basis_spread'),
@@ -669,13 +673,15 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
     # STRATEGY TYPE DETECTION
     # ========================================
     strategy_type = strategy.get('strategy_type', '')
-    is_perp = strategy_type in ('perp_lending', 'perp_borrowing', 'perp_borrowing_recursive')
+    is_perp = strategy_type in settings.PERP_STRATEGIES
 
     # ========================================
     # HEADER SECTION
     # ========================================
     if strategy_type == 'perp_lending':
         st.markdown(f"## 📊 {strategy['token1']} ↔ {strategy['token4']} (Perp Lending)")
+    elif strategy_type == 'perp_lending_recursive':
+        st.markdown(f"## 📊 {strategy['token1']} ↔ {strategy['token2']} ↔ {strategy['token4']} (Perp Lending Recursive)")
     elif is_perp:
         st.markdown(f"## 📊 {strategy['token1']} / {strategy['token2']} / {strategy['token3']} (Perp Borrowing)")
     else:
@@ -805,7 +811,7 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
         # Build get_basis callback: returns current basis data from strategy dict
         _strategy_type = strategy.get('strategy_type', '')
         def _get_basis(perp_proxy):
-            if _strategy_type == 'perp_lending':
+            if _strategy_type in settings.PERP_LENDING_STRATEGIES:
                 bid = strategy.get('basis_bid')
                 ask = strategy.get('basis_ask')
                 mid = strategy.get('basis_mid')
@@ -817,7 +823,7 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
                     'perp_ask': strategy.get('token4_price'),  # short perp price (modal uses mid as proxy)
                     'spot_bid': strategy.get('token1_price'),  # spot lend price
                 }
-            elif _strategy_type in ('perp_borrowing', 'perp_borrowing_recursive'):
+            elif _strategy_type in settings.PERP_BORROWING_STRATEGIES:
                 bid = strategy.get('basis_bid')
                 ask = strategy.get('basis_ask')
                 mid = strategy.get('basis_mid')
@@ -831,7 +837,7 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
                 }
             return None
 
-        _is_perp = _strategy_type in ('perp_lending', 'perp_borrowing', 'perp_borrowing_recursive')
+        _is_perp = _strategy_type in settings.PERP_STRATEGIES
         renderer_cls.render_detail_table(
             mock_position, _get_rate, _get_borrow_fee, _get_price,
             rebalances=None, segment_type='live',
@@ -983,8 +989,8 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
                 is_paper_trade=True,
                 notes="",
                 entry_basis=(
-                    strategy.get('basis_bid') if _st == 'perp_lending'
-                    else strategy.get('basis_ask') if _st in ('perp_borrowing', 'perp_borrowing_recursive')
+                    strategy.get('basis_bid') if _st in settings.PERP_LENDING_STRATEGIES
+                    else strategy.get('basis_ask') if _st in settings.PERP_BORROWING_STRATEGIES
                     else None
                 ),
                 entry_basis_spread=strategy.get('basis_spread')
@@ -4079,7 +4085,6 @@ def render_dashboard(data_loader: DataLoader, mode: str):
         print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] ❌ Cache MISS - running analysis...")
 
         analyzer_init_start = time.time()
-        print(f"[ANALYSIS START] Running analyzer.find_best_protocol_pair()")
         perp_basis_df = tracker.load_spot_perp_basis(timestamp_seconds)
         analyzer = RateAnalyzer(
             lend_rates=lend_rates,
@@ -4104,12 +4109,10 @@ def render_dashboard(data_loader: DataLoader, mode: str):
         analysis_run_start = time.time()
         protocol_a, protocol_b, all_results = analyzer.find_best_protocol_pair()
         analysis_run_time = (time.time() - analysis_run_start) * 1000
-        print(f"[ANALYSIS COMPLETE] Found {len(all_results)} valid strategies")
         print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] Analysis completed: {len(all_results)} strategies in {analysis_run_time:.1f}ms")
 
         # Save to database cache
         tracker.save_analysis_cache(timestamp_seconds, liquidation_distance, all_results)
-        print(f"[CACHE SAVE] Saved to database")
         analysis_time = (time.time() - analysis_start) * 1000
         print(f"[{(time.time() - dashboard_start) * 1000:7.1f}ms] [DASHBOARD] Total analysis time: {analysis_time:.1f}ms")
 
@@ -4147,10 +4150,9 @@ def render_dashboard(data_loader: DataLoader, mode: str):
         if show_recursive_lending:
             enabled_strategy_types.append('recursive_lending')
         if show_perp_lending:
-            enabled_strategy_types.append('perp_lending')
+            enabled_strategy_types.extend(settings.PERP_LENDING_STRATEGIES)
         if show_perp_borrowing:
-            enabled_strategy_types.append('perp_borrowing')
-            enabled_strategy_types.append('perp_borrowing_recursive')
+            enabled_strategy_types.extend(settings.PERP_BORROWING_STRATEGIES)
 
         if enabled_strategy_types and 'strategy_type' in filtered_results.columns:
             before_count = len(filtered_results)

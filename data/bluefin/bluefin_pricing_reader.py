@@ -165,7 +165,7 @@ class BluefinPricingReader:
         try:
             data = self._make_request_with_retry(url, params)
 
-            if data.get('warning'):
+            if data.get('warning') and data['warning'] != 'PriceImpactTooHigh':
                 print(f"    [WARN] Aggregator warning for {token_in[:20]}...→{token_out[:20]}...: {data['warning']}")
 
             return data
@@ -220,28 +220,24 @@ class BluefinPricingReader:
             ticker = match.group(1)
             market_symbol = f"{ticker}-PERP"
 
-            print(f"\n  [{ticker}] Fetching perp ticker {market_symbol}...")
             perp_data = self.fetch_perp_ticker(market_symbol)
 
             if not perp_data or perp_data.get('bid') is None or perp_data.get('ask') is None:
-                print(f"    [WARN] No perp bid/ask for {market_symbol}, skipping all spot contracts")
+                print(f"  [WARN] No perp bid/ask for {market_symbol}, skipping all spot contracts")
                 continue
 
             perp_bid = perp_data['bid']
             perp_ask = perp_data['ask']
-            print(f"    [OK] Perp: bid=${perp_bid:.4f}, ask=${perp_ask:.4f}")
 
             # Append index price row (zero spread — index_price == oraclePriceE9 on Bluefin)
             index_price = perp_data.get('index_price')
             if index_price is None:
-                print(f"    [WARN] No index_price for {market_symbol}, skipping index row")
+                print(f"  [WARN] No index_price for {market_symbol}, skipping index row")
             else:
                 index_contract = f"0x{ticker}-USDC-INDEX_bluefin"
                 basis_bid = (perp_bid - index_price) / perp_bid
                 basis_ask = (perp_ask - index_price) / perp_ask
                 basis_mid = (basis_bid + basis_ask) / 2
-                print(f"    [OK] Index: ${index_price:.4f}, "
-                      f"basis_bid={basis_bid*100:.3f}%, basis_ask={basis_ask*100:.3f}%")
                 rows.append({
                     'timestamp': timestamp_str,
                     'perp_proxy': perp_proxy,
@@ -258,19 +254,14 @@ class BluefinPricingReader:
                 })
 
             for spot_contract in spot_contracts:
-                short_addr = spot_contract[:30] + '...'
-                print(f"    Spot {short_addr}")
-
                 # Step 1: USDC → spot (offer query) — how much USDC to pay per spot token
                 offer_data = self._fetch_amm_quote(usdc_contract, spot_contract,
                                                    settings.BLUEFIN_AMM_USDC_AMOUNT_RAW)
                 if offer_data is None:
-                    print(f"      [WARN] No offer quote, skipping")
                     continue
 
                 return_raw = offer_data.get('returnAmountWithDecimal', '0')
                 if not return_raw or str(return_raw) == '0':
-                    print(f"      [WARN] Zero returnAmount for USDC→spot, skipping (no AMM liquidity)")
                     continue
 
                 spot_ask = float(offer_data['effectivePrice'])
@@ -279,21 +270,16 @@ class BluefinPricingReader:
                 # Step 2: spot → USDC (bid query) — how much USDC received per spot token sold
                 bid_data = self._fetch_amm_quote(spot_contract, usdc_contract, x_amount_raw)
                 if bid_data is None:
-                    print(f"      [WARN] No bid quote, skipping")
                     continue
 
                 spot_bid = float(bid_data['effectivePriceReserved'])
 
                 if spot_bid <= 0 or spot_ask <= 0:
-                    print(f"      [WARN] Invalid spot prices (bid={spot_bid}, ask={spot_ask}), skipping")
                     continue
 
                 basis_bid = (perp_bid - spot_ask) / perp_bid
                 basis_ask = (perp_ask - spot_bid) / perp_ask
                 basis_mid = (basis_bid + basis_ask) / 2
-
-                print(f"      [OK] spot_bid=${spot_bid:.4f}, spot_ask=${spot_ask:.4f}, "
-                      f"basis_bid={basis_bid*100:.3f}%, basis_ask={basis_ask*100:.3f}%")
 
                 rows.append({
                     'timestamp': timestamp_str,

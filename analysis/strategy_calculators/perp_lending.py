@@ -226,11 +226,13 @@ class PerpLendingCalculator(StrategyCalculatorBase):
         token4_contract = kwargs.get('token4_contract')
         price_3B = kwargs.get('price_3B', price_1A)  # Default perp price = spot price
 
-        # Calculate positions
+        # Calculate positions — **kwargs passed through so subclasses can receive
+        # extra params (e.g. collateral_ratio_1A, liquidation_threshold_1A for recursive variant)
         positions = self.calculate_positions(
             liquidation_distance=liquidation_distance,
-            collateral_ratio_a=0.0,  # Not used
-            collateral_ratio_b=0.0   # Not used
+            collateral_ratio_a=0.0,  # Not used by base class
+            collateral_ratio_b=0.0,  # Not used by base class
+            **kwargs
         )
 
         # Build rates dict for APR calculation

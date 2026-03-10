@@ -601,7 +601,8 @@ class RateTracker:
         """)
         rows_24hr = cursor.rowcount
 
-        print(f"[PERP] avg patch: {rows_8hr} rows got avg_rate_8hr, {rows_24hr} rows got avg_rate_24hr")
+        if rows_8hr > 0 or rows_24hr > 0:
+            print(f"[PERP] avg patch: {rows_8hr} rows got avg_rate_8hr, {rows_24hr} rows got avg_rate_24hr")
         return rows_8hr, rows_24hr
 
     def _update_perp_avg_rates(self, conn, timestamp: datetime) -> None:

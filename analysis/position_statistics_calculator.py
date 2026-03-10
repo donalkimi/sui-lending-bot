@@ -305,7 +305,30 @@ def calculate_position_statistics(
     # Calculate NET current APR
     current_apr = gross_apr - fee_cost - perp_trading_fee_apr
 
-    # 8. Return statistics dict
+    # 8. Write live segment per-leg earnings to positions table (overwritten hourly).
+    # Sign convention: lend slots +base, borrow slots -base; rewards always +reward.
+    try:
+        ph = service._get_placeholder()
+        cursor = service.conn.cursor()
+        cursor.execute(f"""
+            UPDATE positions SET
+                token1_earnings = {ph}, token1_rewards = {ph},
+                token2_earnings = {ph}, token2_rewards = {ph},
+                token3_earnings = {ph}, token3_rewards = {ph},
+                token4_earnings = {ph}, token4_rewards = {ph}
+            WHERE position_id = {ph}
+        """, (
+            base_1, reward_1,
+            -base_2, reward_2,
+            base_3, reward_3,
+            -base_4, reward_4,
+            position_id,
+        ))
+        service.conn.commit()
+    except Exception as _e:
+        print(f"⚠️ [STATS] Could not update live segment earnings for {position_id}: {_e}")
+
+    # 9. Return statistics dict
     return {
         'position_id': position_id,
         'timestamp': timestamp,  # Unix seconds

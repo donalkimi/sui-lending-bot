@@ -623,7 +623,7 @@ class BluefinReader:
             borrow_df = pd.DataFrame(borrow_rows)
             collateral_df = pd.DataFrame(collateral_rows)
 
-            print(f"\t\t  found {len(lend_df)} perp markets")
+            print(f"[FETCH] Bluefin: {len(lend_df)} perp markets")
 
             return lend_df, borrow_df, collateral_df
 

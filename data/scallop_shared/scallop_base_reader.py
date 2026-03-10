@@ -56,7 +56,6 @@ class ScallopBaseReader:
 
     def _get_markets_from_sdk(self) -> List[Dict[str, Any]]:
         """Call Node.js SDK wrapper and parse JSON output"""
-        print(f"\t\t[SDK] Starting Scallop SDK call via Node.js...")
         start_time = time.time()
 
         env = os.environ.copy()
@@ -79,14 +78,7 @@ class ScallopBaseReader:
             raise RuntimeError(f"Scallop node script timed out after 60 seconds (RPC may be unresponsive)")
 
         elapsed = time.time() - start_time
-        print(f"\t\t[SDK] Scallop SDK call completed in {elapsed:.2f} seconds")
-
-        # ALWAYS show timing logs from stderr (not just in debug mode)
-        if res.stderr:
-            # Print only lines that start with [SDK-JS] for timing visibility
-            for line in res.stderr.splitlines():
-                if line.strip().startswith("[SDK-JS]") or line.strip().startswith("Warning:"):
-                    print(f"\t\t{line}")
+        self._elapsed = elapsed
 
         if res.returncode != 0:
             raise RuntimeError(
@@ -273,7 +265,7 @@ class ScallopBaseReader:
             )
 
         npools = len(lend_rows)
-        print(f"\t\tfound {npools} Scallop lending pools")
+        self._npools = npools
 
         lend_df = pd.DataFrame(lend_rows)
         borrow_df = pd.DataFrame(borrow_rows)

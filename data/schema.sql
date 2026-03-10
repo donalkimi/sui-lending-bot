@@ -438,7 +438,20 @@ CREATE TABLE IF NOT EXISTS positions (
     token4 TEXT,
     token4_contract TEXT,
 
-    CONSTRAINT positions_pkey PRIMARY KEY (position_id)
+    -- Live segment per-leg earnings (overwritten hourly by calculate_statistics)
+    -- tokenN_earnings: signed net base contribution (+lend, -borrow); NULL = leg unused
+    -- tokenN_rewards:  reward token earnings, always positive; NULL = leg unused
+    token1_earnings DECIMAL(20, 10),
+    token1_rewards  DECIMAL(20, 10),
+    token2_earnings DECIMAL(20, 10),
+    token2_rewards  DECIMAL(20, 10),
+    token3_earnings DECIMAL(20, 10),
+    token3_rewards  DECIMAL(20, 10),
+    token4_earnings DECIMAL(20, 10),
+    token4_rewards  DECIMAL(20, 10),
+
+    CONSTRAINT positions_pkey PRIMARY KEY (position_id),
+    CONSTRAINT fk_positions_portfolio FOREIGN KEY (portfolio_id) REFERENCES portfolios(portfolio_id) ON DELETE SET NULL
 );
 
 -- Indexes for positions
@@ -562,6 +575,18 @@ CREATE TABLE IF NOT EXISTS position_rebalances (
     closing_token2_liq_dist  REAL,
     closing_token3_liq_dist  REAL,
     closing_token4_liq_dist  REAL,
+
+    -- Per-leg earnings for this completed segment (written once at rebalance time, immutable)
+    -- tokenN_earnings: signed net base contribution (+lend, -borrow); NULL = leg unused
+    -- tokenN_rewards:  reward token earnings, always positive; NULL = leg unused
+    token1_earnings DECIMAL(20, 10),
+    token1_rewards  DECIMAL(20, 10),
+    token2_earnings DECIMAL(20, 10),
+    token2_rewards  DECIMAL(20, 10),
+    token3_earnings DECIMAL(20, 10),
+    token3_rewards  DECIMAL(20, 10),
+    token4_earnings DECIMAL(20, 10),
+    token4_rewards  DECIMAL(20, 10),
 
     CONSTRAINT position_rebalances_pkey PRIMARY KEY (rebalance_id),
     CONSTRAINT position_rebalances_position_id_sequence_number_key UNIQUE (position_id, sequence_number),

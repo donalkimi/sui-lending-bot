@@ -270,9 +270,10 @@ class NaviReader:
 
             active_pools += 1
 
-        print(f"\t\tfound {active_pools} active pools")
         if deprecated_pools > 0:
-            print(f"\t\tSkipped {deprecated_pools} deprecated pools")
+            print(f"[FETCH] Navi: {active_pools} pools ({deprecated_pools} deprecated skipped)")
+        else:
+            print(f"[FETCH] Navi: {active_pools} pools")
 
         lend_rates = pd.DataFrame(lend_rates_data)
         borrow_rates = pd.DataFrame(borrow_rates_data)

@@ -92,10 +92,10 @@ def get_strategy_history(
     if strategy_type in settings.PERP_STRATEGIES:
         try:
             perp_contract = (strategy['token4_contract']
-                             if strategy_type == 'perp_lending'
+                             if strategy_type in settings.PERP_LENDING_STRATEGIES
                              else strategy['token3_contract'])
             spot_contract = (strategy['token1_contract']
-                             if strategy_type == 'perp_lending'
+                             if strategy_type in settings.PERP_LENDING_STRATEGIES
                              else strategy['token2_contract'])
 
             basis_df = fetch_basis_history(

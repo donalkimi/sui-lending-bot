@@ -118,7 +118,7 @@ class SuilendReader:
             })
 
         npools = len(lend_rows)
-        print(f"\t\tfound {npools} lending pools")
+        print(f"[FETCH] Suilend: {npools} pools")
         lend_df = pd.DataFrame(lend_rows)
         borrow_df = pd.DataFrame(borrow_rows)
         collateral_df = pd.DataFrame(collateral_rows)

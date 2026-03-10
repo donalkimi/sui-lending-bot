@@ -2,11 +2,13 @@
 
 ## Context
 
-Extending `perp_lending` (spot lend + short perp, market-neutral) with a recursive borrow loop. Instead of deploying all capital as spot token + perp margin, the new strategy:
-1. Lends the spot token (e.g. BTC) at Protocol A
+Extending `perp_lending` (spot lend + short perp, market-neutral) with a recursive borrow loop. **Starting capital is a stablecoin (e.g. USDC).** The new strategy:
+0. **Simultaneously:** buys `(1−d)` worth of spot token (BTC) via AMM (at `spot_ask`) **and** opens a short perp of `(1−d)` notional on Bluefin (posting `d` stablecoin as margin) — market-neutral from the very first moment
+1. Lends the spot token (BTC) at Protocol A
 2. Borrows stablecoin (USDC) against that lent collateral at Protocol A
-3. Uses the borrowed stablecoin to buy more spot token → re-lend → repeat
-4. Maintains a market-neutral short perp on Bluefin sized to equal total L_A
+3. Uses the borrowed stablecoin to buy more spot + short more perp (same `(1−d)`/`d` split) → re-lend → repeat
+
+The initial stablecoin-to-spot swap (step 0) uses `spot_ask` price, consistent with how `perp_lending` already prices the spot leg. The AMM spread is captured in `basis_cost` (entry spread). `token2` (borrowed stablecoin) is the same stablecoin denomination as the starting capital.
 
 This amplifies the APR from spot lending while adding a stablecoin borrow cost. It has **two liquidation risks** (opposite directions): Protocol A liq if spot price drops (USDC borrow against spot), and Bluefin liq if spot price rises (short perp). A single `liquidation_distance` parameter governs both (established pattern in `perp_borrowing_recursive`).
 
@@ -79,41 +81,44 @@ New `PerpLendingRecursiveHistoryHandler`:
 - Add `register_calculator(PerpLendingRecursiveCalculator)` after `PerpBorrowingRecursiveCalculator`
 - Add to `__all__`
 
-### 4. `config/settings.py` (line 58)
+### 4. `config/settings.py` ✅ (implemented)
 ```python
-# Before:
-PERP_STRATEGIES = ('perp_lending', 'perp_borrowing', 'perp_borrowing_recursive')
-# After:
-PERP_STRATEGIES = ('perp_lending', 'perp_lending_recursive', 'perp_borrowing', 'perp_borrowing_recursive')
+PERP_LENDING_STRATEGIES  = ('perp_lending', 'perp_lending_recursive')
+PERP_BORROWING_STRATEGIES = ('perp_borrowing', 'perp_borrowing_recursive')
+PERP_STRATEGIES = PERP_LENDING_STRATEGIES + PERP_BORROWING_STRATEGIES
 ```
+Also fixed: `analysis/position_service.py` hardcoded `_perp` tuple → `settings.PERP_STRATEGIES`
 
-### 5. `analysis/rate_analyzer.py`
-- Add `_generate_perp_lending_recursive_strategies(calculator)` method:
-  - Same iteration as `_generate_perp_lending_strategies()` over `(perp_token, spot_token, protocol_a)`
-  - PLUS inner loop over `self.STABLECOINS` as token2 (stablecoin to borrow)
-  - Collect for each combination: `collateral_ratio_1A`, `liquidation_threshold_1A`, `borrow_rate_2A`, `borrow_fee_2A`, `borrow_weight_2A`, `price_2A` (for stablecoin at Protocol A)
-  - Call `calculator.analyze_strategy()` with all new params
-- In `analyze_all_combinations()`: add `elif strategy_type == 'perp_lending_recursive':` dispatch to new generator
+### 5. `analysis/rate_analyzer.py` ✅ (already implemented)
+- `_generate_perp_lending_strategies(calculator)` extended to handle both `perp_lending` and `perp_lending_recursive`:
+  - `stablecoins = list(self.STABLECOINS) if calculator.get_required_legs() >= 3 else [None]`
+  - `valid_protocols` pre-filter: filters `self.lend_rates` on `Contract == spot_contract`, then `pd.notna()` per protocol; prints loud warning if contract not found
+  - Inner stablecoin loop: when `stablecoin is not None`, collects `collateral_ratio_1A`, `liquidation_threshold_1A`, `borrow_total_apr_2A`, `borrow_fee_2A`, `borrow_weight_2A`, `price_2A`, `token2_contract` and passes as `**borrow_params`
+  - For `perp_lending`: `borrow_params = {}` — `analyze_strategy()` receives identical args to before
+- `analyze_all_combinations()` dispatcher uses `settings.PERP_LENDING_STRATEGIES` and `settings.PERP_BORROWING_STRATEGIES` (no hardcoded tuples)
 
 ### 6. `dashboard/position_renderers.py`
 - Add `@register_strategy_renderer('perp_lending_recursive')` decorator alongside existing `@register_strategy_renderer('perp_lending')` on `PerpLendingRenderer`
-- In `PerpLendingRenderer.render_strategy_modal_table()`: add conditional B_A row (stablecoin borrow) when `strategy.get('b_a', 0) > 0`
-- In `PerpLendingRenderer.render_detail_table()`: add conditional B_A row rendering when `position.get('b_a', 0) > 0`
-- Update `build_token_flow_string()` to show `{token1} (Spot) ↔ {token2} (Borrow) ↔ {token4} (Short Perp)` when token2 is present
+- In `PerpLendingRenderer.render_strategy_modal_table()`: add conditional B_A row (stablecoin borrow) — use direct key access `strategy['b_a']` wrapped in try/except; catch KeyError, print debug info + available keys, skip row and continue (Design Note #16)
+- In `PerpLendingRenderer.render_detail_table()`: same pattern — `position['b_a']` direct access, try/except KeyError with debug output, skip row and continue
+- Update `build_token_flow_string()` to show `{token1} (Spot) ↔ {token2} (Borrow) ↔ {token4} (Short Perp)` — use direct key access `strategy['token2']`, try/except KeyError with debug output
 
-### 7. `dashboard/dashboard_renderer.py`
-- `strategy_type_map` (line 382): add `'perp_lending_recursive': 'Perp Lending (Recursive)'`
-- `is_perp` check (line 672): add `'perp_lending_recursive'`
-- Token pair display (lines 397-400): add `elif strategy_type == 'perp_lending_recursive': token_pair = f"{row['token1']} ↔ {row['token2']} ↔ {row['token4']}"`
-- `entry_basis` (line 641): add `'perp_lending_recursive'` to the `perp_lending` branch (both use `basis_bid`)
-- Header rendering (line 677-682): handle `perp_lending_recursive` header
-- All other `strategy_type == 'perp_lending'` checks → `strategy_type in ('perp_lending', 'perp_lending_recursive')`
+### 7. `dashboard/dashboard_renderer.py` (partial ✅)
+- ✅ `is_perp` (line 672): `strategy_type in settings.PERP_STRATEGIES`
+- ✅ `_is_perp` (line 834): `_strategy_type in settings.PERP_STRATEGIES`
+- ✅ `enabled_strategy_types` filter: `extend(settings.PERP_LENDING_STRATEGIES)` / `extend(settings.PERP_BORROWING_STRATEGIES)`
+- ❌ `strategy_type_map`: add `'perp_lending_recursive': 'Perp Lending (Recursive)'`
+- ❌ Token pair display (lines 397-400): add `elif strategy_type == 'perp_lending_recursive': token_pair = f"{row['token1']} ↔ {row['token2']} ↔ {row['token4']}"`
+- ❌ `entry_basis` (line 641): add `'perp_lending_recursive'` to the `perp_lending` branch (both use `basis_bid`)
+- ❌ Header rendering (line 677-682): handle `perp_lending_recursive` header
+- ❌ All remaining `strategy_type == 'perp_lending'` checks → `strategy_type in settings.PERP_LENDING_STRATEGIES`
 
-### 8. `dashboard/analysis_tab.py`
-- `is_perp` check (line 105): add `'perp_lending_recursive'`
-- `is_perp_lending` check (line 195): change to `strategy_type in ('perp_lending', 'perp_lending_recursive')`
-- Header render (line 108-113): add `elif strategy_type == 'perp_lending_recursive': ...`
-- Rate table columns (line 209): `perp_lending_recursive` uses same columns as `perp_lending` PLUS `borrow_rate_2A` for the stablecoin borrow leg
+### 8. `dashboard/analysis_tab.py` (partial ✅)
+- ✅ `is_perp`: `strategy_type in settings.PERP_STRATEGIES`
+- ✅ `is_perp_lending`: `strategy_type in settings.PERP_LENDING_STRATEGIES`
+- ✅ `is_perp_borrowing`: `strategy_type in settings.PERP_BORROWING_STRATEGIES`
+- ❌ Header render (line 108-113): add `elif strategy_type == 'perp_lending_recursive': ...`
+- ❌ Rate table columns (line 209): `perp_lending_recursive` uses same columns as `perp_lending` PLUS `borrow_rate_2A` for the stablecoin borrow leg
 
 ### 9. `analysis/strategy_history/__init__.py`
 - Import `PerpLendingRecursiveHistoryHandler` from `.perp_lending_recursive`
@@ -128,10 +133,10 @@ The `PERP_STRATEGIES` branch already handles basis lookup. `perp_lending_recursi
 Change the existing `if strategy_type == 'perp_lending':` pattern to:
 ```python
 perp_contract = (strategy['token4_contract']
-                 if strategy_type in ('perp_lending', 'perp_lending_recursive')
+                 if strategy_type in settings.PERP_LENDING_STRATEGIES
                  else strategy['token3_contract'])
 spot_contract = (strategy['token1_contract']
-                 if strategy_type in ('perp_lending', 'perp_lending_recursive')
+                 if strategy_type in settings.PERP_LENDING_STRATEGIES
                  else strategy['token2_contract'])
 ```
 

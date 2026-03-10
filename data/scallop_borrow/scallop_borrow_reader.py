@@ -22,7 +22,7 @@ class ScallopBorrowReader(ScallopBaseReader):
         lend_df["Supply_reward_apr"] = 0.0
         lend_df["Supply_apr"] = 0.0
 
-        print("\t\t(ScallopBorrow: lending APRs set to 0)")
+        print(f"[FETCH] ScallopBorrow: {getattr(self, '_npools', len(lend_df))} pools ({getattr(self, '_elapsed', 0):.1f}s)")
         return lend_df, borrow_df, coll_df
 
 

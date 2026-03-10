@@ -13,6 +13,7 @@ from .recursive_lending import RecursiveLendingCalculator
 from .perp_lending import PerpLendingCalculator
 from .perp_borrowing import PerpBorrowingCalculator
 from .perp_borrowing_recursive import PerpBorrowingRecursiveCalculator
+from .perp_lending_recursive import PerpLendingRecursiveCalculator
 
 # Global calculator registry
 _CALCULATORS: Dict[str, StrategyCalculatorBase] = {}
@@ -102,6 +103,7 @@ register_calculator(RecursiveLendingCalculator)
 register_calculator(PerpLendingCalculator)
 register_calculator(PerpBorrowingCalculator)
 register_calculator(PerpBorrowingRecursiveCalculator)
+register_calculator(PerpLendingRecursiveCalculator)
 
 # Export public API
 __all__ = [
@@ -115,6 +117,7 @@ __all__ = [
     'PerpLendingCalculator',
     'PerpBorrowingCalculator',
     'PerpBorrowingRecursiveCalculator',
+    'PerpLendingRecursiveCalculator',
 
     # Registry functions
     'register_calculator',

@@ -18,6 +18,7 @@ from .noloop_cross_protocol import NoLoopCrossProtocolHistoryHandler
 from .recursive_lending import RecursiveLendingHistoryHandler
 from .perp_borrowing import PerpBorrowingHistoryHandler
 from .perp_lending import PerpLendingHistoryHandler
+from .perp_lending_recursive import PerpLendingRecursiveHistoryHandler
 
 
 # Global handler registry
@@ -85,6 +86,7 @@ register_handler(RecursiveLendingHistoryHandler)
 register_handler(PerpBorrowingHistoryHandler)                          # registers 'perp_borrowing'
 _HANDLERS['perp_borrowing_recursive'] = _HANDLERS['perp_borrowing']   # reuse same 3-leg handler
 register_handler(PerpLendingHistoryHandler)                            # registers 'perp_lending'
+register_handler(PerpLendingRecursiveHistoryHandler)                   # registers 'perp_lending_recursive'
 
 logger.info(f"Registered {len(_HANDLERS)} strategy history handlers: {get_all_strategy_types()}")
 
@@ -96,6 +98,7 @@ __all__ = [
     'RecursiveLendingHistoryHandler',
     'PerpBorrowingHistoryHandler',
     'PerpLendingHistoryHandler',
+    'PerpLendingRecursiveHistoryHandler',
     'register_handler',
     'get_handler',
     'get_all_strategy_types',

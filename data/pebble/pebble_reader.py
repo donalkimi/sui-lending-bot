@@ -200,9 +200,7 @@ class PebbleReader:
         """
 
         # First, fetch rewards data
-        print("\tFetching rewards data...")
         rewards_map = self._fetch_rewards_data()
-        print(f"\tFound rewards for {len(rewards_map)} token/market combinations")
 
         lend_rates_data = []
         borrow_rates_data = []
@@ -212,7 +210,6 @@ class PebbleReader:
 
         # Fetch data from all market types
         for market_type in self.MARKET_TYPES:
-            print(f"\tFetching {market_type}...")
             pools = self._fetch_market_data(market_type)
             
             for pool in pools:
@@ -359,8 +356,6 @@ class PebbleReader:
 
                 total_pools += 1
 
-        print(f"\t\tfound {total_pools} active pools across all markets")
-
         lend_rates = pd.DataFrame(lend_rates_data)
         borrow_rates = pd.DataFrame(borrow_rates_data)
         collateral_ratios = pd.DataFrame(collateral_ratios_data)
@@ -370,7 +365,7 @@ class PebbleReader:
             lend_rates, borrow_rates, collateral_ratios
         )
 
-        print(f"\t\tAfter dedup: {len(lend_rates)} unique tokens")
+        print(f"[FETCH] Pebble: {len(lend_rates)} tokens ({total_pools} pools across {len(self.MARKET_TYPES)} markets)")
 
         return lend_rates, borrow_rates, collateral_ratios
 

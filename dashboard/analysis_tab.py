@@ -102,11 +102,13 @@ def _render_strategy_summary(strategy: dict, timestamp_seconds: int) -> None:
     from utils.time_helpers import to_datetime_str
 
     strategy_type = strategy.get('strategy_type', '')
-    is_perp = strategy_type in ('perp_lending', 'perp_borrowing', 'perp_borrowing_recursive')
+    is_perp = strategy_type in settings.PERP_STRATEGIES
 
     # ── Header ────────────────────────────────────────────────────────────
     if strategy_type == 'perp_lending':
         st.markdown(f"#### {strategy.get('token1')} ↔ {strategy.get('token4')} (Perp Lending)")
+    elif strategy_type == 'perp_lending_recursive':
+        st.markdown(f"#### {strategy.get('token1')} ↔ {strategy.get('token2')} ↔ {strategy.get('token4')} (Perp Lending Recursive)")
     elif is_perp:
         st.markdown(f"#### {strategy.get('token1')} / {strategy.get('token2')} / {strategy.get('token3')} (Perp Borrowing)")
     else:
@@ -121,7 +123,10 @@ def _render_strategy_summary(strategy: dict, timestamp_seconds: int) -> None:
         t2 = strategy.get('token2', '')
         t3 = strategy.get('token3', '')
         t4 = strategy.get('token4', '')
-        token_flow = f"{t1} ↔ {t4}" if strategy_type == 'perp_lending' else f"{t1} → {t2} → {t3}"
+        if strategy_type in settings.PERP_LENDING_STRATEGIES:
+            token_flow = f"{t1} ↔ {t2} ↔ {t4}" if t2 else f"{t1} ↔ {t4}"
+        else:
+            token_flow = f"{t1} → {t2} → {t3}"
 
     def _sf(key, default=0.0):
         try:
@@ -191,9 +196,9 @@ def _render_rate_table(history_df: pd.DataFrame, strategy: dict) -> None:
     All rates displayed as % per Design Note #7.
     """
     strategy_type = strategy.get('strategy_type', '')
-    is_perp_borrowing = strategy_type in ('perp_borrowing', 'perp_borrowing_recursive')
-    is_perp_lending   = strategy_type == 'perp_lending'
-    is_perp           = is_perp_borrowing or is_perp_lending
+    is_perp_borrowing = strategy_type in settings.PERP_BORROWING_STRATEGIES
+    is_perp_lending   = strategy_type in settings.PERP_LENDING_STRATEGIES
+    is_perp           = strategy_type in settings.PERP_STRATEGIES
 
     rows = []
     for ts, row in history_df.iterrows():
@@ -207,8 +212,10 @@ def _render_rate_table(history_df: pd.DataFrame, strategy: dict) -> None:
         }
 
         if is_perp_lending:
-            # 2 legs: spot lend + perp short
+            # 2 legs (perp_lending) or 3 legs (perp_lending_recursive): spot lend + optional stablecoin borrow + perp short
             record['Lend 1A'] = _fmt(row.get('lend_total_apr_1A'))
+            if strategy_type == 'perp_lending_recursive':
+                record['Borrow 2A'] = _fmt(row.get('borrow_total_apr_2A'))
             record['Perp 3B'] = _fmt(row.get('perp_rate_3B'))
             record['Perp 3B (8hr)'] = _fmt(row.get('avg8hr_perp_rate_3B'))
             record['Perp 3B (24hr)'] = _fmt(row.get('avg24hr_perp_rate_3B'))

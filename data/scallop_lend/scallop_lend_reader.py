@@ -27,7 +27,7 @@ class ScallopLendReader(ScallopBaseReader):
         borrow_df["Borrow_reward_apr"] = float('nan')
         borrow_df["Borrow_apr"] = float('nan')
 
-        print("\t\t(ScallopLend: collateral factors set to 0, borrow APRs set to NaN)")
+        print(f"[FETCH] ScallopLend: {getattr(self, '_npools', len(lend_df))} pools ({getattr(self, '_elapsed', 0):.1f}s)")
         return lend_df, borrow_df, coll_df
 
 
