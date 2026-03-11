@@ -452,22 +452,28 @@ CREATE TABLE IF NOT EXISTS positions (
     entry_liquidation_price_token4 DECIMAL(20, 10),  -- B_B borrow side liq price
 
     -- Entry Liquidation Distances (generated from liq price and entry price)
-    -- Formula: (liq_price - entry_price) / liq_price  → sign indicates direction of risk
+    -- Formula: (liq_price - entry_price) / entry_price  → sign indicates direction of risk
+    --   negative = price must fall to liquidate (lend leg / long perp)
+    --   positive = price must rise to liquidate (borrow leg / short perp)
     entry_liquidation_distance_token1 DECIMAL(10, 8) GENERATED ALWAYS AS (
         CASE WHEN entry_liquidation_price_token1 IS NOT NULL AND entry_liquidation_price_token1 != 0
-        THEN (entry_liquidation_price_token1 - entry_token1_price) / entry_liquidation_price_token1
+             AND entry_token1_price IS NOT NULL AND entry_token1_price != 0
+        THEN (entry_liquidation_price_token1 - entry_token1_price) / entry_token1_price
         ELSE NULL END) STORED,
     entry_liquidation_distance_token2 DECIMAL(10, 8) GENERATED ALWAYS AS (
         CASE WHEN entry_liquidation_price_token2 IS NOT NULL AND entry_liquidation_price_token2 != 0
-        THEN (entry_liquidation_price_token2 - entry_token2_price) / entry_liquidation_price_token2
+             AND entry_token2_price IS NOT NULL AND entry_token2_price != 0
+        THEN (entry_liquidation_price_token2 - entry_token2_price) / entry_token2_price
         ELSE NULL END) STORED,
     entry_liquidation_distance_token3 DECIMAL(10, 8) GENERATED ALWAYS AS (
         CASE WHEN entry_liquidation_price_token3 IS NOT NULL AND entry_liquidation_price_token3 != 0
-        THEN (entry_liquidation_price_token3 - entry_token3_price) / entry_liquidation_price_token3
+             AND entry_token3_price IS NOT NULL AND entry_token3_price != 0
+        THEN (entry_liquidation_price_token3 - entry_token3_price) / entry_token3_price
         ELSE NULL END) STORED,
     entry_liquidation_distance_token4 DECIMAL(10, 8) GENERATED ALWAYS AS (
         CASE WHEN entry_liquidation_price_token4 IS NOT NULL AND entry_liquidation_price_token4 != 0
-        THEN (entry_liquidation_price_token4 - entry_token4_price) / entry_liquidation_price_token4
+             AND entry_token4_price IS NOT NULL AND entry_token4_price != 0
+        THEN (entry_liquidation_price_token4 - entry_token4_price) / entry_token4_price
         ELSE NULL END) STORED,
 
     CONSTRAINT positions_pkey PRIMARY KEY (position_id),
@@ -641,21 +647,26 @@ CREATE TABLE IF NOT EXISTS position_rebalances (
     entry_liquidation_price_token4 DECIMAL(20, 10),
 
     -- Entry Liquidation Distances (generated from liq price and opening price for this segment)
+    -- Formula: (liq_price - opening_price) / opening_price  → same convention as positions table
     entry_liquidation_distance_token1 DECIMAL(10, 8) GENERATED ALWAYS AS (
         CASE WHEN entry_liquidation_price_token1 IS NOT NULL AND entry_liquidation_price_token1 != 0
-        THEN (entry_liquidation_price_token1 - opening_token1_price) / entry_liquidation_price_token1
+             AND opening_token1_price IS NOT NULL AND opening_token1_price != 0
+        THEN (entry_liquidation_price_token1 - opening_token1_price) / opening_token1_price
         ELSE NULL END) STORED,
     entry_liquidation_distance_token2 DECIMAL(10, 8) GENERATED ALWAYS AS (
         CASE WHEN entry_liquidation_price_token2 IS NOT NULL AND entry_liquidation_price_token2 != 0
-        THEN (entry_liquidation_price_token2 - opening_token2_price) / entry_liquidation_price_token2
+             AND opening_token2_price IS NOT NULL AND opening_token2_price != 0
+        THEN (entry_liquidation_price_token2 - opening_token2_price) / opening_token2_price
         ELSE NULL END) STORED,
     entry_liquidation_distance_token3 DECIMAL(10, 8) GENERATED ALWAYS AS (
         CASE WHEN entry_liquidation_price_token3 IS NOT NULL AND entry_liquidation_price_token3 != 0
-        THEN (entry_liquidation_price_token3 - opening_token3_price) / entry_liquidation_price_token3
+             AND opening_token3_price IS NOT NULL AND opening_token3_price != 0
+        THEN (entry_liquidation_price_token3 - opening_token3_price) / opening_token3_price
         ELSE NULL END) STORED,
     entry_liquidation_distance_token4 DECIMAL(10, 8) GENERATED ALWAYS AS (
         CASE WHEN entry_liquidation_price_token4 IS NOT NULL AND entry_liquidation_price_token4 != 0
-        THEN (entry_liquidation_price_token4 - opening_token4_price) / entry_liquidation_price_token4
+             AND opening_token4_price IS NOT NULL AND opening_token4_price != 0
+        THEN (entry_liquidation_price_token4 - opening_token4_price) / opening_token4_price
         ELSE NULL END) STORED,
 
     CONSTRAINT position_rebalances_pkey PRIMARY KEY (rebalance_id),
