@@ -5,11 +5,11 @@ APR calculations have moved to analysis/strategy_calculators/base.py.
 Position sizing is handled per-strategy in the StrategyCalculatorBase subclasses.
 """
 
-from typing import Dict, Union
+from typing import Dict, Union, Optional
 
 
 class PositionCalculator:
-    """Liquidation price calculator for lending positions."""
+    """Liquidation price calculator for lending and perp positions."""
 
     def __init__(self, liquidation_distance: float = 0.30):
         """
@@ -29,29 +29,54 @@ class PositionCalculator:
         lltv: float,
         side: str,
         borrow_weight: float = 1.0
-    ) -> Dict[str, Union[float, str]]:
+    ) -> Dict[str, Union[float, str, None]]:
         """
         Calculate the token price at which a position would be liquidated.
 
-        Solves for the price movement required to trigger liquidation
-        by calculating when LTV equals LLTV.
+        For lending/borrowing legs: solves for the price movement required to trigger
+        liquidation by calculating when LTV equals LLTV.
+
+        For perp legs: uses exchange-side liquidation distance from the constructor.
+          - 'long_perp':  liq_price = lending_token_price * (1 - liq_dist_input)
+          - 'short_perp': liq_price = lending_token_price * (1 + liq_dist_input)
+        For perp sides, collateral_value/loan_value/borrowing_token_price/lltv are unused.
 
         Args:
-            collateral_value: Total USD value of collateral position
-            loan_value: Total USD value of borrowed position
-            lending_token_price: Current price of lending/collateral token (USD)
-            borrowing_token_price: Current price of borrowing/loan token (USD)
-            lltv: Liquidation Loan-to-Value ratio as decimal (e.g., 0.75 for 75%)
-            side: Calculate for 'lending' price drop or 'borrowing' price rise
-            borrow_weight: Borrow weight multiplier (default 1.0)
+            collateral_value: Total USD value of collateral position (unused for perp sides)
+            loan_value: Total USD value of borrowed position (unused for perp sides)
+            lending_token_price: Current price of lending/collateral/perp token (USD)
+            borrowing_token_price: Current price of borrowing/loan token (unused for perp sides)
+            lltv: Liquidation Loan-to-Value ratio as decimal (unused for perp sides)
+            side: 'lending', 'borrowing', 'long_perp', or 'short_perp'
+            borrow_weight: Borrow weight multiplier (default 1.0, unused for perp sides)
 
         Returns:
             Dict with liq_price, current_price, pct_distance, current_ltv, lltv, direction
+            (current_ltv and lltv are None for perp sides)
 
         Raises:
-            ValueError: If side is not 'lending' or 'borrowing'
-            ValueError: If token prices are not positive
+            ValueError: If side is not one of the four valid values
+            ValueError: If lending_token_price is not positive
         """
+        # Perp legs: exchange-side liquidation, only needs the entry price
+        if side in ('long_perp', 'short_perp'):
+            if not lending_token_price or lending_token_price <= 0:
+                raise ValueError("lending_token_price must be positive for perp liq calculation")
+            if side == 'long_perp':
+                liq_price = lending_token_price * (1.0 - self.liq_dist_input)
+                direction = 'down'
+            else:
+                liq_price = lending_token_price * (1.0 + self.liq_dist_input)
+                direction = 'up'
+            return {
+                'liq_price': liq_price,
+                'current_price': lending_token_price,
+                'pct_distance': (liq_price - lending_token_price) / lending_token_price,
+                'current_ltv': None,
+                'lltv': None,
+                'direction': direction,
+            }
+
         if side not in ['lending', 'borrowing']:
             raise ValueError(f"side must be 'lending' or 'borrowing', got '{side}'")
 

@@ -276,9 +276,35 @@ class PositionService:
 
         _collateral_B = entry_token3_amount * entry_token3_price if entry_token3_amount and entry_token3_price else 0.0
         _loan_B = entry_token4_amount * entry_token4_price if entry_token4_amount and entry_token4_price else 0.0
-        if _collateral_B > 0 and _loan_B > 0:
-            _lltv_B = entry_token3_liquidation_threshold or entry_token3_collateral_ratio
-            _bw_B = entry_token4_borrow_weight or 1.0
+        _lltv_B = entry_token3_liquidation_threshold or entry_token3_collateral_ratio
+        _bw_B = entry_token4_borrow_weight or 1.0
+
+        if strategy_type in settings.PERP_BORROWING_STRATEGIES and entry_token3_price:
+            # Long perp (token3): exchange-side liq when price falls
+            entry_liq_price_token3 = _calc.calculate_liquidation_price(
+                collateral_value=0, loan_value=0,
+                lending_token_price=entry_token3_price, borrowing_token_price=0,
+                lltv=0, side='long_perp'
+            ).get('liq_price')
+            entry_liq_price_token4 = None
+        elif strategy_type in settings.PERP_LENDING_STRATEGIES and entry_token4_price:
+            # Short perp (token4): exchange-side liq when price rises
+            entry_liq_price_token4 = _calc.calculate_liquidation_price(
+                collateral_value=0, loan_value=0,
+                lending_token_price=entry_token4_price, borrowing_token_price=0,
+                lltv=0, side='short_perp'
+            ).get('liq_price')
+            # token3 is a stablecoin lend leg — LLTV-based if pair is present
+            if _collateral_B > 0 and _loan_B > 0 and _lltv_B:
+                entry_liq_price_token3 = _calc.calculate_liquidation_price(
+                    collateral_value=_collateral_B, loan_value=_loan_B,
+                    lending_token_price=entry_token3_price, borrowing_token_price=entry_token4_price,
+                    lltv=_lltv_B, side='lending', borrow_weight=_bw_B
+                ).get('liq_price')
+            else:
+                entry_liq_price_token3 = None
+        elif _collateral_B > 0 and _loan_B > 0:
+            # Non-perp: standard LLTV-based liq for both legs
             entry_liq_price_token3 = _calc.calculate_liquidation_price(
                 collateral_value=_collateral_B, loan_value=_loan_B,
                 lending_token_price=entry_token3_price, borrowing_token_price=entry_token4_price,
@@ -299,7 +325,7 @@ class PositionService:
         # Insert position
         cursor = self.conn.cursor()
         ph = self._get_placeholder()
-        placeholders = ', '.join([ph] * 60)  # 60 values (added 4 entry_liq_price_token* columns)
+        placeholders = ', '.join([ph] * 58)  # 58 values
 
         try:
             cursor.execute(f"""
@@ -1604,8 +1630,16 @@ class PositionService:
                 borrow_weight=position.get('entry_token4_borrow_weight', 1.0)
             )
         else:
-            # No Protocol B borrow leg — liq calculations not applicable for this strategy
-            liq_result_2b = {'liq_price': None, 'pct_distance': None}
+            # No Protocol B borrow leg — check for perp long (token3)
+            _snap_strategy = position.get('strategy_type', '')
+            if _snap_strategy in settings.PERP_BORROWING_STRATEGIES and closing_rates.get('price_token3'):
+                liq_result_2b = calc.calculate_liquidation_price(
+                    collateral_value=0, loan_value=0,
+                    lending_token_price=closing_rates['price_token3'], borrowing_token_price=0,
+                    lltv=0, side='long_perp'
+                )
+            else:
+                liq_result_2b = {'liq_price': None, 'pct_distance': None}
             liq_result_3b = {'liq_price': None, 'pct_distance': None}
 
         # 6b. Calculate "before" liquidation distances (at opening_timestamp with opening prices)
@@ -1641,7 +1675,15 @@ class PositionService:
                 borrow_weight=position.get('entry_token4_borrow_weight', 1.0)
             )
         else:
-            opening_liq_result_2b = {'liq_price': None, 'pct_distance': None}
+            # No Protocol B borrow leg — check for perp long (token3)
+            if _snap_strategy in settings.PERP_BORROWING_STRATEGIES and position.get('entry_token3_price'):
+                opening_liq_result_2b = calc.calculate_liquidation_price(
+                    collateral_value=0, loan_value=0,
+                    lending_token_price=position['entry_token3_price'], borrowing_token_price=0,
+                    lltv=0, side='long_perp'
+                )
+            else:
+                opening_liq_result_2b = {'liq_price': None, 'pct_distance': None}
 
         # Store before/after liquidation distances for Slack notification
         liq_dist_2a_before = opening_liq_result_2a.get('pct_distance')
@@ -2118,7 +2160,30 @@ class PositionService:
                 _new_loan_B = _new_a4 * _new_p4 if _new_a4 and _new_p4 else 0.0
                 _lltv_B = position.get('entry_token3_liquidation_threshold') or position.get('entry_token3_collateral_ratio')
                 _bw_B = position.get('entry_token4_borrow_weight') or 1.0
-                if _new_coll_B > 0 and _new_loan_B > 0 and _lltv_B:
+                _strategy_type = position.get('strategy_type', '')
+
+                if _strategy_type in settings.PERP_BORROWING_STRATEGIES and _new_p3:
+                    _new_liq_p3 = _new_calc.calculate_liquidation_price(
+                        collateral_value=0, loan_value=0,
+                        lending_token_price=_new_p3, borrowing_token_price=0,
+                        lltv=0, side='long_perp'
+                    ).get('liq_price')
+                    _new_liq_p4 = None
+                elif _strategy_type in settings.PERP_LENDING_STRATEGIES and _new_p4:
+                    _new_liq_p4 = _new_calc.calculate_liquidation_price(
+                        collateral_value=0, loan_value=0,
+                        lending_token_price=_new_p4, borrowing_token_price=0,
+                        lltv=0, side='short_perp'
+                    ).get('liq_price')
+                    if _new_coll_B > 0 and _new_loan_B > 0 and _lltv_B:
+                        _new_liq_p3 = _new_calc.calculate_liquidation_price(
+                            collateral_value=_new_coll_B, loan_value=_new_loan_B,
+                            lending_token_price=_new_p3, borrowing_token_price=_new_p4,
+                            lltv=_lltv_B, side='lending', borrow_weight=_bw_B
+                        ).get('liq_price')
+                    else:
+                        _new_liq_p3 = None
+                elif _new_coll_B > 0 and _new_loan_B > 0 and _lltv_B:
                     _new_liq_p3 = _new_calc.calculate_liquidation_price(
                         collateral_value=_new_coll_B, loan_value=_new_loan_B,
                         lending_token_price=_new_p3, borrowing_token_price=_new_p4,

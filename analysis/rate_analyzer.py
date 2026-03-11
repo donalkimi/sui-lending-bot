@@ -961,7 +961,7 @@ class RateAnalyzer:
         # Get all Bluefin perp tokens from rates
         bluefin_tokens = [token for token in self.ALL_TOKENS if '-PERP' in token]
 
-        print(f"[ANALYZER] Perp: Found {len(bluefin_tokens)} perp tokens, mapping to spot contracts...")
+        print(f"[ANALYZER] Perp ({calculator.get_strategy_type()}): Found {len(bluefin_tokens)} perp tokens, mapping to spot contracts...")
 
         if not bluefin_tokens:
             print("[ANALYZER] Perp: No Bluefin perp markets found in rates_snapshot")
@@ -1108,7 +1108,7 @@ class RateAnalyzer:
                         if result['valid']:
                             results.append(result)
 
-        print(f"[ANALYZER] Perp: Generated {len(results)} total strategies")
+        print(f"[ANALYZER] Perp ({calculator.get_strategy_type()}): Generated {len(results)} total strategies")
         df = pd.DataFrame(results)
         if not df.empty:
             df['strategy_type'] = calculator.get_strategy_type()
@@ -1135,7 +1135,7 @@ class RateAnalyzer:
         results = []
         bluefin_tokens = [t for t in self.ALL_TOKENS if '-PERP' in t]
 
-        print(f"[ANALYZER] PerpBorrowing: Found {len(bluefin_tokens)} perp tokens, generating strategies...")
+        print(f"[ANALYZER] PerpBorrowing ({calculator.get_strategy_type()}): Found {len(bluefin_tokens)} perp tokens, generating strategies...")
         if not bluefin_tokens:
             print("[ANALYZER] PerpBorrowing: No Bluefin perp markets found in rates_snapshot")
             return pd.DataFrame()
@@ -1237,7 +1237,7 @@ class RateAnalyzer:
                         if result.get('valid', False):
                             results.append(result)
 
-        print(f"[ANALYZER] PerpBorrowing: Generated {len(results)} strategies")
+        print(f"[ANALYZER] PerpBorrowing ({calculator.get_strategy_type()}): Generated {len(results)} strategies")
         df = pd.DataFrame(results)
         if not df.empty:
             df['strategy_type'] = calculator.get_strategy_type()

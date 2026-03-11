@@ -323,7 +323,7 @@ FROM reward_token_prices;
 CREATE TABLE IF NOT EXISTS positions (
     -- Position Identification
     position_id TEXT NOT NULL,
-    status TEXT NOT NULL CHECK (status IN ('active', 'closed', 'liquidated')),
+    status TEXT NOT NULL,
     strategy_type TEXT NOT NULL DEFAULT 'recursive_lending',
 
     -- Phase 1/2 flags
@@ -426,6 +426,24 @@ CREATE TABLE IF NOT EXISTS positions (
     entry_token3_amount DECIMAL(30, 10),  -- L_B token count
     entry_token4_amount DECIMAL(30, 10),  -- B_B token count
 
+    -- B_B leg token (NULL = leg unused)
+    token4 TEXT,
+    token4_contract TEXT,
+
+    -- Entry Basis (perp strategies only, NULL for non-perp)
+    -- Generated from entry prices — no application write needed.
+    --   perp_lending / perp_lending_recursive:     (token4_price - token1_price) / token4_price
+    --   perp_borrowing / perp_borrowing_recursive: (token3_price - token2_price) / token3_price
+    entry_basis DECIMAL(10, 8) GENERATED ALWAYS AS (
+        CASE
+            WHEN strategy_type IN ('perp_lending', 'perp_lending_recursive')
+            THEN (entry_token4_price - entry_token1_price) / NULLIF(entry_token4_price, 0)
+            WHEN strategy_type IN ('perp_borrowing', 'perp_borrowing_recursive')
+            THEN (entry_token3_price - entry_token2_price) / NULLIF(entry_token3_price, 0)
+            ELSE NULL
+        END
+    ) STORED,
+
     -- Entry Liquidation Prices (calculated via PositionCalculator at position creation and after each rebalance)
     -- NULL when leg is unused or the leg pair is missing (e.g. no borrow leg → no liq price for lend leg)
     entry_liquidation_price_token1 DECIMAL(20, 10),  -- L_A lend side liq price
@@ -441,42 +459,20 @@ CREATE TABLE IF NOT EXISTS positions (
         ELSE NULL END) STORED,
     entry_liquidation_distance_token2 DECIMAL(10, 8) GENERATED ALWAYS AS (
         CASE WHEN entry_liquidation_price_token2 IS NOT NULL AND entry_liquidation_price_token2 != 0
-             AND entry_token2_price IS NOT NULL
         THEN (entry_liquidation_price_token2 - entry_token2_price) / entry_liquidation_price_token2
         ELSE NULL END) STORED,
     entry_liquidation_distance_token3 DECIMAL(10, 8) GENERATED ALWAYS AS (
         CASE WHEN entry_liquidation_price_token3 IS NOT NULL AND entry_liquidation_price_token3 != 0
-             AND entry_token3_price IS NOT NULL
         THEN (entry_liquidation_price_token3 - entry_token3_price) / entry_liquidation_price_token3
         ELSE NULL END) STORED,
     entry_liquidation_distance_token4 DECIMAL(10, 8) GENERATED ALWAYS AS (
         CASE WHEN entry_liquidation_price_token4 IS NOT NULL AND entry_liquidation_price_token4 != 0
-             AND entry_token4_price IS NOT NULL
         THEN (entry_liquidation_price_token4 - entry_token4_price) / entry_liquidation_price_token4
         ELSE NULL END) STORED,
 
-    -- Entry Basis (perp strategies only, NULL for non-perp)
-    -- Generated from entry prices — no application write needed.
-    --   perp_lending / perp_lending_recursive:     (token4_price - token1_price) / token4_price
-    --   perp_borrowing / perp_borrowing_recursive: (token3_price - token2_price) / token3_price
-    entry_basis DECIMAL(10, 8) GENERATED ALWAYS AS (
-        CASE
-            WHEN strategy_type IN ('perp_lending', 'perp_lending_recursive')
-                 AND entry_token4_price IS NOT NULL AND entry_token4_price > 0
-            THEN (entry_token4_price - entry_token1_price) / entry_token4_price
-            WHEN strategy_type IN ('perp_borrowing', 'perp_borrowing_recursive')
-                 AND entry_token3_price IS NOT NULL AND entry_token3_price > 0
-            THEN (entry_token3_price - entry_token2_price) / entry_token3_price
-            ELSE NULL
-        END
-    ) STORED,
-
-    -- B_B leg token (NULL = leg unused)
-    token4 TEXT,
-    token4_contract TEXT,
-
     CONSTRAINT positions_pkey PRIMARY KEY (position_id),
-    CONSTRAINT fk_positions_portfolio FOREIGN KEY (portfolio_id) REFERENCES portfolios(portfolio_id) ON DELETE SET NULL
+    CONSTRAINT fk_positions_portfolio FOREIGN KEY (portfolio_id) REFERENCES portfolios(portfolio_id) ON DELETE SET NULL,
+    CONSTRAINT positions_status_check CHECK (status IN ('active', 'closed', 'liquidated'))
 );
 
 -- Indexes for positions
@@ -510,7 +506,6 @@ CREATE TABLE IF NOT EXISTS position_rebalances (
     rebalance_id TEXT NOT NULL,
     position_id TEXT NOT NULL,
     sequence_number INTEGER NOT NULL,
-    strategy_type TEXT,            -- Strategy type (written by create_rebalance_record; enables generated basis columns)
 
     -- Timing
     opening_timestamp TIMESTAMP NOT NULL,
@@ -542,59 +537,6 @@ CREATE TABLE IF NOT EXISTS position_rebalances (
     closing_token2_price DECIMAL(20, 10),
     closing_token3_price DECIMAL(20, 10),
     closing_token4_price DECIMAL(20, 10),
-
-    -- Entry Liquidation Prices for this segment (= opening state; copied from positions before update)
-    entry_liquidation_price_token1 DECIMAL(20, 10),
-    entry_liquidation_price_token2 DECIMAL(20, 10),
-    entry_liquidation_price_token3 DECIMAL(20, 10),
-    entry_liquidation_price_token4 DECIMAL(20, 10),
-
-    -- Entry Liquidation Distances (generated from liq price and opening price for this segment)
-    entry_liquidation_distance_token1 DECIMAL(10, 8) GENERATED ALWAYS AS (
-        CASE WHEN entry_liquidation_price_token1 IS NOT NULL AND entry_liquidation_price_token1 != 0
-        THEN (entry_liquidation_price_token1 - opening_token1_price) / entry_liquidation_price_token1
-        ELSE NULL END) STORED,
-    entry_liquidation_distance_token2 DECIMAL(10, 8) GENERATED ALWAYS AS (
-        CASE WHEN entry_liquidation_price_token2 IS NOT NULL AND entry_liquidation_price_token2 != 0
-             AND opening_token2_price IS NOT NULL
-        THEN (entry_liquidation_price_token2 - opening_token2_price) / entry_liquidation_price_token2
-        ELSE NULL END) STORED,
-    entry_liquidation_distance_token3 DECIMAL(10, 8) GENERATED ALWAYS AS (
-        CASE WHEN entry_liquidation_price_token3 IS NOT NULL AND entry_liquidation_price_token3 != 0
-             AND opening_token3_price IS NOT NULL
-        THEN (entry_liquidation_price_token3 - opening_token3_price) / entry_liquidation_price_token3
-        ELSE NULL END) STORED,
-    entry_liquidation_distance_token4 DECIMAL(10, 8) GENERATED ALWAYS AS (
-        CASE WHEN entry_liquidation_price_token4 IS NOT NULL AND entry_liquidation_price_token4 != 0
-             AND opening_token4_price IS NOT NULL
-        THEN (entry_liquidation_price_token4 - opening_token4_price) / entry_liquidation_price_token4
-        ELSE NULL END) STORED,
-
-    -- Basis (perp strategies only; generated from stored prices — no application write needed)
-    --   perp_lending / perp_lending_recursive:     (token4_price - token1_price) / token4_price
-    --   perp_borrowing / perp_borrowing_recursive: (token3_price - token2_price) / token3_price
-    opening_basis DECIMAL(10, 8) GENERATED ALWAYS AS (
-        CASE
-            WHEN strategy_type IN ('perp_lending', 'perp_lending_recursive')
-                 AND opening_token4_price IS NOT NULL AND opening_token4_price > 0
-            THEN (opening_token4_price - opening_token1_price) / opening_token4_price
-            WHEN strategy_type IN ('perp_borrowing', 'perp_borrowing_recursive')
-                 AND opening_token3_price IS NOT NULL AND opening_token3_price > 0
-            THEN (opening_token3_price - opening_token2_price) / opening_token3_price
-            ELSE NULL
-        END
-    ) STORED,
-    closing_basis DECIMAL(10, 8) GENERATED ALWAYS AS (
-        CASE
-            WHEN strategy_type IN ('perp_lending', 'perp_lending_recursive')
-                 AND closing_token4_price IS NOT NULL AND closing_token4_price > 0
-            THEN (closing_token4_price - closing_token1_price) / closing_token4_price
-            WHEN strategy_type IN ('perp_borrowing', 'perp_borrowing_recursive')
-                 AND closing_token3_price IS NOT NULL AND closing_token3_price > 0
-            THEN (closing_token3_price - closing_token2_price) / closing_token3_price
-            ELSE NULL
-        END
-    ) STORED,
 
     -- Collateral Ratios (NULL for perp strategies where the leg has no collateral ratio)
     token1_collateral_ratio DECIMAL(10, 6) NOT NULL,
@@ -666,6 +608,55 @@ CREATE TABLE IF NOT EXISTS position_rebalances (
     token3_rewards  DECIMAL(20, 10),
     token4_earnings DECIMAL(20, 10),
     token4_rewards  DECIMAL(20, 10),
+
+    -- Strategy type (written by create_rebalance_record; enables generated basis columns)
+    strategy_type TEXT,
+
+    -- Basis (perp strategies only; generated from stored prices — no application write needed)
+    --   perp_lending / perp_lending_recursive:     (token4_price - token1_price) / token4_price
+    --   perp_borrowing / perp_borrowing_recursive: (token3_price - token2_price) / token3_price
+    opening_basis DECIMAL(10, 8) GENERATED ALWAYS AS (
+        CASE
+            WHEN strategy_type IN ('perp_lending', 'perp_lending_recursive')
+            THEN (opening_token4_price - opening_token1_price) / NULLIF(opening_token4_price, 0)
+            WHEN strategy_type IN ('perp_borrowing', 'perp_borrowing_recursive')
+            THEN (opening_token3_price - opening_token2_price) / NULLIF(opening_token3_price, 0)
+            ELSE NULL
+        END
+    ) STORED,
+    closing_basis DECIMAL(10, 8) GENERATED ALWAYS AS (
+        CASE
+            WHEN strategy_type IN ('perp_lending', 'perp_lending_recursive')
+            THEN (closing_token4_price - closing_token1_price) / NULLIF(closing_token4_price, 0)
+            WHEN strategy_type IN ('perp_borrowing', 'perp_borrowing_recursive')
+            THEN (closing_token3_price - closing_token2_price) / NULLIF(closing_token3_price, 0)
+            ELSE NULL
+        END
+    ) STORED,
+
+    -- Entry Liquidation Prices for this segment (= opening state; copied from positions before update)
+    entry_liquidation_price_token1 DECIMAL(20, 10),
+    entry_liquidation_price_token2 DECIMAL(20, 10),
+    entry_liquidation_price_token3 DECIMAL(20, 10),
+    entry_liquidation_price_token4 DECIMAL(20, 10),
+
+    -- Entry Liquidation Distances (generated from liq price and opening price for this segment)
+    entry_liquidation_distance_token1 DECIMAL(10, 8) GENERATED ALWAYS AS (
+        CASE WHEN entry_liquidation_price_token1 IS NOT NULL AND entry_liquidation_price_token1 != 0
+        THEN (entry_liquidation_price_token1 - opening_token1_price) / entry_liquidation_price_token1
+        ELSE NULL END) STORED,
+    entry_liquidation_distance_token2 DECIMAL(10, 8) GENERATED ALWAYS AS (
+        CASE WHEN entry_liquidation_price_token2 IS NOT NULL AND entry_liquidation_price_token2 != 0
+        THEN (entry_liquidation_price_token2 - opening_token2_price) / entry_liquidation_price_token2
+        ELSE NULL END) STORED,
+    entry_liquidation_distance_token3 DECIMAL(10, 8) GENERATED ALWAYS AS (
+        CASE WHEN entry_liquidation_price_token3 IS NOT NULL AND entry_liquidation_price_token3 != 0
+        THEN (entry_liquidation_price_token3 - opening_token3_price) / entry_liquidation_price_token3
+        ELSE NULL END) STORED,
+    entry_liquidation_distance_token4 DECIMAL(10, 8) GENERATED ALWAYS AS (
+        CASE WHEN entry_liquidation_price_token4 IS NOT NULL AND entry_liquidation_price_token4 != 0
+        THEN (entry_liquidation_price_token4 - opening_token4_price) / entry_liquidation_price_token4
+        ELSE NULL END) STORED,
 
     CONSTRAINT position_rebalances_pkey PRIMARY KEY (rebalance_id),
     CONSTRAINT position_rebalances_position_id_sequence_number_key UNIQUE (position_id, sequence_number),
