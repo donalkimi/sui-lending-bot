@@ -273,7 +273,7 @@ Multiple decorators are fully supported — each registers the class with a diff
 
 Multiple places need updating. Search for every occurrence of `'perp_lending'` or the nearest existing variant to find them all:
 
-1. **`strategy_type_map`** — add display label:
+1. **`strategy_type_map`** — add display label. **There are TWO separate `strategy_type_map` dicts in this file** — one near the top of `render_all_strategies_tab()` (~line 377, used in the All Strategies table) and a second one inside the Allocation/Portfolio tab (~line 2909, used in the greedy allocator preview). Both must be updated:
    ```python
    'my_new_strategy': 'My New Strategy',
    ```
@@ -418,6 +418,7 @@ A syntax error in any dashboard file (even a stray `]`) will prevent the entire 
 | `_query_basis_at_timestamp` hardcoded `== 'perp_lending'` | New perp lending variant gets `None` basis dict → `TypeError: 'NoneType' object is not subscriptable` → `UnboundLocalError` on `rebalance_result` | Use `in settings.PERP_LENDING_STRATEGIES` / `in settings.PERP_BORROWING_STRATEGIES` (4 places in `position_service.py`) |
 | `rebalance_result` unbound if try block throws before assignment | `UnboundLocalError: cannot access local variable 'rebalance_result'` | Initialize `rebalance_result = None` before the try block; guard snapshot call with `exit_amounts = rebalance_result or {}` |
 | `render_detail_table` passes `borrow_token=None` for new variant that has a B_A borrow leg | No liquidation price/distance shown for the spot lend row (token1) in Positions tab | Detect `b_a > 0 and token2` in `PerpLendingRenderer.render_detail_table()`, populate borrow params (`borrow_token`, `borrow_price_live/entry`, `liquidation_threshold`, `borrow_weight`) in the `_build_lend_leg_row()` call; pass computed liq values to the B_A row too (same Protocol A liquidation event) |
+| Only one of two `strategy_type_map` dicts updated | New strategy shows correctly in All Strategies tab but displays as `NaN` in the Allocation tab | There are **two** `strategy_type_map` dicts in `dashboard_renderer.py` (~line 377 and ~line 2909) — both must include the new type |
 | Analysis cache not invalidated | New strategy type doesn't appear even after all code is correct | Clear cache or wait for next hourly refresh |
 | History handler using wrong token slot | Basis lookup fails for new strategy | `perp_lending*` uses `token4_contract`/`token1_contract`; `perp_borrowing*` uses `token3_contract`/`token2_contract` |
 | `strategy_dict` built without `token4` | `ValueError: Missing required fields: token4, token4_contract` in APR history chart | `render_position_history_chart()` in `position_renderers.py` line ~1229 — add `'token4': position.get('token4'), 'token4_contract': position.get('token4_contract')` |

@@ -646,7 +646,6 @@ def _build_preview_position(strategy: dict, deployment_usd: float) -> dict:
             else strategy.get('basis_ask') if strategy_type in settings.PERP_BORROWING_STRATEGIES
             else None
         ),
-        'entry_basis_spread': strategy.get('basis_spread'),
     }
 
 
@@ -988,12 +987,6 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
                 strategy_type=_st or 'recursive_lending',
                 is_paper_trade=True,
                 notes="",
-                entry_basis=(
-                    strategy.get('basis_bid') if _st in settings.PERP_LENDING_STRATEGIES
-                    else strategy.get('basis_ask') if _st in settings.PERP_BORROWING_STRATEGIES
-                    else None
-                ),
-                entry_basis_spread=strategy.get('basis_spread')
             )
 
             conn.close()
@@ -2911,6 +2904,7 @@ def render_allocation_tab(all_strategies_df: pd.DataFrame):
                     'noloop_cross_protocol_lending': 'No-Loop',
                     'recursive_lending': 'Recursive',
                     'perp_lending': 'Perp Lending',
+                    'perp_lending_recursive': 'Perp Lending (Recursive)',
                     'perp_borrowing': 'Perp Borrowing',
                     'perp_borrowing_recursive': 'Perp Borrowing (Recursive)',
                 }

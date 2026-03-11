@@ -849,6 +849,20 @@ def build_segment_data_from_rebalance(rebalance: Dict) -> Dict:
         'token4_earnings': rebalance.get('token4_earnings'),
         'token4_rewards':  rebalance.get('token4_rewards'),
 
+        # Basis values from DB-generated columns (perp strategies only; NULL for non-perp or DB error)
+        'opening_basis': rebalance.get('opening_basis'),
+        'closing_basis': rebalance.get('closing_basis'),
+
+        # Entry liquidation prices + distances (generated) for this segment
+        'entry_liquidation_price_token1': rebalance.get('entry_liquidation_price_token1'),
+        'entry_liquidation_price_token2': rebalance.get('entry_liquidation_price_token2'),
+        'entry_liquidation_price_token3': rebalance.get('entry_liquidation_price_token3'),
+        'entry_liquidation_price_token4': rebalance.get('entry_liquidation_price_token4'),
+        'entry_liquidation_distance_token1': rebalance.get('entry_liquidation_distance_token1'),
+        'entry_liquidation_distance_token2': rebalance.get('entry_liquidation_distance_token2'),
+        'entry_liquidation_distance_token3': rebalance.get('entry_liquidation_distance_token3'),
+        'entry_liquidation_distance_token4': rebalance.get('entry_liquidation_distance_token4'),
+
         # Timestamps (needed for segment_data consumers)
         'opening_timestamp': rebalance.get('opening_timestamp'),
         'closing_timestamp': rebalance.get('closing_timestamp'),
@@ -2389,6 +2403,14 @@ def render_position_expander(
         # === LIVE SEGMENT ===
         st.markdown("#### Live Segment (Current)")
 
+        # Inject live segment per-leg earnings from stats (columns dropped from positions table)
+        _earnings_cols = ['token1_earnings', 'token1_rewards', 'token2_earnings', 'token2_rewards',
+                          'token3_earnings', 'token3_rewards', 'token4_earnings', 'token4_rewards']
+        if stats:
+            position = position.copy()
+            for _col in _earnings_cols:
+                position[_col] = stats.get(_col)
+
         _kwargs = {'get_basis': get_basis} if strategy_type in _perp_strategies else {}
         renderer.render_detail_table(
             position,
@@ -2549,6 +2571,14 @@ def render_position_expander2(
                 traceback.print_exc()
 
         st.markdown("#### Live Segment (Current)")
+
+        # Inject live segment per-leg earnings from stats (columns dropped from positions table)
+        _earnings_cols = ['token1_earnings', 'token1_rewards', 'token2_earnings', 'token2_rewards',
+                          'token3_earnings', 'token3_rewards', 'token4_earnings', 'token4_rewards']
+        if stats:
+            position = position.copy()
+            for _col in _earnings_cols:
+                position[_col] = stats.get(_col)
 
         _kwargs = {'get_basis': get_basis} if strategy_type in _perp_strategies else {}
         renderer.render_detail_table(
@@ -3448,21 +3478,26 @@ class PerpLendingRenderer(StrategyRendererBase):
         from config import settings as _settings
         perp_fee = _settings.BLUEFIN_TAKER_FEE * 2
 
-        # Short perp liq: price must RISE by liq_dist to liquidate.
-        # Liq price is fixed at entry: entry_price * (1 + liq_dist).
-        # Entry liq dist: always = +liq_dist (by definition).
-        # Live liq dist: (fixed_liq_price - live_price) / live_price.
-        liq_dist = position.get('entry_liquidation_distance', 0.20)
+        # Short perp liq: liq price stored in DB; distances derived from it.
+        # Entry liq dist = (liq_price - entry_price) / liq_price (generated column).
+        # Live liq dist  = (liq_price - live_price)  / live_price (on-the-fly).
+        if is_live_segment:
+            perp_liq_price_raw = position.get('entry_liquidation_price_token4')
+            entry_liq_dist_raw = position.get('entry_liquidation_distance_token4')
+        else:
+            perp_liq_price_raw = segment_data.get('entry_liquidation_price_token4')
+            entry_liq_dist_raw = segment_data.get('entry_liquidation_distance_token4')
+
         entry_liq_dist_str = "N/A"
         live_liq_dist_str = "N/A"
         liq_price_str = "N/A"
 
         pp4 = get_price_precision(float(token_amount_token4)) if safe_value(token_amount_token4) else 4
 
-        if safe_value(segment_entry_token4_price) and float(segment_entry_token4_price) > 0:
-            perp_liq_price = float(segment_entry_token4_price) * (1.0 + liq_dist)
+        if safe_value(perp_liq_price_raw):
+            perp_liq_price = float(perp_liq_price_raw)
             liq_price_str = f"${perp_liq_price:,.{pp4}f}"
-            entry_liq_dist_str = f"{liq_dist * 100:+.1f}%"
+            entry_liq_dist_str = f"{float(entry_liq_dist_raw) * 100:+.1f}%" if safe_value(entry_liq_dist_raw) else "N/A"
             if safe_value(live_price_token4) and float(live_price_token4) > 0:
                 live_liq_dist_pct = (perp_liq_price - float(live_price_token4)) / float(live_price_token4)
                 live_liq_dist_str = f"{live_liq_dist_pct * 100:+.1f}%"
@@ -3470,7 +3505,10 @@ class PerpLendingRenderer(StrategyRendererBase):
         _t4e = segment_data.get('token4_earnings'); _t4r = segment_data.get('token4_rewards')
         _t4_earn_str = f"${(float(_t4e) + float(_t4r)):+,.4f}" if _t4e is not None and _t4r is not None else "N/A"
 
-        entry_basis = position.get('entry_basis')
+        if is_live_segment:
+            entry_basis = position.get('entry_basis')
+        else:
+            entry_basis = segment_data.get('opening_basis')  # None = DB problem, show as N/A
         entry_basis_str = f"{entry_basis * 100:.3f}%" if safe_value(entry_basis) else "N/A"
 
         live_basis_str = "N/A"
@@ -3501,17 +3539,8 @@ class PerpLendingRenderer(StrategyRendererBase):
                 'Segment Fees': "TBD",
             }
         else:
-            # Exit basis (short perp): closing prices are execution prices (perp ask, spot bid).
-            # basis = (perp - spot) / perp — directional, equivalent to basis_ask at exit.
-            _c1 = segment_data.get('closing_token1_price')
-            _c4 = live_price_token4
-            exit_spot_price = float(_c1) if _c1 is not None else None
-            exit_perp_price = float(_c4) if _c4 is not None else None
-            if exit_spot_price is not None and exit_perp_price is not None and exit_perp_price > 0:
-                exit_basis = (exit_perp_price - exit_spot_price) / exit_perp_price
-                exit_basis_str = f"{exit_basis * 100:.3f}%"
-            else:
-                exit_basis_str = "N/A"
+            exit_basis = segment_data.get('closing_basis')  # None = DB problem, show as N/A
+            exit_basis_str = f"{exit_basis * 100:.3f}%" if safe_value(exit_basis) else "N/A"
 
             perp_row = {
                 'Protocol': position['protocol_b'],
@@ -3926,11 +3955,16 @@ class PerpBorrowingRenderer(StrategyRendererBase):
         # Round-trip cost = entry + exit = 2 × taker fee.
         perp_fee = 2.0 * settings.BLUEFIN_TAKER_FEE
 
-        # Long perp liq: price must DROP by liq_dist to liquidate.
-        # Liq price is fixed at entry: entry_price * (1 - liq_dist).
-        # Entry liq dist: always = -liq_dist (by definition).
-        # Live liq dist: (fixed_liq_price - live_price) / live_price.
-        liq_dist = position.get('entry_liquidation_distance', 0.20)
+        # Long perp liq: liq price stored in DB; distances derived from it.
+        # Entry liq dist = (liq_price - entry_price) / liq_price (generated column, will be negative).
+        # Live liq dist  = (liq_price - live_price)  / live_price (on-the-fly).
+        if is_live_segment:
+            perp_liq_price_raw = position.get('entry_liquidation_price_token3')
+            entry_liq_dist_raw = position.get('entry_liquidation_distance_token3')
+        else:
+            perp_liq_price_raw = segment_data.get('entry_liquidation_price_token3')
+            entry_liq_dist_raw = segment_data.get('entry_liquidation_distance_token3')
+
         entry_liq_dist_str = "N/A"
         live_liq_dist_str = "N/A"
         liq_price_str = "N/A"
@@ -3939,15 +3973,18 @@ class PerpBorrowingRenderer(StrategyRendererBase):
         _t3e = segment_data.get('token3_earnings'); _t3r = segment_data.get('token3_rewards')
         _t3_earn_str = f"${(float(_t3e) + float(_t3r)):+,.4f}" if _t3e is not None and _t3r is not None else "N/A"
 
-        if safe_value(segment_entry_token3_price) and float(segment_entry_token3_price) > 0:
-            perp_liq_price = float(segment_entry_token3_price) * (1.0 - liq_dist)
+        if safe_value(perp_liq_price_raw):
+            perp_liq_price = float(perp_liq_price_raw)
             liq_price_str = f"${perp_liq_price:,.{pp3}f}"
-            entry_liq_dist_str = f"{-liq_dist * 100:+.1f}%"
+            entry_liq_dist_str = f"{float(entry_liq_dist_raw) * 100:+.1f}%" if safe_value(entry_liq_dist_raw) else "N/A"
             if safe_value(live_price_token3) and float(live_price_token3) > 0:
                 live_liq_dist_pct = (perp_liq_price - float(live_price_token3)) / float(live_price_token3)
                 live_liq_dist_str = f"{live_liq_dist_pct * 100:+.1f}%"
 
-        entry_basis = position.get('entry_basis')
+        if is_live_segment:
+            entry_basis = position.get('entry_basis')
+        else:
+            entry_basis = segment_data.get('opening_basis')  # None = DB problem, show as N/A
         entry_basis_str = f"{entry_basis * 100:.3f}%" if safe_value(entry_basis) else "N/A"
 
         live_basis_str = "N/A"
@@ -3978,17 +4015,8 @@ class PerpBorrowingRenderer(StrategyRendererBase):
                 'Segment Fees': "TBD",
             }
         else:
-            # Exit basis (long perp): closing prices are execution prices (perp bid, spot ask).
-            # basis = (perp - spot) / perp — directional, equivalent to basis_bid at exit.
-            _c2 = segment_data.get('closing_token2_price')
-            _c3 = live_price_token3
-            exit_spot_price = float(_c2) if _c2 is not None else None
-            exit_perp_price = float(_c3) if _c3 is not None else None
-            if exit_spot_price is not None and exit_perp_price is not None and exit_perp_price > 0:
-                exit_basis = (exit_perp_price - exit_spot_price) / exit_perp_price
-                exit_basis_str = f"{exit_basis * 100:.3f}%"
-            else:
-                exit_basis_str = "N/A"
+            exit_basis = segment_data.get('closing_basis')  # None = DB problem, show as N/A
+            exit_basis_str = f"{exit_basis * 100:.3f}%" if safe_value(exit_basis) else "N/A"
 
             perp_row = {
                 'Protocol': position['protocol_b'],

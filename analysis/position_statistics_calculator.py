@@ -305,30 +305,7 @@ def calculate_position_statistics(
     # Calculate NET current APR
     current_apr = gross_apr - fee_cost - perp_trading_fee_apr
 
-    # 8. Write live segment per-leg earnings to positions table (overwritten hourly).
-    # Sign convention: lend slots +base, borrow slots -base; rewards always +reward.
-    try:
-        ph = service._get_placeholder()
-        cursor = service.conn.cursor()
-        cursor.execute(f"""
-            UPDATE positions SET
-                token1_earnings = {ph}, token1_rewards = {ph},
-                token2_earnings = {ph}, token2_rewards = {ph},
-                token3_earnings = {ph}, token3_rewards = {ph},
-                token4_earnings = {ph}, token4_rewards = {ph}
-            WHERE position_id = {ph}
-        """, (
-            base_1, reward_1,
-            -base_2, reward_2,
-            base_3, reward_3,
-            -base_4, reward_4,
-            position_id,
-        ))
-        service.conn.commit()
-    except Exception as _e:
-        print(f"⚠️ [STATS] Could not update live segment earnings for {position_id}: {_e}")
-
-    # 9. Return statistics dict
+    # 8. Return statistics dict
     return {
         'position_id': position_id,
         'timestamp': timestamp,  # Unix seconds
@@ -343,5 +320,14 @@ def calculate_position_statistics(
         'live_pnl': live_pnl,
         'realized_pnl': rebalanced_pnl,  # Note: variable is called rebalanced_pnl in calculation
         'basis_pnl': basis_pnl,           # 0 for non-perp strategies (never None)
-        'calculation_timestamp': int(time.time())  # Unix seconds when calculated
+        'calculation_timestamp': int(time.time()),  # Unix seconds when calculated
+        'token1_earnings': base_1,
+        'token1_rewards':  reward_1,
+        'token2_earnings': -base_2,
+        'token2_rewards':  reward_2,
+        'token3_earnings': base_3,
+        'token3_rewards':  reward_3,
+        'token4_earnings': -base_4,
+        'token4_rewards':  reward_4,
+        'accumulated_realised_pnl': rebalanced_pnl,
     }

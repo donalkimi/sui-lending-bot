@@ -136,8 +136,6 @@ class PositionService:
         transaction_hash_open: Optional[str] = None,
         on_chain_position_id: Optional[str] = None,
         portfolio_id: Optional[str] = None,
-        entry_basis: float = None,
-        entry_basis_spread: float = None,
         token4: Optional[str] = None,
         token4_contract: Optional[str] = None,
     ) -> str:
@@ -252,13 +250,56 @@ class PositionService:
         else:
             entry_token4_amount = None  # B_B unused
 
+        # Calculate entry liquidation prices per leg using PositionCalculator
+        # NULL when leg is unused (no borrow leg → no collateral liq price for lend leg)
+        from analysis.position_calculator import PositionCalculator
+        _calc = PositionCalculator(liquidation_distance=entry_liquidation_distance)
+
+        _collateral_A = entry_token1_amount * entry_token1_price if entry_token1_amount and entry_token1_price else 0.0
+        _loan_A = entry_token2_amount * entry_token2_price if entry_token2_amount and entry_token2_price else 0.0
+        if _loan_A > 0:
+            _lltv_A = entry_token1_liquidation_threshold or entry_token1_collateral_ratio
+            _bw_A = entry_token2_borrow_weight or 1.0
+            entry_liq_price_token1 = _calc.calculate_liquidation_price(
+                collateral_value=_collateral_A, loan_value=_loan_A,
+                lending_token_price=entry_token1_price, borrowing_token_price=entry_token2_price,
+                lltv=_lltv_A, side='lending', borrow_weight=_bw_A
+            ).get('liq_price')
+            entry_liq_price_token2 = _calc.calculate_liquidation_price(
+                collateral_value=_collateral_A, loan_value=_loan_A,
+                lending_token_price=entry_token1_price, borrowing_token_price=entry_token2_price,
+                lltv=_lltv_A, side='borrowing', borrow_weight=_bw_A
+            ).get('liq_price')
+        else:
+            entry_liq_price_token1 = None
+            entry_liq_price_token2 = None
+
+        _collateral_B = entry_token3_amount * entry_token3_price if entry_token3_amount and entry_token3_price else 0.0
+        _loan_B = entry_token4_amount * entry_token4_price if entry_token4_amount and entry_token4_price else 0.0
+        if _collateral_B > 0 and _loan_B > 0:
+            _lltv_B = entry_token3_liquidation_threshold or entry_token3_collateral_ratio
+            _bw_B = entry_token4_borrow_weight or 1.0
+            entry_liq_price_token3 = _calc.calculate_liquidation_price(
+                collateral_value=_collateral_B, loan_value=_loan_B,
+                lending_token_price=entry_token3_price, borrowing_token_price=entry_token4_price,
+                lltv=_lltv_B, side='lending', borrow_weight=_bw_B
+            ).get('liq_price')
+            entry_liq_price_token4 = _calc.calculate_liquidation_price(
+                collateral_value=_collateral_B, loan_value=_loan_B,
+                lending_token_price=entry_token3_price, borrowing_token_price=entry_token4_price,
+                lltv=_lltv_B, side='borrowing', borrow_weight=_bw_B
+            ).get('liq_price')
+        else:
+            entry_liq_price_token3 = None
+            entry_liq_price_token4 = None
+
         # Convert timestamp to datetime string for DB
         entry_timestamp_str = to_datetime_str(entry_timestamp)
 
         # Insert position
         cursor = self.conn.cursor()
         ph = self._get_placeholder()
-        placeholders = ', '.join([ph] * 56)  # 56 values (token4 + token4_contract added)
+        placeholders = ', '.join([ph] * 60)  # 60 values (added 4 entry_liq_price_token* columns)
 
         try:
             cursor.execute(f"""
@@ -273,14 +314,15 @@ class PositionService:
                     entry_token1_rate, entry_token2_rate, entry_token3_rate, entry_token4_rate,
                     entry_token1_price, entry_token2_price, entry_token3_price, entry_token4_price,
                     entry_token1_amount, entry_token2_amount, entry_token3_amount, entry_token4_amount,
+                    entry_liquidation_price_token1, entry_liquidation_price_token2,
+                    entry_liquidation_price_token3, entry_liquidation_price_token4,
                     entry_token1_collateral_ratio, entry_token3_collateral_ratio,
                     entry_token1_liquidation_threshold, entry_token3_liquidation_threshold,
                     entry_net_apr, entry_apr5, entry_apr30, entry_apr90, entry_days_to_breakeven, entry_liquidation_distance,
                     entry_max_size_usd, entry_token2_borrow_fee, entry_token4_borrow_fee,
                     entry_token2_borrow_weight, entry_token4_borrow_weight,
                     notes, wallet_address, transaction_hash_open, on_chain_position_id,
-                    portfolio_id,
-                    entry_basis, entry_basis_spread
+                    portfolio_id
                 ) VALUES ({placeholders})
             """, (
                 position_id, 'active', strategy_type,
@@ -306,6 +348,10 @@ class PositionService:
                 self._to_native_type(entry_token2_amount),
                 self._to_native_type(entry_token3_amount),
                 self._to_native_type(entry_token4_amount),
+                self._to_native_type(entry_liq_price_token1),
+                self._to_native_type(entry_liq_price_token2),
+                self._to_native_type(entry_liq_price_token3),
+                self._to_native_type(entry_liq_price_token4),
                 self._to_native_type(entry_token1_collateral_ratio),
                 self._to_native_type(entry_token3_collateral_ratio),
                 self._to_native_type(entry_token1_liquidation_threshold),
@@ -323,8 +369,6 @@ class PositionService:
                 self._to_native_type(entry_token4_borrow_weight),
                 notes, wallet_address, transaction_hash_open, on_chain_position_id,
                 portfolio_id,
-                self._to_native_type(entry_basis),
-                self._to_native_type(entry_basis_spread)
             ))
 
             self.conn.commit()
@@ -367,6 +411,10 @@ class PositionService:
     ) -> None:
         """
         Close an active position and create final rebalance record.
+
+        TODO: Before marking closed, ensure a final position_statistics row is written
+        so that token1-4_earnings, token1-4_rewards, and accumulated_realised_pnl are
+        captured at close time (these no longer live on the positions table).
 
         Args:
             position_id: UUID of position to close
@@ -1953,13 +2001,15 @@ class PositionService:
             ph = self._get_placeholder()
             cursor.execute(f"""
                 INSERT INTO position_rebalances (
-                    rebalance_id, position_id, sequence_number,
+                    rebalance_id, position_id, sequence_number, strategy_type,
                     opening_timestamp, closing_timestamp,
                     deployment_usd, l_a, b_a, l_b, b_b,
                     opening_token1_rate, opening_token2_rate, opening_token3_rate, opening_token4_rate,
                     opening_token1_price, opening_token2_price, opening_token3_price, opening_token4_price,
                     closing_token1_rate, closing_token2_rate, closing_token3_rate, closing_token4_rate,
                     closing_token1_price, closing_token2_price, closing_token3_price, closing_token4_price,
+                    entry_liquidation_price_token1, entry_liquidation_price_token2,
+                    entry_liquidation_price_token3, entry_liquidation_price_token4,
                     closing_token1_liq_price, closing_token2_liq_price, closing_token3_liq_price, closing_token4_liq_price,
                     closing_token1_liq_dist, closing_token2_liq_dist, closing_token3_liq_dist, closing_token4_liq_dist,
                     token1_collateral_ratio, token3_collateral_ratio,
@@ -1976,9 +2026,9 @@ class PositionService:
                     token2_earnings, token2_rewards,
                     token3_earnings, token3_rewards,
                     token4_earnings, token4_rewards
-                ) VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
+                ) VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
             """, (
-                rebalance_id, position_id, sequence_number,
+                rebalance_id, position_id, sequence_number, position['strategy_type'],
                 opening_timestamp_str, closing_timestamp_str,
                 convert_value('deployment_usd'), convert_value('l_a'), convert_value('b_a'), convert_value('l_b'), convert_value('b_b'),
                 convert_value('opening_token1_rate'), convert_value('opening_token2_rate'),
@@ -1989,6 +2039,10 @@ class PositionService:
                 convert_value('closing_token3_rate'), convert_value('closing_token4_rate'),
                 convert_value('closing_token1_price'), convert_value('closing_token2_price'),
                 convert_value('closing_token3_price'), convert_value('closing_token4_price'),
+                self._to_native_type(position.get('entry_liquidation_price_token1')),
+                self._to_native_type(position.get('entry_liquidation_price_token2')),
+                self._to_native_type(position.get('entry_liquidation_price_token3')),
+                self._to_native_type(position.get('entry_liquidation_price_token4')),
                 convert_value('closing_token1_liq_price'), convert_value('closing_token2_liq_price'),
                 convert_value('closing_token3_liq_price'), convert_value('closing_token4_liq_price'),
                 convert_value('closing_token1_liq_dist'), convert_value('closing_token2_liq_dist'),
@@ -2026,13 +2080,62 @@ class PositionService:
             # For the initial deployment record (closing_timestamp = None): only update
             # rebalance_count — the entry rates/prices were set at position creation and
             # must NOT be overwritten with NULL.
-            current_accumulated_pnl = position.get('accumulated_realised_pnl') or 0
             ph = self._get_placeholder()
             if closing_timestamp_str is not None:
+                # Recalculate entry liq prices for the new segment using exit amounts + closing prices
+                from analysis.position_calculator import PositionCalculator as _PC
+                _new_calc = _PC(liquidation_distance=position['entry_liquidation_distance'])
+
+                _new_p1 = convert_value('closing_token1_price')
+                _new_p2 = convert_value('closing_token2_price')
+                _new_p3 = convert_value('closing_token3_price')
+                _new_p4 = convert_value('closing_token4_price')
+                _new_a1 = convert_value('exit_token1_amount')
+                _new_a2 = convert_value('exit_token2_amount')
+                _new_a3 = convert_value('exit_token3_amount')
+                _new_a4 = convert_value('exit_token4_amount')
+
+                _new_coll_A = _new_a1 * _new_p1 if _new_a1 and _new_p1 else 0.0
+                _new_loan_A = _new_a2 * _new_p2 if _new_a2 and _new_p2 else 0.0
+                _lltv_A = position.get('entry_token1_liquidation_threshold') or position.get('entry_token1_collateral_ratio')
+                _bw_A = position.get('entry_token2_borrow_weight') or 1.0
+                if _new_loan_A > 0 and _lltv_A:
+                    _new_liq_p1 = _new_calc.calculate_liquidation_price(
+                        collateral_value=_new_coll_A, loan_value=_new_loan_A,
+                        lending_token_price=_new_p1, borrowing_token_price=_new_p2,
+                        lltv=_lltv_A, side='lending', borrow_weight=_bw_A
+                    ).get('liq_price')
+                    _new_liq_p2 = _new_calc.calculate_liquidation_price(
+                        collateral_value=_new_coll_A, loan_value=_new_loan_A,
+                        lending_token_price=_new_p1, borrowing_token_price=_new_p2,
+                        lltv=_lltv_A, side='borrowing', borrow_weight=_bw_A
+                    ).get('liq_price')
+                else:
+                    _new_liq_p1 = None
+                    _new_liq_p2 = None
+
+                _new_coll_B = _new_a3 * _new_p3 if _new_a3 and _new_p3 else 0.0
+                _new_loan_B = _new_a4 * _new_p4 if _new_a4 and _new_p4 else 0.0
+                _lltv_B = position.get('entry_token3_liquidation_threshold') or position.get('entry_token3_collateral_ratio')
+                _bw_B = position.get('entry_token4_borrow_weight') or 1.0
+                if _new_coll_B > 0 and _new_loan_B > 0 and _lltv_B:
+                    _new_liq_p3 = _new_calc.calculate_liquidation_price(
+                        collateral_value=_new_coll_B, loan_value=_new_loan_B,
+                        lending_token_price=_new_p3, borrowing_token_price=_new_p4,
+                        lltv=_lltv_B, side='lending', borrow_weight=_bw_B
+                    ).get('liq_price')
+                    _new_liq_p4 = _new_calc.calculate_liquidation_price(
+                        collateral_value=_new_coll_B, loan_value=_new_loan_B,
+                        lending_token_price=_new_p3, borrowing_token_price=_new_p4,
+                        lltv=_lltv_B, side='borrowing', borrow_weight=_bw_B
+                    ).get('liq_price')
+                else:
+                    _new_liq_p3 = None
+                    _new_liq_p4 = None
+
                 cursor.execute(f"""
                     UPDATE positions
-                    SET accumulated_realised_pnl = {ph}, 
-                        rebalance_count = {ph},
+                    SET rebalance_count = {ph},
                         last_rebalance_timestamp = {ph},
                         entry_token1_rate = {ph},
                         entry_token2_rate = {ph},
@@ -2046,10 +2149,13 @@ class PositionService:
                         entry_token2_amount = {ph},
                         entry_token3_amount = {ph},
                         entry_token4_amount = {ph},
+                        entry_liquidation_price_token1 = {ph},
+                        entry_liquidation_price_token2 = {ph},
+                        entry_liquidation_price_token3 = {ph},
+                        entry_liquidation_price_token4 = {ph},
                         updated_at = CURRENT_TIMESTAMP
                     WHERE position_id = {ph}
                 """, (
-                    self._to_native_type(current_accumulated_pnl + convert_value('realised_pnl')),
                     sequence_number,
                     closing_timestamp_str,
                     convert_value('closing_token1_rate'),
@@ -2064,6 +2170,10 @@ class PositionService:
                     convert_value('exit_token2_amount'),
                     convert_value('exit_token3_amount'),
                     convert_value('exit_token4_amount'),
+                    self._to_native_type(_new_liq_p1),
+                    self._to_native_type(_new_liq_p2),
+                    self._to_native_type(_new_liq_p3),
+                    self._to_native_type(_new_liq_p4),
                     position_id
                 ))
             else:
@@ -2446,7 +2556,7 @@ class PositionService:
                 _st = position['strategy_type']
                 if _st in ('perp_borrowing', 'perp_borrowing_recursive'):
                     entry_token4_amount = entry_token2_amount   # perp = borrowed/sold tokens
-                elif _st == 'perp_lending':
+                elif _st in settings.PERP_LENDING_STRATEGIES:
                     entry_token4_amount = entry_token1_amount   # perp = spot bought tokens
                 else:
                     entry_token4_amount = (b_b * deployment_usd) / entry_token4_price if entry_token4_price > 0 else 0

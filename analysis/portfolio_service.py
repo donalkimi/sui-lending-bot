@@ -239,12 +239,6 @@ class PortfolioService:
                     user_id=user_id,
                     notes=f"Portfolio: {portfolio_name}",
                     portfolio_id=portfolio_id,  # Link to portfolio
-                    entry_basis=(
-                        strategy_row.get('basis_bid') if _st == 'perp_lending'
-                        else strategy_row.get('basis_ask') if _st in ('perp_borrowing', 'perp_borrowing_recursive')
-                        else None
-                    ),
-                    entry_basis_spread=strategy_row.get('basis_spread')
                 )
                 created_positions.append(position_id)
 

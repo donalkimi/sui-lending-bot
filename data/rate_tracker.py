@@ -157,6 +157,15 @@ class RateTracker:
             current_apr = self._convert_to_native_types(stats['current_apr'])
             live_pnl = self._convert_to_native_types(stats['live_pnl'])
             realized_pnl = self._convert_to_native_types(stats['realized_pnl'])
+            token1_earnings = self._convert_to_native_types(stats.get('token1_earnings'))
+            token1_rewards  = self._convert_to_native_types(stats.get('token1_rewards'))
+            token2_earnings = self._convert_to_native_types(stats.get('token2_earnings'))
+            token2_rewards  = self._convert_to_native_types(stats.get('token2_rewards'))
+            token3_earnings = self._convert_to_native_types(stats.get('token3_earnings'))
+            token3_rewards  = self._convert_to_native_types(stats.get('token3_rewards'))
+            token4_earnings = self._convert_to_native_types(stats.get('token4_earnings'))
+            token4_rewards  = self._convert_to_native_types(stats.get('token4_rewards'))
+            accumulated_realised_pnl = self._convert_to_native_types(stats.get('accumulated_realised_pnl'))
 
             if self.use_cloud:
                 # PostgreSQL INSERT ... ON CONFLICT DO UPDATE
@@ -165,8 +174,11 @@ class RateTracker:
                     INSERT INTO position_statistics (
                         position_id, timestamp, total_pnl, total_earnings, base_earnings,
                         reward_earnings, total_fees, current_value, realized_apr, current_apr,
-                        live_pnl, realized_pnl, calculation_timestamp
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        live_pnl, realized_pnl, calculation_timestamp,
+                        token1_earnings, token1_rewards, token2_earnings, token2_rewards,
+                        token3_earnings, token3_rewards, token4_earnings, token4_rewards,
+                        accumulated_realised_pnl
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (position_id, timestamp) DO UPDATE SET
                         total_pnl = EXCLUDED.total_pnl,
                         total_earnings = EXCLUDED.total_earnings,
@@ -178,21 +190,25 @@ class RateTracker:
                         current_apr = EXCLUDED.current_apr,
                         live_pnl = EXCLUDED.live_pnl,
                         realized_pnl = EXCLUDED.realized_pnl,
-                        calculation_timestamp = EXCLUDED.calculation_timestamp
+                        calculation_timestamp = EXCLUDED.calculation_timestamp,
+                        token1_earnings = EXCLUDED.token1_earnings,
+                        token1_rewards = EXCLUDED.token1_rewards,
+                        token2_earnings = EXCLUDED.token2_earnings,
+                        token2_rewards = EXCLUDED.token2_rewards,
+                        token3_earnings = EXCLUDED.token3_earnings,
+                        token3_rewards = EXCLUDED.token3_rewards,
+                        token4_earnings = EXCLUDED.token4_earnings,
+                        token4_rewards = EXCLUDED.token4_rewards,
+                        accumulated_realised_pnl = EXCLUDED.accumulated_realised_pnl
                 """, (
                     stats['position_id'],
                     timestamp_str,
-                    total_pnl,
-                    total_earnings,
-                    base_earnings,
-                    reward_earnings,
-                    total_fees,
-                    current_value,
-                    realized_apr,
-                    current_apr,
-                    live_pnl,
-                    realized_pnl,
-                    calc_timestamp_str
+                    total_pnl, total_earnings, base_earnings, reward_earnings, total_fees,
+                    current_value, realized_apr, current_apr, live_pnl, realized_pnl,
+                    calc_timestamp_str,
+                    token1_earnings, token1_rewards, token2_earnings, token2_rewards,
+                    token3_earnings, token3_rewards, token4_earnings, token4_rewards,
+                    accumulated_realised_pnl
                 ))
             else:
                 # SQLite INSERT OR REPLACE
@@ -201,22 +217,20 @@ class RateTracker:
                     INSERT OR REPLACE INTO position_statistics (
                         position_id, timestamp, total_pnl, total_earnings, base_earnings,
                         reward_earnings, total_fees, current_value, realized_apr, current_apr,
-                        live_pnl, realized_pnl, calculation_timestamp
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        live_pnl, realized_pnl, calculation_timestamp,
+                        token1_earnings, token1_rewards, token2_earnings, token2_rewards,
+                        token3_earnings, token3_rewards, token4_earnings, token4_rewards,
+                        accumulated_realised_pnl
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     stats['position_id'],
                     timestamp_str,
-                    total_pnl,
-                    total_earnings,
-                    base_earnings,
-                    reward_earnings,
-                    total_fees,
-                    current_value,
-                    realized_apr,
-                    current_apr,
-                    live_pnl,
-                    realized_pnl,
-                    calc_timestamp_str
+                    total_pnl, total_earnings, base_earnings, reward_earnings, total_fees,
+                    current_value, realized_apr, current_apr, live_pnl, realized_pnl,
+                    calc_timestamp_str,
+                    token1_earnings, token1_rewards, token2_earnings, token2_rewards,
+                    token3_earnings, token3_rewards, token4_earnings, token4_rewards,
+                    accumulated_realised_pnl
                 ))
 
             conn.commit()
