@@ -15,6 +15,53 @@ logger = logging.getLogger(__name__)
 MIN_TOKEN_DELTA = 0.0001
 
 
+def _liq_delta(d: float, collateral_amount, collateral_price,
+               loan_amount, loan_price, lltv: float, bw: float = 1.0) -> float:
+    """
+    Compute how much the liq distance has drifted from baseline for an LLTV-based leg.
+
+    Returns abs(baseline_liq_dist) - abs(live_liq_dist).
+    Positive value = liq distance has shrunk (closer to liquidation).
+    Returns 0.0 if any required value is missing.
+    """
+    if not (collateral_amount and collateral_price and loan_amount and loan_price and lltv):
+        return 0.0
+    ltv = (loan_amount * loan_price * bw) / (collateral_amount * collateral_price)
+    if ltv <= 0:
+        return 0.0
+    live_liq_dist = (lltv / ltv) - 1
+    return abs(d) - abs(live_liq_dist)
+
+
+def _perp_liq_delta(d: float, entry_price, live_price, direction: str) -> float:
+    """
+    Compute liq distance drift for an exchange-side perp leg.
+
+    direction: 'short' (liq when price rises) or 'long' (liq when price drops).
+    Returns 0.0 if any required value is missing.
+    """
+    if not (entry_price and live_price):
+        return 0.0
+    liq_price = entry_price * (1 + d) if direction == 'short' else entry_price * (1 - d)
+    return abs(d) - abs((liq_price - live_price) / live_price)
+
+
+def _build_reason(token_deltas: dict, threshold: float) -> str:
+    """
+    Build a human-readable reason string showing all token liq dist deltas.
+    Tokens that exceeded the threshold are flagged with [TRIGGERED].
+
+    token_deltas: {token_name: delta_value}  e.g. {'token2': 0.052, 'token1': 0.001}
+    """
+    parts = []
+    for token, delta in token_deltas.items():
+        if delta >= threshold:
+            parts.append(f"{token} [TRIGGERED {delta:.1%}]")
+        else:
+            parts.append(f"{token} {delta:.1%}")
+    return " | ".join(parts) + f"  (threshold {threshold:.1%})"
+
+
 def _format_lend_action(delta: float, token: str, min_delta: float = MIN_TOKEN_DELTA) -> str:
     """Format a lend-leg rebalance action string from a token delta."""
     if abs(delta) < min_delta:
@@ -114,7 +161,8 @@ class StrategyCalculatorBase(ABC):
     @abstractmethod
     def calculate_rebalance_amounts(self, position: Dict,
                                    live_rates: Dict,
-                                   live_prices: Dict) -> Dict:
+                                   live_prices: Dict,
+                                   force: bool = False) -> Dict:
         """
         Calculate token amounts needed to restore target weights.
 

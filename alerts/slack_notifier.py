@@ -125,40 +125,23 @@ class SlackNotifier:
         # Check if this is a Slack Workflow webhook (contains '/workflows/' or '/triggers/')
         is_workflow = '/workflows/' in self.webhook_url or '/triggers/' in self.webhook_url
 
-        print(f"[DEBUG] Webhook URL check: is_workflow={is_workflow}")
-        print(f"[DEBUG] Webhook URL contains: {self.webhook_url[:50]}...")
-        print(f"[DEBUG] Variables received: {'None' if variables is None else f'{len(variables)} keys'}")
-
         # Build payload
         if is_workflow and variables:
-            # For Slack Workflows, send variables directly
             payload = variables
-            print(f"[DEBUG] ✅ Using workflow mode with variables")
-            # Show first 3 variables as preview
-            preview = {k: v[:50] if isinstance(v, str) and len(v) > 50 else v
-                      for k, v in list(variables.items())[:3]}
-            print(f"[DEBUG] Payload preview (first 3 vars): {json.dumps(preview, indent=2)}")
         elif is_workflow and not variables:
-            # Workflow webhook requires variables but none provided
-            print(f"[ERROR] WARNING:  Workflow webhook detected but variables is None - notification will fail")
-            print(f"[ERROR] Falling back to error message")
+            print(f"[SLACK NOTIFICATION] WARNING: Workflow webhook detected but variables is None — notification will fail")
             return False
         else:
-            # For classic Incoming Webhooks, use text/blocks
             payload = {"text": message}
-            print(f"[DEBUG] Using classic mode: is_workflow={is_workflow}")
             if blocks:
                 payload["blocks"] = blocks
-
-        print(f"[DEBUG] Final payload keys: {list(payload.keys())}")
 
         # Validate payload size
         payload_str = json.dumps(payload)
         payload_size = len(payload_str)
-        print(f"[DEBUG] Payload size: {payload_size} bytes")
 
         if is_workflow and payload_size > 3000:
-            print(f"[WARNING] Payload size ({payload_size} bytes) exceeds recommended limit (3000 bytes)")
+            print(f"[SLACK NOTIFICATION] WARNING: Payload size ({payload_size} bytes) exceeds recommended limit (3000 bytes)")
 
         # Configure retry strategy for transient failures
         retry_strategy = Retry(
@@ -175,21 +158,15 @@ class SlackNotifier:
         session.mount("http://", adapter)
 
         try:
-            print(f"[DEBUG] Sending Slack notification (timeout=10s, max_retries=3)...")
-            start_time = time.time()
-
             response = session.post(
                 self.webhook_url,
                 data=payload_str,
                 headers={'Content-Type': 'application/json'},
-                timeout=10  # 10 seconds timeout (connect + read)
+                timeout=10
             )
 
-            elapsed = (time.time() - start_time) * 1000
-            print(f"[DEBUG] Response received in {elapsed:.0f}ms: {response.status_code}")
-
             if response.status_code == 200:
-                print(f"[OK] ✅ Slack notification sent successfully")
+                print(f"[SLACK NOTIFICATION] ✅ Slack notification sent successfully")
                 return True
             else:
                 print(f"[ERROR] ❌ Slack notification failed: {response.status_code} - {response.text}")
@@ -330,13 +307,7 @@ class SlackNotifier:
         Returns:
             True if successful
         """
-        print(f"[DEBUG] alert_top_strategies called")
-        print(f"[DEBUG] all_results shape: {all_results.shape if all_results is not None else 'None'}")
-        print(f"[DEBUG] liquidation_distance: {liquidation_distance}")
-        print(f"[DEBUG] timestamp: {timestamp}")
-        
         if all_results is None or all_results.empty:
-            print("[DEBUG] all_results is empty - calling alert_error")
             return self.alert_error("No valid strategies found in this refresh run.")
         
         # Initialize variables to None (will be set in try block)
@@ -346,11 +317,9 @@ class SlackNotifier:
             print(f"[DEBUG] Starting strategy filtering...")
             
             _apr_col = 'net_apr'
-            print(f"[DEBUG] Using APR sort column: {_apr_col}")
 
             # Filter Set 1: All strategies (top 3 by APR)
             filtered_set1 = all_results.nlargest(3, _apr_col)
-            print(f"[DEBUG] Set 1 filtered: {len(filtered_set1)} strategies")
 
             # Filter Set 2: USDC-only strategies (top 3)
             filtered_set2 = all_results[
@@ -358,66 +327,27 @@ class SlackNotifier:
                 (all_results['token2'] == 'USDC') &
                 (all_results['token3'] == 'USDC')
             ].nlargest(3, _apr_col)
-            print(f"[DEBUG] Set 2 filtered: {len(filtered_set2)} strategies")
 
             # Filter Set 3: Unlevered strategies (top 3)
-            # Unlevered = simple lend/borrow with no recursion
             filtered_set3 = all_results[
                 all_results.get('is_levered', True) == False
             ].nlargest(3, _apr_col) if 'is_levered' in all_results.columns else pd.DataFrame()
-            print(f"[DEBUG] Set 3 filtered: {len(filtered_set3)} strategies")
-            
-            # Build formatted lines for Set 1
-            print(f"[DEBUG] Building Set 1 lines...")
-            set1_lines = []
-            for idx, row in filtered_set1.iterrows():
-                line = format_strategy_summary_line(row.to_dict(), liquidation_distance)
-                set1_lines.append(line)
-                print(f"[DEBUG] Set1 line {len(set1_lines)}: {line[:80]}...")
-            
-            # Build formatted lines for Set 2
-            print(f"[DEBUG] Building Set 2 lines...")
-            set2_lines = []
-            for idx, row in filtered_set2.iterrows():
-                line = format_strategy_summary_line(row.to_dict(), liquidation_distance)
-                set2_lines.append(line)
-                print(f"[DEBUG] Set2 line {len(set2_lines)}: {line[:80] if line else 'EMPTY'}...")
-            
-            # Build formatted lines for Set 3
-            print(f"[DEBUG] Building Set 3 lines...")
-            set3_lines = []
-            for idx, row in filtered_set3.iterrows():
-                line = format_strategy_summary_line(row.to_dict(), liquidation_distance)
-                set3_lines.append(line)
-                print(f"[DEBUG] Set3 line {len(set3_lines)}: {line[:80] if line else 'EMPTY'}...")
-            
-            print(f"[DEBUG] All line sets built: set1={len(set1_lines)}, set2={len(set2_lines)}, set3={len(set3_lines)}")
-            
-            # Prepare variables for Slack Workflow
-            print(f"[DEBUG] Creating variables dict...")
+
+            # Build formatted lines
+            set1_lines = [format_strategy_summary_line(row.to_dict(), liquidation_distance) for _, row in filtered_set1.iterrows()]
+            set2_lines = [format_strategy_summary_line(row.to_dict(), liquidation_distance) for _, row in filtered_set2.iterrows()]
+            set3_lines = [format_strategy_summary_line(row.to_dict(), liquidation_distance) for _, row in filtered_set3.iterrows()]
+
             liq_dist_pct = int(liquidation_distance * 100)
-            print(f"[DEBUG] liq_dist_pct={liq_dist_pct}")
-            
             timestamp_str = to_datetime_str(timestamp) + ' UTC'
-            print(f"[DEBUG] timestamp_str={timestamp_str}")
-            
-            # Build formatted message with just the top strategy
-            if set1_lines and len(set1_lines) > 0:
-                formatted_message = f"{timestamp_str}: {set1_lines[0]}"
-            else:
-                formatted_message = f"{timestamp_str}: No strategies found"
+
+            formatted_message = f"{timestamp_str}: {set1_lines[0]}" if set1_lines else f"{timestamp_str}: No strategies found"
 
             variables = {
                 "liq_dist": str(liq_dist_pct),
                 "timestamp": timestamp_str,
-                "notification_text": formatted_message  # Renamed from "message" to avoid Slack conflicts
+                "notification_text": formatted_message
             }
-
-            print(f"[DEBUG] ✅ Variables dict created with {len(variables)} keys (including 'notification_text')")
-            print(f"[DEBUG] Sample variable values:")
-            print(f"[DEBUG]   liq_dist: {variables['liq_dist']}")
-            print(f"[DEBUG]   timestamp: {variables['timestamp']}")
-            print(f"[DEBUG]   notification_text (first 100 chars): {formatted_message[:100]}...")
 
         except KeyError as e:
             print(f"[ERROR] ❌ Missing key in strategy data: {e}")
@@ -448,8 +378,6 @@ class SlackNotifier:
             # Fallback if message creation failed
             timestamp_str_fallback = to_datetime_str(timestamp) + ' UTC' if timestamp else 'N/A'
             message = f"🚀 Top Lending Strategies\n📅 {timestamp_str_fallback}\n\nNo strategies available"
-
-        print(f"[DEBUG] About to call send_message with variables={'None' if variables is None else f'{len(variables)} keys'}")
 
         return self.send_message(message, blocks=None, variables=variables)
 

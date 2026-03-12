@@ -367,7 +367,8 @@ class PerpLendingCalculator(StrategyCalculatorBase):
             # Note: Price PnL calculated separately via calculate_price_pnl()
         }
 
-    def calculate_rebalance_amounts(self, position: Dict, live_rates: Dict, live_prices: Dict) -> Dict:
+    def calculate_rebalance_amounts(self, position: Dict, live_rates: Dict, live_prices: Dict,
+                                    force: bool = False) -> Dict:
         """
         Calculate whether rebalancing is needed and the actions to restore target liq distance.
 
@@ -485,6 +486,10 @@ class PerpLendingCalculator(StrategyCalculatorBase):
             action4 = f'Buy to cover {abs(delta1):.4f} \u2192 Transfer in USDC'
         else:
             action4 = f'Add to short {abs(delta1):.4f} \u2192 Transfer out USDC'
+
+        # Execution mode: threshold check already done upstream, always proceed
+        if force:
+            requires_rebalance = True
 
         return {
             'requires_rebalance': requires_rebalance,

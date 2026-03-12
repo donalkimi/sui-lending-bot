@@ -354,7 +354,8 @@ class NoLoopCrossProtocolCalculator(StrategyCalculatorBase):
     def calculate_rebalance_amounts(self,
                                    position: Dict,
                                    live_rates: Dict,
-                                   live_prices: Dict) -> Dict:
+                                   live_prices: Dict,
+                                   force: bool = False) -> Dict:
         """
         Calculate rebalance amounts for 3-leg strategy.
 
@@ -415,10 +416,34 @@ class NoLoopCrossProtocolCalculator(StrategyCalculatorBase):
         action2 = _format_borrow_action(delta2, t2)
         action3 = _format_lend_action(delta3, t3)
 
+        from config.settings import REBALANCE_THRESHOLD
+        from analysis.strategy_calculators.base import _liq_delta, _build_reason
+
+        if force:
+            requires_rebalance = True
+        else:
+            # Use per-token stored baseline liq dists (set at deployment)
+            # entry_liquidation_distance_token2 is the actual liq dist for the borrow leg at entry
+            d_token2 = float(position.get('entry_liquidation_distance_token2') or 0)
+            lltv_a = float(position.get('entry_token1_liquidation_threshold') or 0)
+            bw_a = float(position.get('entry_token2_borrow_weight') or 1.0)
+            e1 = float(position.get('entry_token1_amount') or 0)
+            e2 = float(position.get('entry_token2_amount') or 0)
+
+            # token1/token2: Protocol A only (no B_B borrow in noloop)
+            d1 = _liq_delta(d_token2, e1, p1, e2, p2, lltv_a, bw_a)
+
+            token_deltas = {}
+            if d1 != 0.0:
+                token_deltas['token1/token2'] = d1
+
+            requires_rebalance = any(v >= REBALANCE_THRESHOLD for v in token_deltas.values())
+            reason = _build_reason(token_deltas, REBALANCE_THRESHOLD) if token_deltas else 'insufficient price data'
+
         return {
-            'requires_rebalance': True,
+            'requires_rebalance': requires_rebalance,
             'actions': [a for a in [action2, action3] if a and a != 'No change'],
-            'reason': f'token2 delta={delta2:.4f}, token3 delta={delta3:.4f}',
+            'reason': reason,
             'exit_token1_amount': exit_token1,
             'exit_token2_amount': exit_token2,
             'exit_token3_amount': exit_token3,

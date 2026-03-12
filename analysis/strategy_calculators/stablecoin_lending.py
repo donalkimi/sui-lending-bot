@@ -225,7 +225,8 @@ class StablecoinLendingCalculator(StrategyCalculatorBase):
 
     def calculate_rebalance_amounts(self, position: Dict,
                                    live_rates: Dict,
-                                   live_prices: Dict) -> Dict:
+                                   live_prices: Dict,
+                                   force: bool = False) -> Dict:
         """
         Stablecoin lending never needs rebalancing (no leverage, no liquidation risk).
 

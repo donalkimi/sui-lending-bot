@@ -373,7 +373,7 @@ def render_positions_batch(
 
     # Load all rebalance history (1 query for N positions)
     all_rebalances = get_all_rebalance_history(position_ids, conn)
-
+    
     # Load rates snapshot (1 query)
     timestamp_str = to_datetime_str(timestamp_seconds)
     ph = service._get_placeholder()
@@ -766,6 +766,16 @@ def build_segment_data_from_position(position: pd.Series) -> Dict:
         'opening_token2_rate': position.get('entry_token2_rate'),
         'opening_token3_rate': position.get('entry_token3_rate'),
         'opening_token4_rate': position.get('entry_token4_rate'),
+
+        # Entry liquidation prices + distances (from positions table generated columns)
+        'entry_liquidation_price_token1': position.get('entry_liquidation_price_token1'),
+        'entry_liquidation_price_token2': position.get('entry_liquidation_price_token2'),
+        'entry_liquidation_price_token3': position.get('entry_liquidation_price_token3'),
+        'entry_liquidation_price_token4': position.get('entry_liquidation_price_token4'),
+        'entry_liquidation_distance_token1': position.get('entry_liquidation_distance_token1'),
+        'entry_liquidation_distance_token2': position.get('entry_liquidation_distance_token2'),
+        'entry_liquidation_distance_token3': position.get('entry_liquidation_distance_token3'),
+        'entry_liquidation_distance_token4': position.get('entry_liquidation_distance_token4'),
 
         # Live segment per-leg earnings (overwritten hourly by calculate_statistics)
         'token1_earnings': position.get('token1_earnings'),
@@ -1502,7 +1512,7 @@ class RecursiveLendingRenderer(StrategyRendererBase):
             segment_type=segment_type,
             borrow_token=position['token2'],  # Leg 2A borrows token2
             borrow_price_live=token2_price_live,
-            borrow_price_entry=position['entry_token2_price'],
+            borrow_price_entry=segment_data.get('opening_token2_price'),
             borrow_weight_value=position['b_a'],
             liquidation_threshold=position.get('entry_token1_liquidation_threshold', 0.0),
             borrow_weight=position.get('entry_token2_borrow_weight', 1.0),
@@ -1563,7 +1573,7 @@ class RecursiveLendingRenderer(StrategyRendererBase):
             segment_type=segment_type,
             borrow_token=position['token4'] if has_leg4 else None,  # Leg 3B borrows token4 (B_B = closing stablecoin)
             borrow_price_live=token4_price_live,
-            borrow_price_entry=position['entry_token4_price'] if has_leg4 else None,
+            borrow_price_entry=segment_data.get('opening_token4_price') if has_leg4 else None,
             borrow_weight_value=position['b_b'] if has_leg4 else None,
             liquidation_threshold=position.get('entry_token3_liquidation_threshold', 0.0) if has_leg4 else None,
             borrow_weight=position.get('entry_token4_borrow_weight', 1.0) if has_leg4 else 1.0,
@@ -1863,25 +1873,6 @@ class RecursiveLendingRenderer(StrategyRendererBase):
                 # Loan is the borrow leg's tokens at live price
                 loan_value = float(loan_token_amount) * float(borrow_price_live) if loan_token_amount and borrow_price_live else 0.0
 
-                # Calculate entry liquidation distance using ENTRY prices
-                if safe_value(segment_entry_price) and safe_value(borrow_price_entry) and token_amount and loan_token_amount:
-                    entry_collateral_value = float(token_amount) * float(segment_entry_price)
-                    entry_loan_value = float(loan_token_amount) * float(borrow_price_entry)
-                    if entry_loan_value > 0:
-                        try:
-                            entry_liq_result = calc.calculate_liquidation_price(
-                                collateral_value=entry_collateral_value,
-                                loan_value=entry_loan_value,
-                                lending_token_price=float(segment_entry_price),
-                                borrowing_token_price=float(borrow_price_entry),
-                                lltv=liquidation_threshold,
-                                side='lending',
-                                borrow_weight=borrow_weight
-                            )
-                            entry_liq_dist_str = f"{entry_liq_result['pct_distance'] * 100:+.1f}%"
-                        except Exception as e:
-                            print(f"⚠️  [LIQUIDATION-LEND-ENTRY] Failed for {leg_id}/{token}/{protocol}: {e}")
-
                 # Calculate liquidation price using LIVE prices (current threshold)
                 if safe_value(live_price) and safe_value(borrow_price_live) and loan_value > 0:
                     try:
@@ -1904,9 +1895,9 @@ class RecursiveLendingRenderer(StrategyRendererBase):
                         if live_liq_price == float('inf'):
                             liq_price_str = "∞"
                         elif live_liq_price == 0.0:
-                            liq_price_str = "$0.00"
+                            liq_price_str = "0.0000"
                         else:
-                            liq_price_str = f"${live_liq_price:,.4f}"
+                            liq_price_str = f"{live_liq_price:,.4f}"
                     except Exception as e:
                         print(f"⚠️  [LIQUIDATION-LEND] Failed for {leg_id}/{token}/{protocol}: {e}")
                         print(f"    token_amount: {token_amount}")
@@ -1922,6 +1913,14 @@ class RecursiveLendingRenderer(StrategyRendererBase):
                 print(f"⚠️  [LIQUIDATION-LEND] Import or setup failed for {leg_id}/{token}/{protocol}: {e}")
                 import traceback
                 traceback.print_exc()
+
+        # Entry liq price + distance: read from DB regardless of live price availability
+        _entry_liq_price = segment_data.get(f'entry_liquidation_price_{leg_id}')
+        _entry_dist = segment_data.get(f'entry_liquidation_distance_{leg_id}')
+        if safe_value(_entry_liq_price) and float(_entry_liq_price) > 0:
+            liq_price_str = f"{float(_entry_liq_price):,.4f}"
+        if safe_value(_entry_dist):
+            entry_liq_dist_str = f"{float(_entry_dist) * 100:+.1f}%"
 
         # ========================================
         # STEP 3: Build row with conditional column headers
@@ -2135,18 +2134,13 @@ class RecursiveLendingRenderer(StrategyRendererBase):
                         # Format live liquidation distance (from function)
                         live_liq_dist_str = f"{live_liq_dist_pct * 100:+.1f}%"
 
-                        # Calculate entry distance: use segment entry price
-                        if safe_value(segment_entry_price) and live_liq_price > 0 and live_liq_price != float('inf'):
-                            entry_liq_dist_pct = (live_liq_price - float(segment_entry_price)) / float(segment_entry_price)
-                            entry_liq_dist_str = f"{entry_liq_dist_pct * 100:+.1f}%"
-
                         # Format liquidation price
                         if live_liq_price == float('inf'):
                             liq_price_str = "∞"
                         elif live_liq_price == 0.0:
-                            liq_price_str = "$0.00"
+                            liq_price_str = "0.0000"
                         else:
-                            liq_price_str = f"${live_liq_price:,.4f}"
+                            liq_price_str = f"{live_liq_price:,.4f}"
                     except Exception as e:
                         print(f"⚠️  [LIQUIDATION-BORROW] Failed for {leg_id}/{token}/{protocol}: {e}")
                         print(f"    token_amount: {token_amount}")
@@ -2162,6 +2156,14 @@ class RecursiveLendingRenderer(StrategyRendererBase):
                 print(f"⚠️  [LIQUIDATION-BORROW] Import or setup failed for {leg_id}/{token}/{protocol}: {e}")
                 import traceback
                 traceback.print_exc()
+
+        # Entry liq price + distance: read from DB regardless of live price availability
+        _entry_liq_price = segment_data.get(f'entry_liquidation_price_{leg_id}')
+        _entry_dist = segment_data.get(f'entry_liquidation_distance_{leg_id}')
+        if safe_value(_entry_liq_price) and float(_entry_liq_price) > 0:
+            liq_price_str = f"{float(_entry_liq_price):,.4f}"
+        if safe_value(_entry_dist):
+            entry_liq_dist_str = f"{float(_entry_dist) * 100:+.1f}%"
 
         # ========================================
         # STEP 3: Build return dict with conditional column headers
@@ -2920,6 +2922,12 @@ class NoLoopCrossProtocolRenderer(StrategyRendererBase):
             'price_token4': None,
         })
 
+        # Get token1 live price (collateral for token2 borrow leg)
+        if segment_type == 'historical' and segment_data:
+            token1_price_live = float(segment_data.get('closing_token1_price')) if segment_data.get('closing_token1_price') is not None else None
+        else:
+            token1_price_live = get_price_with_fallback(position['token1'], position['protocol_a'])
+
         # Get token2 live price
         if segment_type == 'historical' and segment_data:
             token2_price_live = float(segment_data.get('closing_token2_price')) if segment_data.get('closing_token2_price') is not None else None
@@ -2942,7 +2950,7 @@ class NoLoopCrossProtocolRenderer(StrategyRendererBase):
             segment_type=segment_type,
             borrow_token=position['token2'],  # Leg 2A borrows token2
             borrow_price_live=token2_price_live,
-            borrow_price_entry=position['entry_token2_price'],
+            borrow_price_entry=segment_data.get('opening_token2_price'),
             borrow_weight_value=position['b_a'],
             liquidation_threshold=position.get('entry_token1_liquidation_threshold', 0.0),
             borrow_weight=position.get('entry_token2_borrow_weight', 1.0),
@@ -2966,6 +2974,9 @@ class NoLoopCrossProtocolRenderer(StrategyRendererBase):
             deployment=deployment,
             segment_data=segment_data,
             segment_type=segment_type,
+            collateral_token=position['token1'],
+            collateral_price_live=token1_price_live,
+            collateral_price_entry=segment_data.get('opening_token1_price'),
             borrow_weight=position.get('entry_token2_borrow_weight', 1.0),
             rebalance_action=ra2
         ))
@@ -3375,7 +3386,7 @@ class PerpLendingRenderer(StrategyRendererBase):
                                 borrow_weight=_borrow_weight,
                             )
                             _lp = _live_res['liq_price']
-                            _usdc_liq_price_str = f"${_lp:.4f}" if _lp != float('inf') else "∞"
+                            _usdc_liq_price_str = f"{_lp:.4f}" if _lp != float('inf') else "∞"
                             _usdc_live_liq_str  = f"{_live_res['pct_distance'] * 100:+.1f}%"
                     except Exception as _e:
                         print(f"⚠️  [PerpLendingRenderer] USDC depeg liq calc failed: {_e}")
@@ -3427,7 +3438,7 @@ class PerpLendingRenderer(StrategyRendererBase):
                                 borrow_weight=_borrow_weight,
                             )
                             _lp2 = _exit_res['liq_price']
-                            _usdc_liq_price_str = f"${_lp2:.4f}" if _lp2 != float('inf') else "∞"
+                            _usdc_liq_price_str = f"{_lp2:.4f}" if _lp2 != float('inf') else "∞"
                             _usdc_live_liq_str  = f"{_exit_res['pct_distance'] * 100:+.1f}%"
                         except Exception as _e2:
                             print(f"⚠️  [PerpLendingRenderer] USDC depeg exit liq calc failed: {_e2}")
@@ -3496,7 +3507,7 @@ class PerpLendingRenderer(StrategyRendererBase):
 
         if safe_value(perp_liq_price_raw):
             perp_liq_price = float(perp_liq_price_raw)
-            liq_price_str = f"${perp_liq_price:,.{pp4}f}"
+            liq_price_str = f"{perp_liq_price:,.{pp4}f}"
             entry_liq_dist_str = f"{float(entry_liq_dist_raw) * 100:+.1f}%" if safe_value(entry_liq_dist_raw) else "N/A"
             if safe_value(live_price_token4) and float(live_price_token4) > 0:
                 live_liq_dist_pct = (perp_liq_price - float(live_price_token4)) / float(live_price_token4)
@@ -3666,7 +3677,7 @@ class PerpLendingRenderer(StrategyRendererBase):
             'Fees (%)': f"{perp_fees_apr * 100:.2f}%",
             'Fees ($)': f"${perp_fee_usd:,.2f}",
             'Liq Risk': "Price UP",
-            'Liq Price': f"${perp_liq_price:,.{pp_3B}f}",
+            'Liq Price': f"{perp_liq_price:,.{pp_3B}f}",
             'Liq Distance': f"+{perp_liq_dist_pct:.2f}%",
         })
 
@@ -3885,7 +3896,7 @@ class PerpBorrowingRenderer(StrategyRendererBase):
             segment_type=segment_type,
             borrow_token=position['token2'],
             borrow_price_live=token2_price_live,
-            borrow_price_entry=position['entry_token2_price'],
+            borrow_price_entry=segment_data.get('opening_token2_price'),
             borrow_weight_value=position['b_a'],
             liquidation_threshold=position.get('entry_token1_liquidation_threshold', 0.0),
             borrow_weight=position.get('entry_token2_borrow_weight', 1.0),
@@ -3975,7 +3986,7 @@ class PerpBorrowingRenderer(StrategyRendererBase):
 
         if safe_value(perp_liq_price_raw):
             perp_liq_price = float(perp_liq_price_raw)
-            liq_price_str = f"${perp_liq_price:,.{pp3}f}"
+            liq_price_str = f"{perp_liq_price:,.{pp3}f}"
             entry_liq_dist_str = f"{float(entry_liq_dist_raw) * 100:+.1f}%" if safe_value(entry_liq_dist_raw) else "N/A"
             if safe_value(live_price_token3) and float(live_price_token3) > 0:
                 live_liq_dist_pct = (perp_liq_price - float(live_price_token3)) / float(live_price_token3)
@@ -4149,7 +4160,7 @@ class PerpBorrowingRenderer(StrategyRendererBase):
                 'Fees (%)': f"{perp_fees_apr * 100:.2f}%",
                 'Fees ($)': f"${perp_fee_usd:,.2f}",
                 'Liq Risk': "Price DOWN",
-                'Liq Price': f"${perp_liq_price:,.{pp_3B}f}",
+                'Liq Price': f"{perp_liq_price:,.{pp_3B}f}",
                 'Liq Distance': f"{perp_liq_dist_pct:.2f}%",
                 'Max Borrow': "",
             },

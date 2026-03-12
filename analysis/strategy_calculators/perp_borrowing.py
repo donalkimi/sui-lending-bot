@@ -283,7 +283,8 @@ class PerpBorrowingCalculator(StrategyCalculatorBase):
             'token4_borrow_weight': None,
         }
 
-    def calculate_rebalance_amounts(self, position: Dict, live_rates: Dict, live_prices: Dict) -> Dict:
+    def calculate_rebalance_amounts(self, position: Dict, live_rates: Dict, live_prices: Dict,
+                                    force: bool = False) -> Dict:
         l_a = float(position['l_a'])
         b_a = float(position['b_a'])
         D   = float(position['deployment_usd'])
@@ -355,10 +356,40 @@ class PerpBorrowingCalculator(StrategyCalculatorBase):
                    else f'Transfer in USDC \u2192 Open long {abs(delta3):.4f} {token3}' if delta3 > 0
                    else f'Close long {abs(delta3):.4f} {token3} \u2192 Transfer out USDC')
 
+        from config.settings import REBALANCE_THRESHOLD
+        from analysis.strategy_calculators.base import _liq_delta, _perp_liq_delta, _build_reason
+
+        if force:
+            requires_rebalance = True
+            reason = 'manual'
+        else:
+            # Use per-token stored baseline liq dists (set at deployment)
+            d_token2 = float(position.get('entry_liquidation_distance_token2') or 0)
+            d_token3 = abs(float(position.get('entry_liquidation_distance_token3') or 0))  # stored negative for long perp
+            lltv_a = float(position.get('entry_token1_liquidation_threshold') or 0)
+            bw_a = float(position.get('entry_token2_borrow_weight') or 1.0)
+            e1 = float(position.get('entry_token1_amount') or 0)
+            e2 = float(position.get('entry_token2_amount') or 0)
+            entry_token3_price = float(position.get('entry_token3_price') or 0)
+
+            # token1/token2: Protocol A (stablecoin collateral vs volatile borrow)
+            d_prot_a = _liq_delta(d_token2, e1, p1, e2, p2, lltv_a, bw_a)
+            # token3: long perp (liq when price drops)
+            d_perp = _perp_liq_delta(d_token3, entry_token3_price, p3, 'long')
+
+            token_deltas = {}
+            if d_prot_a != 0.0:
+                token_deltas['token1/token2'] = d_prot_a
+            if d_perp != 0.0:
+                token_deltas['token3'] = d_perp
+
+            requires_rebalance = any(v >= REBALANCE_THRESHOLD for v in token_deltas.values())
+            reason = _build_reason(token_deltas, REBALANCE_THRESHOLD) if token_deltas else 'insufficient price data'
+
         return {
-            'requires_rebalance': True,
+            'requires_rebalance': requires_rebalance,
             'actions': actions,
-            'reason': f'token2 delta={delta2:.4f}, token3 delta={delta3:.4f}',
+            'reason': reason,
             'exit_token1_amount': rebalanced_token1_amount,
             'exit_token2_amount': rebalanced_token2_amount,
             'exit_token3_amount': rebalanced_token3_amount,

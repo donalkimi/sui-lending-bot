@@ -285,82 +285,61 @@ def refresh_pipeline(
                     timestamp=current_seconds
                 )
 
-        # Check positions and auto-rebalance if needed
+        # Auto-rebalance: check each active position and rebalance if threshold exceeded
         print("[AUTO-REBALANCE] Checking positions for rebalancing needs...")
 
         try:
             from analysis.position_service import PositionService
-            from config.settings import REBALANCE_THRESHOLD
             from dashboard.dashboard_utils import get_db_connection
 
-            # Create database connection for position service
-            conn = get_db_connection()  # Respects USE_CLOUD_DB setting
+            conn = get_db_connection()
             service = PositionService(conn)
-            rebalance_checks = service.check_positions_need_rebalancing(
-                live_timestamp=current_seconds,
-                rebalance_threshold=REBALANCE_THRESHOLD
-            )
+            active_positions = service.get_active_positions(live_timestamp=current_seconds)
 
-            # Auto-rebalance positions that exceed threshold
-            if rebalance_checks:
-                positions_needing_rebalance = [
-                    r for r in rebalance_checks if r['needs_rebalance']
-                ]
-
-                if positions_needing_rebalance:
-                    print(f"[AUTO-REBALANCE] WARNING:️  {len(positions_needing_rebalance)} position(s) need rebalancing")
-
-                    for check in positions_needing_rebalance:
-                        position_id = check['position_id']
-                        print(f"\n[AUTO-REBALANCE] 🔄 Auto-rebalancing position {position_id[:8]}... "
-                              f"({check['token2']} in {check['protocol_a']}/{check['protocol_b']})")
-
-                        # Log liquidation distance changes
-                        if check['needs_rebalance_2a']:
-                            print(f"[AUTO-REBALANCE]    Leg 2A: baseline={check['baseline_liq_dist_2a']:.2%} → "
-                                  f"live={check['live_liq_dist_2a']:.2%} "
-                                  f"(Δ={check['delta_2a']:.2%})")
-                        if check['needs_rebalance_2b']:
-                            print(f"[AUTO-REBALANCE]    Leg 2B: baseline={check['baseline_liq_dist_2b']:.2%} → "
-                                  f"live={check['live_liq_dist_2b']:.2%} "
-                                  f"(Δ={check['delta_2b']:.2%})")
-
-                        # Execute rebalance
-                        try:
-                            rebalance_notes = (
-                                f"Auto-rebalance triggered by threshold ({REBALANCE_THRESHOLD:.1%}). "
-                                f"Leg 2A Δ: {check['delta_2a']:.2%}, "
-                                f"Leg 2B Δ: {check['delta_2b']:.2%}"
-                            )
-
-                            rebalance_id = service.rebalance_position(
-                                position_id=position_id,
-                                live_timestamp=current_seconds,
-                                rebalance_reason="auto_rebalance_threshold_exceeded",
-                                rebalance_notes=rebalance_notes
-                            )
-
-                            print(f"[AUTO-REBALANCE]    ✅ Rebalance successful (ID: {rebalance_id[:8]}...)")
+            if active_positions.empty:
+                print("[AUTO-REBALANCE] OK No active positions to check")
+            else:
+                for _, position in active_positions.iterrows():
+                    position_id = position['position_id']
+                    try:
+                        rebalance_id = service.rebalance_position(
+                            position_id=position_id,
+                            live_timestamp=current_seconds,
+                            rebalance_reason="auto_rebalance_threshold_exceeded",
+                            rebalance_notes="Auto-rebalance",
+                            force=False
+                        )
+                        if rebalance_id is not None:
                             auto_rebalanced_count += 1
+                            print(f"[AUTO-REBALANCE] {position_id[:8]} | rebalanced")
+                            if send_slack_notifications:
+                                try:
+                                    notifier.alert_position_rebalanced(
+                                        position_id=position_id,
+                                        token1=position.get('token1', ''),
+                                        token2=position.get('token2', ''),
+                                        token3=position.get('token3', ''),
+                                        protocol_a=position['protocol_a'],
+                                        protocol_b=position['protocol_b'],
+                                        liq_dist_2a_before=None, liq_dist_2a_after=None,
+                                        liq_dist_2b_before=None, liq_dist_2b_after=None,
+                                        rebalance_timestamp=current_seconds
+                                    )
+                                except Exception as slack_error:
+                                    print(f"[AUTO-REBALANCE] Slack alert failed: {slack_error}")
+                    except Exception as rebalance_error:
+                        print(f"[AUTO-REBALANCE] {position_id[:8]} | FAILED | {rebalance_error}")
 
-                        except Exception as rebalance_error:
-                            print(f"[AUTO-REBALANCE]    ❌ Rebalance failed: {rebalance_error}")
-                            # Continue to next position even if this one fails
-
-                    if auto_rebalanced_count > 0:
-                        print(f"\n[AUTO-REBALANCE] ✅ Auto-rebalanced {auto_rebalanced_count}/{len(positions_needing_rebalance)} position(s)")
+                if auto_rebalanced_count > 0:
+                    print(f"[AUTO-REBALANCE] ✅ Auto-rebalanced {auto_rebalanced_count} position(s)")
                 else:
                     print("[AUTO-REBALANCE] OK All positions within threshold")
-            else:
-                print("[AUTO-REBALANCE] OK No active positions to check")
 
         except Exception as rebalance_system_error:
             print(f"[AUTO-REBALANCE] Error in auto-rebalance system: {rebalance_system_error}")
             import traceback
             traceback.print_exc()
-            # Don't fail entire pipeline if rebalance check fails
         finally:
-            # Clean up database connection
             if 'conn' in locals():
                 conn.close()
 

@@ -179,7 +179,8 @@ class PerpLendingRecursiveCalculator(PerpLendingCalculator):
 
         return result
 
-    def calculate_rebalance_amounts(self, position: dict, live_rates: dict, live_prices: dict) -> dict:
+    def calculate_rebalance_amounts(self, position: dict, live_rates: dict, live_prices: dict,
+                                    force: bool = False) -> dict:
         """
         Extends parent rebalance logic (perp liq trigger) with B_A stablecoin borrow repayment.
 
@@ -187,9 +188,31 @@ class PerpLendingRecursiveCalculator(PerpLendingCalculator):
           - B_A must be proportionally reduced to keep Protocol A LTV safe
           - Part of the USDC freed by selling spot goes to repay B_A, not all to Bluefin margin
           - Parent's 'deposit_collateral' action amount is reduced by the B_A repayment
+
+        Also checks token1 (volatile collateral) and token2 (stablecoin borrow) liq dist drift.
         """
-        # Parent computes: trigger check, exit_token1/token4 amounts, L_A and B_B actions
-        result = super().calculate_rebalance_amounts(position, live_rates, live_prices)
+        from config.settings import REBALANCE_THRESHOLD
+        from analysis.strategy_calculators.base import _liq_delta, _build_reason
+
+        # Parent computes: trigger check (token4 short perp), exit_token1/token4 amounts
+        result = super().calculate_rebalance_amounts(position, live_rates, live_prices, force=force)
+
+        if not force:
+            # Add Protocol A liq checks: token1 (volatile collateral drops) + token2 (stablecoin borrow depeg)
+            d = float(position.get('entry_liquidation_distance') or 0)
+            lltv_a = float(position.get('entry_token1_liquidation_threshold') or 0)
+            bw_a = float(position.get('entry_token2_borrow_weight') or 1.0)
+            e1 = float(position.get('entry_token1_amount') or 0)
+            e2 = float(position.get('entry_token2_amount') or 0)
+            p1 = live_prices.get('price_token1')
+            p2 = live_prices.get('price_token2')
+
+            d_prot_a = _liq_delta(d, e1, p1, e2, p2, lltv_a, bw_a)
+            if d_prot_a != 0.0 and d_prot_a >= REBALANCE_THRESHOLD:
+                result['requires_rebalance'] = True
+                # Append Protocol A info to existing reason
+                prot_a_str = _build_reason({'token1/token2': d_prot_a}, REBALANCE_THRESHOLD)
+                result['reason'] = f"{result.get('reason', '')} | {prot_a_str}"
 
         # Borrow ratio r = B_A / L_A (from position multipliers, constant for the strategy)
         b_a = float(position['b_a'])
