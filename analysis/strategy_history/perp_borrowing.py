@@ -94,30 +94,30 @@ class PerpBorrowingHistoryHandler(HistoryHandlerBase):
                 'protocol_b': strategy['protocol_b'],
 
                 # Leg 1A — stablecoin lend
-                'lend_total_apr_1A': leg_1A['lend_total_apr'],
-                'price_1A': leg_1A['price_usd'],
-                'collateral_ratio_1A': leg_1A['collateral_ratio'],
-                'liquidation_threshold_1A': leg_1A['liquidation_threshold'],
+                'rate_token1': leg_1A['lend_total_apr'],
+                'price_token1': leg_1A['price_usd'],
+                'collateral_ratio_token1': leg_1A['collateral_ratio'],
+                'liquidation_threshold_token1': leg_1A['liquidation_threshold'],
 
                 # Leg 2A — token2 borrow
-                'borrow_total_apr_2A': leg_2A['borrow_total_apr'],
-                'price_2A': leg_2A['price_usd'],
-                'borrow_fee_2A': leg_2A['borrow_fee'],
+                'rate_token2': leg_2A['borrow_total_apr'],
+                'price_token2': leg_2A['price_usd'],
+                'borrow_fee_token2': leg_2A['borrow_fee'],
 
                 # Leg 3B — long perp (Bluefin)
-                'lend_total_apr_3B': leg_3B['lend_total_apr'],
-                'price_3B': leg_3B['price_usd'],
+                'rate_token3': leg_3B['lend_total_apr'],
+                'price_token3': leg_3B['price_usd'],
 
                 # Leg 3B rolling avg rates (Bluefin perp only — None for other protocols)
-                'lend_avg8hr_apr_3B':  leg_3B.get('avg8hr_lend_total_apr'),
-                'lend_avg24hr_apr_3B': leg_3B.get('avg24hr_lend_total_apr'),
+                'avg8hr_rate_token3':  leg_3B.get('avg8hr_lend_total_apr'),
+                'avg24hr_rate_token3': leg_3B.get('avg24hr_lend_total_apr'),
 
                 # Per-leg raw rates for analysis tab display (no calculator impact)
-                'raw_lend_total_apr_1A':    leg_1A['lend_total_apr'],
-                'raw_borrow_total_apr_2A':  leg_2A['borrow_total_apr'],
-                'raw_perp_rate_3B':         leg_3B['lend_total_apr'],
-                'raw_avg8hr_perp_rate_3B':  leg_3B.get('avg8hr_lend_total_apr'),
-                'raw_avg24hr_perp_rate_3B': leg_3B.get('avg24hr_lend_total_apr'),
+                'raw_rate_token1':              leg_1A['lend_total_apr'],
+                'raw_rate_token2':              leg_2A['borrow_total_apr'],
+                'raw_perp_rate_token3':         leg_3B['lend_total_apr'],
+                'raw_avg8hr_perp_rate_token3':  leg_3B.get('avg8hr_lend_total_apr'),
+                'raw_avg24hr_perp_rate_token3': leg_3B.get('avg24hr_lend_total_apr'),
 
                 # Optional config with documented default
                 'liquidation_distance': strategy.get('liquidation_distance', 0.20),

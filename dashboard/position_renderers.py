@@ -2356,8 +2356,8 @@ def render_position_expander(
             return None
         return basis_lookup.get(perp_proxy)
 
-    # Compute basis-adjusted current APR and basis PnL (perp strategies only)
-    current_apr_incl_basis = PositionService.compute_basis_adjusted_current_apr(position, stats)
+    # Basis-adjusted current APR: pre-computed by position_statistics_calculator via strategy calculator
+    current_apr_incl_basis = stats.get('basis_adj_current_apr') if stats else None
     basis_pnl = stats.get('basis_pnl') if stats else None
     if basis_pnl is None and strategy_type in _perp_strategies:
         basis_pnl = PositionService.calculate_basis_pnl(position, get_basis)
@@ -2524,7 +2524,7 @@ def render_position_expander2(
             "Must be initialised to 0 in position_statistics_calculator."
         )
 
-    current_apr_incl_basis = PositionService.compute_basis_adjusted_current_apr(position, stats)
+    current_apr_incl_basis = stats.get('basis_adj_current_apr') if stats else None
 
     # Build title
     title = build_position_expander_title(

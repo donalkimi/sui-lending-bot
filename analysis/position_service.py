@@ -1279,42 +1279,6 @@ class PositionService:
             return ((live_perp_price - entry_perp_price) * perp_tokens
                    - (live_spot_price - entry_spot_price) * spot_tokens)
 
-    @staticmethod
-    def compute_basis_adjusted_current_apr(
-        position: pd.Series,
-        stats: Dict,
-    ) -> float:
-        """
-        Compute current_apr adjusted for unrealised basis PnL.
-
-        basis_pnl / deployment_usd converts the one-time basis gain/loss to an
-        APR adjustment (no time-scaling — same convention as basis_cost).
-
-        Non-perp or zero basis_pnl: returns current_apr unchanged.
-        """
-        from config import settings
-
-        if stats is None:
-            return None  # no stats available yet — caller treats None as "N/A"
-
-        current_apr = float(stats['current_apr'])
-
-        strategy_type = position['strategy_type']
-        if strategy_type not in settings.PERP_STRATEGIES:
-            return current_apr
-
-        deployment_usd = float(position['deployment_usd'])
-        if deployment_usd <= 0:
-            raise ValueError(
-                f"Position {position['position_id']}: deployment_usd is {deployment_usd} — must be > 0."
-            )
-
-        basis_pnl = stats['basis_pnl']
-        if basis_pnl is None or basis_pnl == 0:
-            return current_apr
-
-        return current_apr + basis_pnl / deployment_usd
-
     # ==================== Rebalance Management ====================
 
     def rebalance_position(

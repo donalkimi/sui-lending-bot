@@ -533,20 +533,20 @@ class RateAnalyzer:
         for token1 in stablecoins:
             for protocol_a in self.protocols:
                 # Early check: Does token1 exist in protocol_a for lending?
-                lend_total_apr_1A = self.get_rate(self.lend_rates, token1, protocol_a)
-                if np.isnan(lend_total_apr_1A):
+                rate_token1 = self.get_rate(self.lend_rates, token1, protocol_a)
+                if np.isnan(rate_token1):
                     continue  # token1 not present at protocol_a
 
                 # Get remaining rates and validate
-                lend_reward_apr_1A = self.get_rate(self.lend_rewards, token1, protocol_a)
-                if np.isnan(lend_reward_apr_1A):
+                reward_apr_token1 = self.get_rate(self.lend_rewards, token1, protocol_a)
+                if np.isnan(reward_apr_token1):
                     logger.warning(f"[Stablecoin] NaN reward APR for {token1} on {protocol_a} - skipping")
                     continue
-                lend_base_apr_1A = lend_total_apr_1A - lend_reward_apr_1A
-                price_1A = self.get_rate(self.prices, token1, protocol_a)
+                base_apr_token1 = rate_token1 - reward_apr_token1
+                price_token1 = self.get_rate(self.prices, token1, protocol_a)
                 token1_contract = self.get_contract(token1, protocol_a)
 
-                if np.isnan(price_1A) or price_1A <= 1e-9:
+                if np.isnan(price_token1) or price_token1 <= 1e-9:
                     continue
 
                 # Call calculator
@@ -554,10 +554,10 @@ class RateAnalyzer:
                     token1=token1,
                     token1_contract=token1_contract,
                     protocol_a=protocol_a,
-                    lend_total_apr_1A=lend_total_apr_1A,
-                    lend_base_apr_1A=lend_base_apr_1A,
-                    lend_reward_apr_1A=lend_reward_apr_1A,
-                    price_1A=price_1A,
+                    rate_token1=rate_token1,
+                    base_apr_token1=base_apr_token1,
+                    reward_apr_token1=reward_apr_token1,
+                    price_token1=price_token1,
                     liquidation_distance=self.liquidation_distance,
                     timestamp=self.timestamp
                 )
@@ -629,13 +629,13 @@ class RateAnalyzer:
                 # Nested protocol loops with early filtering for efficiency
                 for protocol_a in self.protocols:
                     # Early check: Does token1 exist in protocol_a for lending?
-                    lend_total_apr_1A = self.get_rate(self.lend_rates, token1, protocol_a)
-                    if np.isnan(lend_total_apr_1A):
+                    rate_token1 = self.get_rate(self.lend_rates, token1, protocol_a)
+                    if np.isnan(rate_token1):
                         continue  # token1 not present at protocol_a
 
                     # Early check: Does token2 exist in protocol_a for borrowing?
-                    borrow_total_apr_2A = self.get_rate(self.borrow_rates, token2, protocol_a)
-                    if np.isnan(borrow_total_apr_2A):
+                    rate_token2 = self.get_rate(self.borrow_rates, token2, protocol_a)
+                    if np.isnan(rate_token2):
                         continue  # token2 not borrowable at protocol_a
 
                     for protocol_b in self.protocols:
@@ -644,21 +644,21 @@ class RateAnalyzer:
                             continue
 
                         # Early check: Does token2 exist in protocol_b for lending?
-                        lend_total_apr_2B = self.get_rate(self.lend_rates, token2, protocol_b)
-                        if np.isnan(lend_total_apr_2B):
+                        rate_token3 = self.get_rate(self.lend_rates, token2, protocol_b)
+                        if np.isnan(rate_token3):
                             continue  # token2 not present at protocol_b
 
                         # All tokens exist in required protocols - now get remaining data
-                        collateral_ratio_1A = self.get_rate(self.collateral_ratios, token1, protocol_a)
-                        liquidation_threshold_1A = self.get_liquidation_threshold(token1, protocol_a)
+                        collateral_ratio_token1 = self.get_rate(self.collateral_ratios, token1, protocol_a)
+                        liquidation_threshold_token1 = self.get_liquidation_threshold(token1, protocol_a)
 
-                        price_1A = self.get_rate(self.prices, token1, protocol_a)
-                        price_2A = self.get_rate(self.prices, token2, protocol_a)
-                        price_2B = self.get_rate(self.prices, token2, protocol_b)
+                        price_token1 = self.get_rate(self.prices, token1, protocol_a)
+                        price_token2 = self.get_rate(self.prices, token2, protocol_a)
+                        price_token3 = self.get_rate(self.prices, token2, protocol_b)
 
-                        borrow_fee_2A = self.get_rate(self.borrow_fees, token2, protocol_a)
-                        available_borrow_2A = self.get_rate(self.available_borrow, token2, protocol_a)
-                        borrow_weight_2A = self.get_borrow_weight(token2, protocol_a)
+                        borrow_fee_token2 = self.get_rate(self.borrow_fees, token2, protocol_a)
+                        available_borrow_token2 = self.get_rate(self.available_borrow, token2, protocol_a)
+                        borrow_weight_token2 = self.get_borrow_weight(token2, protocol_a)
 
                         token1_contract = self.get_contract(token1, protocol_a)
                         token2_contract = self.get_contract(token2, protocol_a)
@@ -666,11 +666,11 @@ class RateAnalyzer:
                         # FAIL LOUD: Validate all required data is present
                         # At this point, we already checked APRs exist, so NaN here indicates data quality issues
                         required_checks = [
-                            (collateral_ratio_1A, f"collateral_ratio for {token1} on {protocol_a}"),
-                            (liquidation_threshold_1A, f"liquidation_threshold for {token1} on {protocol_a}"),
-                            (price_1A, f"price for {token1} on {protocol_a}"),
-                            (price_2A, f"price for {token2} on {protocol_a}"),
-                            (price_2B, f"price for {token2} on {protocol_b}"),
+                            (collateral_ratio_token1, f"collateral_ratio for {token1} on {protocol_a}"),
+                            (liquidation_threshold_token1, f"liquidation_threshold for {token1} on {protocol_a}"),
+                            (price_token1, f"price for {token1} on {protocol_a}"),
+                            (price_token2, f"price for {token2} on {protocol_a}"),
+                            (price_token3, f"price for {token2} on {protocol_b}"),
                         ]
 
                         # Check for NaN or invalid values
@@ -695,17 +695,17 @@ class RateAnalyzer:
                             token2_contract=token2_contract,
                             protocol_a=protocol_a,
                             protocol_b=protocol_b,
-                            lend_total_apr_1A=lend_total_apr_1A,
-                            borrow_total_apr_2A=borrow_total_apr_2A,
-                            lend_total_apr_2B=lend_total_apr_2B,
-                            collateral_ratio_1A=collateral_ratio_1A,
-                            liquidation_threshold_1A=liquidation_threshold_1A,
-                            price_1A=price_1A,
-                            price_2A=price_2A,
-                            price_2B=price_2B,
-                            available_borrow_2A=available_borrow_2A,
-                            borrow_fee_2A=borrow_fee_2A,
-                            borrow_weight_2A=borrow_weight_2A,
+                            rate_token1=rate_token1,
+                            rate_token2=rate_token2,
+                            rate_token3=rate_token3,
+                            collateral_ratio_token1=collateral_ratio_token1,
+                            liquidation_threshold_token1=liquidation_threshold_token1,
+                            price_token1=price_token1,
+                            price_token2=price_token2,
+                            price_token3=price_token3,
+                            available_borrow_token2=available_borrow_token2,
+                            borrow_fee_token2=borrow_fee_token2,
+                            borrow_weight_token2=borrow_weight_token2,
                             liquidation_distance=self.liquidation_distance,
                             timestamp=self.timestamp
                         )
@@ -844,47 +844,47 @@ class RateAnalyzer:
                                 continue
                             analyzed += 1
 
-                            lend_rate_1A = self.get_rate(self.lend_rates, token1, protocol_a)
-                            if np.isnan(lend_rate_1A): continue
-                            borrow_rate_2A = self.get_rate(self.borrow_rates, token2, protocol_a)
-                            if np.isnan(borrow_rate_2A): continue
-                            lend_rate_2B = self.get_rate(self.lend_rates, token2, protocol_b)
-                            if np.isnan(lend_rate_2B): continue
-                            borrow_rate_4B = self.get_rate(self.borrow_rates, token4, protocol_b)
-                            if np.isnan(borrow_rate_4B): continue
+                            rate_token1 = self.get_rate(self.lend_rates, token1, protocol_a)
+                            if np.isnan(rate_token1): continue
+                            rate_token2 = self.get_rate(self.borrow_rates, token2, protocol_a)
+                            if np.isnan(rate_token2): continue
+                            rate_token3 = self.get_rate(self.lend_rates, token2, protocol_b)
+                            if np.isnan(rate_token3): continue
+                            rate_token4 = self.get_rate(self.borrow_rates, token4, protocol_b)
+                            if np.isnan(rate_token4): continue
 
-                            token2_spread = lend_rate_2B - borrow_rate_2A
-                            token1_spread = lend_rate_1A - borrow_rate_4B
+                            token2_spread = rate_token3 - rate_token2
+                            token1_spread = rate_token1 - rate_token4
 
                             if token2_spread < spread_threshold and token1_spread < spread_threshold:
                                 self.excluded_by_rate_spread += 1
                                 continue
 
-                            collateral_1A = self.get_rate(self.collateral_ratios, token1, protocol_a)
-                            collateral_2B = self.get_rate(self.collateral_ratios, token2, protocol_b)
-                            liquidation_threshold_1A = self.get_liquidation_threshold(token1, protocol_a)
-                            liquidation_threshold_2B = self.get_liquidation_threshold(token2, protocol_b)
-                            price_1A = self.get_price(token1, protocol_a)
-                            price_2A = self.get_price(token2, protocol_a)
-                            price_2B = self.get_price(token2, protocol_b)
-                            price_4B = self.get_price(token4, protocol_b)  # B_B: closing stablecoin
-                            available_borrow_2A = self.get_available_borrow(token2, protocol_a)
-                            available_borrow_4B = self.get_available_borrow(token4, protocol_b)
-                            borrow_fee_2A = self.get_borrow_fee(token2, protocol_a)
-                            borrow_fee_4B = self.get_borrow_fee(token4, protocol_b)
-                            borrow_weight_2A = self.get_borrow_weight(token2, protocol_a)
-                            borrow_weight_4B = self.get_borrow_weight(token4, protocol_b)
+                            collateral_ratio_token1 = self.get_rate(self.collateral_ratios, token1, protocol_a)
+                            collateral_ratio_token3 = self.get_rate(self.collateral_ratios, token2, protocol_b)
+                            liquidation_threshold_token1 = self.get_liquidation_threshold(token1, protocol_a)
+                            liquidation_threshold_token3 = self.get_liquidation_threshold(token2, protocol_b)
+                            price_token1 = self.get_price(token1, protocol_a)
+                            price_token2 = self.get_price(token2, protocol_a)
+                            price_token3 = self.get_price(token2, protocol_b)
+                            price_token4 = self.get_price(token4, protocol_b)  # B_B: closing stablecoin
+                            available_borrow_token2 = self.get_available_borrow(token2, protocol_a)
+                            available_borrow_token4 = self.get_available_borrow(token4, protocol_b)
+                            borrow_fee_token2 = self.get_borrow_fee(token2, protocol_a)
+                            borrow_fee_token4 = self.get_borrow_fee(token4, protocol_b)
+                            borrow_weight_token2 = self.get_borrow_weight(token2, protocol_a)
+                            borrow_weight_token4 = self.get_borrow_weight(token4, protocol_b)
 
-                            if any(np.isnan([lend_rate_1A, borrow_rate_2A, lend_rate_2B,
-                                            borrow_rate_4B, collateral_1A, collateral_2B,
-                                            liquidation_threshold_1A, liquidation_threshold_2B,
-                                            price_1A, price_2A, price_2B, price_4B])):
+                            if any(np.isnan([rate_token1, rate_token2, rate_token3,
+                                            rate_token4, collateral_ratio_token1, collateral_ratio_token3,
+                                            liquidation_threshold_token1, liquidation_threshold_token3,
+                                            price_token1, price_token2, price_token3, price_token4])):
                                 continue
-                            if collateral_1A <= 1e-9 or collateral_2B <= 1e-9:
+                            if collateral_ratio_token1 <= 1e-9 or collateral_ratio_token3 <= 1e-9:
                                 continue
-                            if liquidation_threshold_1A <= 1e-9 or liquidation_threshold_2B <= 1e-9:
+                            if liquidation_threshold_token1 <= 1e-9 or liquidation_threshold_token3 <= 1e-9:
                                 continue
-                            if any(p <= 1e-9 for p in [price_1A, price_2A, price_2B, price_4B]):
+                            if any(p <= 1e-9 for p in [price_token1, price_token2, price_token3, price_token4]):
                                 continue
 
                             result = calculator.analyze_strategy(
@@ -893,24 +893,24 @@ class RateAnalyzer:
                                 token4=token4,  # B_B closing stablecoin
                                 protocol_a=protocol_a,
                                 protocol_b=protocol_b,
-                                lend_total_apr_1A=lend_rate_1A,
-                                borrow_total_apr_2A=borrow_rate_2A,
-                                lend_total_apr_2B=lend_rate_2B,
-                                borrow_total_apr_3B=borrow_rate_4B,
-                                collateral_ratio_1A=collateral_1A,
-                                collateral_ratio_2B=collateral_2B,
-                                liquidation_threshold_1A=liquidation_threshold_1A,
-                                liquidation_threshold_2B=liquidation_threshold_2B,
-                                price_1A=price_1A,
-                                price_2A=price_2A,
-                                price_2B=price_2B,
-                                price_3B=price_4B,
-                                available_borrow_2A=available_borrow_2A,
-                                available_borrow_3B=available_borrow_4B,
-                                borrow_fee_2A=borrow_fee_2A,
-                                borrow_fee_3B=borrow_fee_4B,
-                                borrow_weight_2A=borrow_weight_2A,
-                                borrow_weight_3B=borrow_weight_4B,
+                                rate_token1=rate_token1,
+                                rate_token2=rate_token2,
+                                rate_token3=rate_token3,
+                                rate_token4=rate_token4,
+                                collateral_ratio_token1=collateral_ratio_token1,
+                                collateral_ratio_token3=collateral_ratio_token3,
+                                liquidation_threshold_token1=liquidation_threshold_token1,
+                                liquidation_threshold_token3=liquidation_threshold_token3,
+                                price_token1=price_token1,
+                                price_token2=price_token2,
+                                price_token3=price_token3,
+                                price_token4=price_token4,
+                                available_borrow_token2=available_borrow_token2,
+                                available_borrow_token4=available_borrow_token4,
+                                borrow_fee_token2=borrow_fee_token2,
+                                borrow_fee_token4=borrow_fee_token4,
+                                borrow_weight_token2=borrow_weight_token2,
+                                borrow_weight_token4=borrow_weight_token4,
                                 token1_contract=self.get_contract(token1, protocol_a),
                                 token2_contract=self.get_contract(token2, protocol_a),
                                 token4_contract=self.get_contract(token4, protocol_b),
@@ -972,8 +972,8 @@ class RateAnalyzer:
 
         for perp_token in bluefin_tokens:
             # Get perp funding rate from Bluefin
-            borrow_total_apr_3B = self.get_rate(self.borrow_rates, perp_token, 'Bluefin')
-            if np.isnan(borrow_total_apr_3B):
+            rate_token4 = self.get_rate(self.borrow_rates, perp_token, 'Bluefin')
+            if np.isnan(rate_token4):
                 print(f"[ANALYZER] Perp: No borrow rate for {perp_token} on Bluefin - skipping")
                 continue
 
@@ -984,8 +984,8 @@ class RateAnalyzer:
             perp_contract_key = perp_contract if perp_contract else f'0x{perp_token}_bluefin'
 
             # perp_lending: shorting the perp → use perp_bid (once per perp, same for all spot contracts)
-            price_3B = self.get_perp_price(perp_contract_key, 'perp_bid')
-            if np.isnan(price_3B):
+            price_token4 = self.get_perp_price(perp_contract_key, 'perp_bid')
+            if np.isnan(price_token4):
                 print(f"[ANALYZER] Perp: No perp_bid price for {perp_token} in spot_perp_basis - skipping")
                 continue
 
@@ -1038,18 +1038,18 @@ class RateAnalyzer:
 
                 # spot_ask: buying spot token to lend (perp_lending buys spot).
                 # Fall back to lending protocol price if basis data unavailable.
-                price_1A_basis = self.get_perp_basis_price(perp_contract_key, spot_contract, 'spot_ask')
+                price_token1_basis = self.get_perp_basis_price(perp_contract_key, spot_contract, 'spot_ask')
 
                 for protocol_a in valid_protocols:
                     token1_contract = self.get_contract(spot_token, protocol_a)
 
-                    lend_total_apr_1A = self.get_rate(self.lend_rates, spot_token, protocol_a)
-                    if np.isnan(lend_total_apr_1A):
+                    rate_token1 = self.get_rate(self.lend_rates, spot_token, protocol_a)
+                    if np.isnan(rate_token1):
                         continue  # token absent at this protocol (should not happen after valid_protocols filter)
 
-                    price_1A = price_1A_basis if not np.isnan(price_1A_basis) else \
+                    price_token1 = price_token1_basis if not np.isnan(price_token1_basis) else \
                                self.get_rate(self.prices, spot_token, protocol_a)
-                    if np.isnan(price_1A) or price_1A <= 0:
+                    if np.isnan(price_token1) or price_token1 <= 0:
                         continue
 
                     for stablecoin in stablecoins:
@@ -1057,31 +1057,31 @@ class RateAnalyzer:
                         # empty for perp_lending (token2 = None, b_a = 0).
                         borrow_params = {}
                         if stablecoin is not None:
-                            borrow_total_apr_2A = self.get_rate(self.borrow_rates, stablecoin, protocol_a)
-                            if np.isnan(borrow_total_apr_2A):
+                            rate_token2 = self.get_rate(self.borrow_rates, stablecoin, protocol_a)
+                            if np.isnan(rate_token2):
                                 continue  # stablecoin not borrowable at this protocol
 
-                            collateral_ratio_1A      = self.get_rate(self.collateral_ratios, spot_token, protocol_a)
-                            liquidation_threshold_1A = self.get_liquidation_threshold(spot_token, protocol_a)
-                            if np.isnan(collateral_ratio_1A) or np.isnan(liquidation_threshold_1A):
+                            collateral_ratio_token1      = self.get_rate(self.collateral_ratios, spot_token, protocol_a)
+                            liquidation_threshold_token1 = self.get_liquidation_threshold(spot_token, protocol_a)
+                            if np.isnan(collateral_ratio_token1) or np.isnan(liquidation_threshold_token1):
                                 continue
-                            if collateral_ratio_1A <= 1e-9 or liquidation_threshold_1A <= 1e-9:
+                            if collateral_ratio_token1 <= 1e-9 or liquidation_threshold_token1 <= 1e-9:
                                 continue  # protocol does not support this token as collateral
 
-                            price_2A = self.get_rate(self.prices, stablecoin, protocol_a)
-                            if np.isnan(price_2A):
+                            price_token2 = self.get_rate(self.prices, stablecoin, protocol_a)
+                            if np.isnan(price_token2):
                                 continue
 
                             borrow_params = {
-                                'token2':                   stablecoin,
-                                'token2_contract':          self.get_contract(stablecoin, protocol_a),
-                                'collateral_ratio_1A':      collateral_ratio_1A,
-                                'liquidation_threshold_1A': liquidation_threshold_1A,
-                                'borrow_total_apr_2A':      borrow_total_apr_2A,
-                                'borrow_fee_2A':            self.get_borrow_fee(stablecoin, protocol_a),
-                                'available_borrow_2A':      self.get_available_borrow(stablecoin, protocol_a),
-                                'borrow_weight_2A':         self.get_borrow_weight(stablecoin, protocol_a),
-                                'price_2A':                 price_2A,
+                                'token2':                       stablecoin,
+                                'token2_contract':              self.get_contract(stablecoin, protocol_a),
+                                'collateral_ratio_token1':      collateral_ratio_token1,
+                                'liquidation_threshold_token1': liquidation_threshold_token1,
+                                'rate_token2':                  rate_token2,
+                                'borrow_fee_token2':            self.get_borrow_fee(stablecoin, protocol_a),
+                                'available_borrow_token2':      self.get_available_borrow(stablecoin, protocol_a),
+                                'borrow_weight_token2':         self.get_borrow_weight(stablecoin, protocol_a),
+                                'price_token2':                 price_token2,
                             }
 
                         # Call calculator (perp proxy is B_B = token4 slot)
@@ -1090,10 +1090,10 @@ class RateAnalyzer:
                             token1_contract=token1_contract,
                             protocol_a=protocol_a,
                             protocol_b='Bluefin',
-                            lend_total_apr_1A=lend_total_apr_1A,
-                            borrow_total_apr_3B=borrow_total_apr_3B,
-                            price_1A=price_1A,
-                            price_3B=price_3B,
+                            rate_token1=rate_token1,
+                            rate_token4=rate_token4,
+                            price_token1=price_token1,
+                            price_token4=price_token4,
                             token4=perp_token,
                             token4_contract=perp_contract,
                             liquidation_distance=self.liquidation_distance,
@@ -1143,8 +1143,8 @@ class RateAnalyzer:
         from config.settings import BLUEFIN_TO_LENDINGS
 
         for perp_token in bluefin_tokens:                              # token3
-            lend_total_apr_3B = self.get_rate(self.lend_rates, perp_token, 'Bluefin')
-            if np.isnan(lend_total_apr_3B):
+            rate_token3 = self.get_rate(self.lend_rates, perp_token, 'Bluefin')
+            if np.isnan(rate_token3):
                 print(f"[ANALYZER] PerpBorrowing: No lend rate for {perp_token} on Bluefin - skipping")
                 continue
 
@@ -1152,8 +1152,8 @@ class RateAnalyzer:
             perp_key = perp_contract if perp_contract else f'0x{perp_token}_bluefin'
 
             # perp_borrowing: going long the perp → use perp_ask (once per perp, same for all spot contracts)
-            price_3B = self.get_perp_price(perp_key, 'perp_ask')
-            if np.isnan(price_3B):
+            price_token4 = self.get_perp_price(perp_key, 'perp_ask')
+            if np.isnan(price_token4):
                 print(f"[ANALYZER] PerpBorrowing: No perp_ask price for {perp_token} in spot_perp_basis - skipping")
                 continue
 
@@ -1177,28 +1177,28 @@ class RateAnalyzer:
                         if protocol_a == 'Bluefin':
                             continue
 
-                        lend_total_apr_1A = self.get_rate(self.lend_rates, token1, protocol_a)
-                        if np.isnan(lend_total_apr_1A):
+                        rate_token1 = self.get_rate(self.lend_rates, token1, protocol_a)
+                        if np.isnan(rate_token1):
                             continue  # token1 not present at protocol_a
 
-                        borrow_total_apr_2A = self.get_rate(self.borrow_rates, spot_token, protocol_a)
-                        if np.isnan(borrow_total_apr_2A):
+                        rate_token2 = self.get_rate(self.borrow_rates, spot_token, protocol_a)
+                        if np.isnan(rate_token2):
                             continue  # spot token not borrowable at protocol_a
 
-                        collateral_ratio_1A      = self.get_rate(self.collateral_ratios, token1, protocol_a)
-                        liquidation_threshold_1A = self.get_liquidation_threshold(token1, protocol_a)
-                        price_1A = self.get_rate(self.prices, token1, protocol_a)
+                        collateral_ratio_token1      = self.get_rate(self.collateral_ratios, token1, protocol_a)
+                        liquidation_threshold_token1 = self.get_liquidation_threshold(token1, protocol_a)
+                        price_token1 = self.get_rate(self.prices, token1, protocol_a)
 
                         # spot_bid: selling borrowed spot token (perp_borrowing sells spot)
                         # Fall back to lending protocol price if basis data unavailable
-                        price_2A_basis = self.get_perp_basis_price(perp_key, spot_contract, 'spot_bid')
-                        price_2A = price_2A_basis if not np.isnan(price_2A_basis) else \
+                        price_token2_basis = self.get_perp_basis_price(perp_key, spot_contract, 'spot_bid')
+                        price_token2 = price_token2_basis if not np.isnan(price_token2_basis) else \
                                    self.get_rate(self.prices, spot_token, protocol_a)
 
-                        if any(np.isnan(v) for v in [collateral_ratio_1A, liquidation_threshold_1A,
-                                                      price_1A, price_2A]):
+                        if any(np.isnan(v) for v in [collateral_ratio_token1, liquidation_threshold_token1,
+                                                      price_token1, price_token2]):
                             continue
-                        if collateral_ratio_1A <= 1e-9 or liquidation_threshold_1A <= 1e-9:
+                        if collateral_ratio_token1 <= 1e-9 or liquidation_threshold_token1 <= 1e-9:
                             continue
 
                         # Round-trip basis spread and mid (None if no basis data available)
@@ -1213,17 +1213,17 @@ class RateAnalyzer:
                             token3=perp_token,
                             protocol_a=protocol_a,
                             protocol_b='Bluefin',
-                            lend_total_apr_1A=lend_total_apr_1A,
-                            borrow_total_apr_2A=borrow_total_apr_2A,
-                            lend_total_apr_3B=lend_total_apr_3B,
-                            collateral_ratio_1A=collateral_ratio_1A,
-                            liquidation_threshold_1A=liquidation_threshold_1A,
-                            price_1A=price_1A,
-                            price_2A=price_2A,
-                            price_3B=price_3B,
-                            borrow_fee_2A=self.get_borrow_fee(spot_token, protocol_a),
-                            available_borrow_2A=self.get_available_borrow(spot_token, protocol_a),
-                            borrow_weight_2A=self.get_borrow_weight(spot_token, protocol_a),
+                            rate_token1=rate_token1,
+                            rate_token2=rate_token2,
+                            rate_token3=rate_token3,
+                            collateral_ratio_token1=collateral_ratio_token1,
+                            liquidation_threshold_token1=liquidation_threshold_token1,
+                            price_token1=price_token1,
+                            price_token2=price_token2,
+                            price_token4=price_token4,
+                            borrow_fee_token2=self.get_borrow_fee(spot_token, protocol_a),
+                            available_borrow_token2=self.get_available_borrow(spot_token, protocol_a),
+                            borrow_weight_token2=self.get_borrow_weight(spot_token, protocol_a),
                             token1_contract=self.get_contract(token1, protocol_a),
                             token2_contract=spot_contract,
                             token3_contract=perp_contract,

@@ -199,9 +199,9 @@ def display_apr_table(strategy_row: Union[pd.Series, Dict[str, Any]], deployment
             st.rerun()
 
     # Prepare fee caption (default to 0 if missing)
-    borrow_fee_2A = strategy_row.get('borrow_fee_2A', 0.0)
-    borrow_fee_3B = strategy_row.get('borrow_fee_3B', 0.0)
-    fee_caption = f"💰 Fees: token2={borrow_fee_2A*100:.3f}% | token3={borrow_fee_3B*100:.3f}%"
+    borrow_fee_token2 = strategy_row.get('token2_borrow_fee', 0.0)
+    borrow_fee_token4 = strategy_row.get('token4_borrow_fee', 0.0)
+    fee_caption = f"💰 Fees: token2={borrow_fee_token2*100:.3f}% | token4={borrow_fee_token4*100:.3f}%"
 
     # Prepare warning for negative short-term holds (only check levered)
     warning_message = None
@@ -255,8 +255,8 @@ def display_strategy_details(strategy_row: Union[pd.Series, Dict[str, Any]], dep
     P3_B = strategy_row['token4_price']
 
     # Borrow fees and available liquidity
-    borrow_fee_2A = strategy_row.get('borrow_fee_2A', 0.0)
-    borrow_fee_3B = strategy_row.get('borrow_fee_3B', 0.0)
+    borrow_fee_token2 = strategy_row.get('token2_borrow_fee', 0.0)
+    borrow_fee_token4 = strategy_row.get('token4_borrow_fee', 0.0)
 
     # Prepare max deployable size message
     max_size = strategy_row.get('max_size')
@@ -315,7 +315,7 @@ def display_strategy_details(strategy_row: Union[pd.Series, Dict[str, Any]], dep
             'Weight': f"{b_a:.2f}",
             'Token Amount': f"{(b_a * deployment_usd) / P2_A:.2f}",
             'Price': f"${P2_A:.4f}",
-            'Fee': f"{borrow_fee_2A*100:.2f}%" if pd.notna(borrow_fee_2A) else 'N/A',
+            'Fee': f"{borrow_fee_token2*100:.2f}%" if pd.notna(borrow_fee_token2) else 'N/A',
             'Available': format_usd_abbreviated(available_borrow_2A) if pd.notna(available_borrow_2A) else 'N/A'
         },
         # Row 3: Protocol B, token2, Lend
@@ -343,7 +343,7 @@ def display_strategy_details(strategy_row: Union[pd.Series, Dict[str, Any]], dep
         'Weight': f"{b_b:.2f}",
         'Token Amount': f"{(b_b * deployment_usd) / P3_B:.2f}",
         'Price': f"${P3_B:.4f}",
-        'Fee': f"{borrow_fee_3B*100:.2f}%" if pd.notna(borrow_fee_3B) else 'N/A',
+        'Fee': f"{borrow_fee_token4*100:.2f}%" if pd.notna(borrow_fee_token4) else 'N/A',
         'Available': format_usd_abbreviated(available_borrow_3B) if pd.notna(available_borrow_3B) else 'N/A'
     })
 
@@ -2905,6 +2905,16 @@ def render_allocation_tab(all_strategies_df: pd.DataFrame):
                     'net_apr', 'apr5', 'apr30', 'blended_apr', 'stablecoin_multiplier', 'adjusted_apr'
                 ]
 
+                # Add basis_adj_net_apr if available (missing in older cached data)
+                try:
+                    if 'basis_adj_net_apr' in strategies.columns:
+                        # Insert after net_apr
+                        net_apr_idx = base_columns.index('net_apr') + 1
+                        base_columns.insert(net_apr_idx, 'basis_adj_net_apr')
+                except Exception as e:
+                    print(f"⚠️  Error checking for 'basis_adj_net_apr' column: {e}")
+                    print(f"    Available columns: {list(strategies.columns)}")
+
                 # Add max_size if it exists (explicit error handling)
                 try:
                     if 'max_size' in strategies.columns:
@@ -2929,6 +2939,8 @@ def render_allocation_tab(all_strategies_df: pd.DataFrame):
 
                 # Convert to percentage values (as numbers for proper sorting in dataframe)
                 display_df['net_apr'] = display_df['net_apr'] * 100
+                if 'basis_adj_net_apr' in display_df.columns:
+                    display_df['basis_adj_net_apr'] = display_df['basis_adj_net_apr'] * 100
                 display_df['apr5'] = display_df['apr5'] * 100
                 display_df['apr30'] = display_df['apr30'] * 100
                 display_df['blended_apr'] = display_df['blended_apr'] * 100
@@ -2952,6 +2964,11 @@ def render_allocation_tab(all_strategies_df: pd.DataFrame):
                     'Net APR', 'APR5', 'APR30', 'Blended APR', 'Stable Mult', 'Adjusted APR'
                 ]
 
+                # Add basis_adj_net_apr rename if present
+                if 'basis_adj_net_apr' in display_df.columns:
+                    net_apr_idx = column_names.index('Net APR') + 1
+                    column_names.insert(net_apr_idx, 'Basis-Adj APR')
+
                 # Add max_size to rename list if present
                 try:
                     if 'max_size' in display_df.columns:
@@ -2971,7 +2988,8 @@ def render_allocation_tab(all_strategies_df: pd.DataFrame):
                     height=400,
                     width='stretch',
                     column_config={
-                        'Net APR':      st.column_config.NumberColumn(format="%.2f%%"),
+                        'Net APR':       st.column_config.NumberColumn(format="%.2f%%"),
+                        'Basis-Adj APR': st.column_config.NumberColumn(format="%.2f%%"),
                         'APR5':         st.column_config.NumberColumn(format="%.2f%%"),
                         'APR30':        st.column_config.NumberColumn(format="%.2f%%"),
                         'Blended APR':  st.column_config.NumberColumn(format="%.2f%%"),

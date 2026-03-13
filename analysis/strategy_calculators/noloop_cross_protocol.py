@@ -44,7 +44,7 @@ class NoLoopCrossProtocolCalculator(StrategyCalculatorBase):
                            liquidation_threshold_a: float,
                            collateral_ratio_a: float,
                            liq_max: float,
-                           borrow_weight_2A: float = 1.0) -> Dict[str, float]:
+                           borrow_weight_token2: float = 1.0) -> Dict[str, float]:
         """
         Calculate position multipliers for no-loop cross-protocol strategy.
 
@@ -52,7 +52,7 @@ class NoLoopCrossProtocolCalculator(StrategyCalculatorBase):
             liquidation_threshold_a: LTV at which liquidation occurs (e.g., 0.80 = 80%)
             collateral_ratio_a: Max collateral factor (e.g., 0.75 = 75%)
             liq_max: Transformed liquidation distance for position sizing (e.g., 0.25 from 0.20 input)
-            borrow_weight_2A: Borrow weight multiplier (e.g., 1.35 = 135%)
+            borrow_weight_token2: Borrow weight multiplier (e.g., 1.35 = 135%)
 
         Returns:
             Dict with l_a, b_a, l_b, b_b multipliers
@@ -75,7 +75,7 @@ class NoLoopCrossProtocolCalculator(StrategyCalculatorBase):
         # Formula: borrow_ratio = liq_threshold / ((1 + liq_max) × borrow_weight)
         # The liq_max is the transformed liquidation distance
         # The borrow_weight adjusts effective LTV, so we must divide by it
-        r_a = liquidation_threshold_a / ((1.0 + liq_max) * borrow_weight_2A)
+        r_a = liquidation_threshold_a / ((1.0 + liq_max) * borrow_weight_token2)
 
         # Use minimum of calculated ratio and collateral factor
         # (Collateral factor is typically lower than liquidation threshold)
@@ -99,13 +99,13 @@ class NoLoopCrossProtocolCalculator(StrategyCalculatorBase):
         Calculate net APR for no-loop cross-protocol strategy.
 
         Formula:
-            APR = (L_A × lend_total_apr_1A) + (L_B × lend_total_apr_2B)
-                  - (B_A × borrow_total_apr_2A) - (B_A × borrow_fee_2A)
+            APR = (L_A × rate_token1) + (L_B × rate_token3)
+                  - (B_A × rate_token2) - (B_A × borrow_fee_token2)
 
         Args:
             positions: Dict with l_a, b_a, l_b, b_b
-            rates: Dict with lend_total_apr_1A, lend_total_apr_2B, borrow_total_apr_2A
-            fees: Dict with borrow_fee_2A (nullable in database)
+            rates: Dict with rate_token1, rate_token3, rate_token2
+            fees: Dict with borrow_fee_token2 (nullable in database)
 
         Returns:
             Net APR as decimal (e.g., 0.0524 = 5.24%)
@@ -118,17 +118,17 @@ class NoLoopCrossProtocolCalculator(StrategyCalculatorBase):
         l_b = positions['l_b']
 
         # Use total APRs (base + reward already combined in database)
-        lend_total_1A = rates.get('lend_total_apr_1A')
-        lend_total_2B = rates.get('lend_total_apr_2B')
-        borrow_total_2A = rates.get('borrow_total_apr_2A')
+        lend_total_1A = rates.get('rate_token1')
+        lend_total_2B = rates.get('rate_token3')
+        borrow_total_2A = rates.get('rate_token2')
 
         # Validate critical rates are present - fail fast
         if lend_total_1A is None:
-            raise ValueError("Missing lend_total_apr_1A")
+            raise ValueError("Missing rate_token1")
         if lend_total_2B is None:
-            raise ValueError("Missing lend_total_apr_2B")
+            raise ValueError("Missing rate_token3")
         if borrow_total_2A is None:
-            raise ValueError("Missing borrow_total_apr_2A")
+            raise ValueError("Missing rate_token2")
 
         # Calculate earnings and costs
         earnings = (l_a * lend_total_1A) + (l_b * lend_total_2B)
@@ -136,15 +136,15 @@ class NoLoopCrossProtocolCalculator(StrategyCalculatorBase):
 
         # Borrow fees - nullable in database schema
         # Use .get() with fallback but log warning for data quality tracking
-        borrow_fee_2A = fees.get('borrow_fee_2A')
-        if borrow_fee_2A is None:
+        borrow_fee_token2 = fees.get('borrow_fee_token2')
+        if borrow_fee_token2 is None:
             logger.warning(
-                "Missing borrow_fee_2A - assuming 0.0. "
+                "Missing borrow_fee_token2 - assuming 0.0. "
                 "This may indicate a data quality issue."
             )
-            borrow_fee_2A = 0.0
+            borrow_fee_token2 = 0.0
 
-        fees_cost = b_a * borrow_fee_2A
+        fees_cost = b_a * borrow_fee_token2
 
         return earnings - costs - fees_cost
 
@@ -155,18 +155,18 @@ class NoLoopCrossProtocolCalculator(StrategyCalculatorBase):
         Calculate gross APR for no-loop strategy.
 
         Formula:
-            gross_apr = (L_A × lend_total_apr_1A) + (L_B × lend_total_apr_2B)
-                        - (B_A × borrow_total_apr_2A)
+            gross_apr = (L_A × rate_token1) + (L_B × rate_token3)
+                        - (B_A × rate_token2)
 
-        Note: Excludes upfront fees (borrow_fee_2A).
+        Note: Excludes upfront fees (borrow_fee_token2).
         """
         l_a = positions['l_a']
         b_a = positions['b_a']
         l_b = positions['l_b']
 
-        lend_total_1A = rates['lend_total_apr_1A']
-        lend_total_2B = rates['lend_total_apr_2B']
-        borrow_total_2A = rates['borrow_total_apr_2A']
+        lend_total_1A = rates['rate_token1']
+        lend_total_2B = rates['rate_token3']
+        borrow_total_2A = rates['rate_token2']
 
         earnings = (l_a * lend_total_1A) + (l_b * lend_total_2B)
         costs = b_a * borrow_total_2A
@@ -178,16 +178,16 @@ class NoLoopCrossProtocolCalculator(StrategyCalculatorBase):
                         token2: str,
                         protocol_a: str,
                         protocol_b: str,
-                        lend_total_apr_1A: float,
-                        borrow_total_apr_2A: float,
-                        lend_total_apr_2B: float,
-                        collateral_ratio_1A: float,
-                        liquidation_threshold_1A: float,
-                        price_1A: float,
-                        price_2A: float,
-                        price_2B: float,
-                        available_borrow_2A: float = None,
-                        borrow_fee_2A: float = None,
+                        rate_token1: float,
+                        rate_token2: float,
+                        rate_token3: float,
+                        collateral_ratio_token1: float,
+                        liquidation_threshold_token1: float,
+                        price_token1: float,
+                        price_token2: float,
+                        price_token3: float,
+                        available_borrow_token2: float = None,
+                        borrow_fee_token2: float = None,
                         liquidation_distance: float = 0.20,
                         **kwargs) -> Dict[str, Any]:
         """
@@ -198,14 +198,14 @@ class NoLoopCrossProtocolCalculator(StrategyCalculatorBase):
             token2: High-yield token (e.g., 'DEEP')
             protocol_a: First protocol (e.g., 'navi')
             protocol_b: Second protocol (e.g., 'suilend')
-            lend_total_apr_1A: Lending APR for token1 on protocol A
-            borrow_total_apr_2A: Borrowing APR for token2 on protocol A
-            lend_total_apr_2B: Lending APR for token2 on protocol B
-            collateral_ratio_1A: Max collateral factor for token1
-            liquidation_threshold_1A: Liquidation LTV for token1
-            price_1A, price_2A, price_2B: Token prices
-            available_borrow_2A: Available borrow liquidity for token2 (optional)
-            borrow_fee_2A: Upfront borrow fee for token2 (optional, nullable)
+            rate_token1: Lending APR for token1 on protocol A
+            rate_token2: Borrowing APR for token2 on protocol A
+            rate_token3: Lending APR for token2 on protocol B
+            collateral_ratio_token1: Max collateral factor for token1
+            liquidation_threshold_token1: Liquidation LTV for token1
+            price_token1, price_token2, price_token3: Token prices
+            available_borrow_token2: Available borrow liquidity for token2 (optional)
+            borrow_fee_token2: Upfront borrow fee for token2 (optional, nullable)
             liquidation_distance: Safety buffer (default 0.20 = 20%)
             **kwargs: Additional args (ignored)
 
@@ -214,16 +214,16 @@ class NoLoopCrossProtocolCalculator(StrategyCalculatorBase):
         """
         # Validate inputs
         missing_fields = []
-        if lend_total_apr_1A is None:
-            missing_fields.append('lend_total_apr_1A')
-        if borrow_total_apr_2A is None:
-            missing_fields.append('borrow_total_apr_2A')
-        if lend_total_apr_2B is None:
-            missing_fields.append('lend_total_apr_2B')
-        if collateral_ratio_1A is None:
-            missing_fields.append('collateral_ratio_1A')
-        if liquidation_threshold_1A is None:
-            missing_fields.append('liquidation_threshold_1A')
+        if rate_token1 is None:
+            missing_fields.append('rate_token1')
+        if rate_token2 is None:
+            missing_fields.append('rate_token2')
+        if rate_token3 is None:
+            missing_fields.append('rate_token3')
+        if collateral_ratio_token1 is None:
+            missing_fields.append('collateral_ratio_token1')
+        if liquidation_threshold_token1 is None:
+            missing_fields.append('liquidation_threshold_token1')
 
         if missing_fields:
             return {
@@ -232,7 +232,7 @@ class NoLoopCrossProtocolCalculator(StrategyCalculatorBase):
             }
 
         # Extract borrow weight from kwargs (passed by rate_analyzer)
-        borrow_weight_2A = kwargs.get('borrow_weight_2A', 1.0)
+        borrow_weight_token2 = kwargs.get('borrow_weight_token2', 1.0)
 
         # Transform user's liquidation distance input to liq_max for position sizing
         # This ensures the user gets AT LEAST their requested protection on the lending side
@@ -242,21 +242,21 @@ class NoLoopCrossProtocolCalculator(StrategyCalculatorBase):
 
         # Calculate position multipliers
         positions = self.calculate_positions(
-            liquidation_threshold_a=liquidation_threshold_1A,
-            collateral_ratio_a=collateral_ratio_1A,
+            liquidation_threshold_a=liquidation_threshold_token1,
+            collateral_ratio_a=collateral_ratio_token1,
             liq_max=liq_max,
-            borrow_weight_2A=borrow_weight_2A
+            borrow_weight_token2=borrow_weight_token2
         )
 
         # Calculate ALL fee-adjusted APRs using base class methods
         rates = {
-            'lend_total_apr_1A': lend_total_apr_1A,
-            'lend_total_apr_2B': lend_total_apr_2B,
-            'borrow_total_apr_2A': borrow_total_apr_2A
+            'rate_token1': rate_token1,
+            'rate_token3': rate_token3,
+            'rate_token2': rate_token2
         }
         fees = {
-            'borrow_fee_2A': borrow_fee_2A or 0.0,
-            'borrow_fee_3B': 0.0  # No 4th leg in noloop
+            'borrow_fee_token2': borrow_fee_token2 or 0.0,
+            'borrow_fee_token4': 0.0  # No 4th leg in noloop
         }
         fee_adjusted_aprs = self.calculate_fee_adjusted_aprs(positions, rates, fees)
 
@@ -270,17 +270,17 @@ class NoLoopCrossProtocolCalculator(StrategyCalculatorBase):
 
         # Calculate max size based on available borrow liquidity
         max_size = float('inf')
-        if available_borrow_2A is not None:
+        if available_borrow_token2 is not None:
             # Max deployment limited by borrow liquidity
             # deployment × b_a = borrow amount in USD
-            # borrow amount in USD ≤ available_borrow_2A
-            max_size = available_borrow_2A / positions['b_a'] if positions['b_a'] > 0 else float('inf')
+            # borrow amount in USD ≤ available_borrow_token2
+            max_size = available_borrow_token2 / positions['b_a'] if positions['b_a'] > 0 else float('inf')
 
         # Extract contracts from kwargs (passed by analyzer)
         token1_contract = kwargs.get('token1_contract')
         token2_contract = kwargs.get('token2_contract')
 
-        _t2_a = positions['b_a'] / price_2A if price_2A > 0 else 0.0
+        _t2_a = positions['b_a'] / price_token2 if price_token2 > 0 else 0.0
 
         return {
             # Token and protocol info (universal leg convention)
@@ -305,6 +305,7 @@ class NoLoopCrossProtocolCalculator(StrategyCalculatorBase):
 
             # APR metrics
             'net_apr': apr_net,
+            'basis_adj_net_apr': apr_net,
             'apr5': apr5,
             'apr30': apr30,
             'apr90': apr90,
@@ -315,35 +316,35 @@ class NoLoopCrossProtocolCalculator(StrategyCalculatorBase):
             'max_size': max_size,
 
             # Prices
-            'token1_price': price_1A,
-            'token2_price': price_2A,
-            'token3_price': price_2B,
+            'token1_price': price_token1,
+            'token2_price': price_token2,
+            'token3_price': price_token3,
             'token4_price': None,   # B_B unused
 
             # Token amounts (tokens per $1 deployed)
-            'token1_units': positions['l_a'] / price_1A if price_1A > 0 else 0.0,
+            'token1_units': positions['l_a'] / price_token1 if price_token1 > 0 else 0.0,
             'token2_units': _t2_a,
             'token3_units': _t2_a,  # same tokens as T2_A
             'token4_units': None,   # B_B unused
 
             # Rates
-            'token1_rate': lend_total_apr_1A,
-            'token2_rate': borrow_total_apr_2A,
-            'token3_rate': lend_total_apr_2B,
+            'token1_rate': rate_token1,
+            'token2_rate': rate_token2,
+            'token3_rate': rate_token3,
             'token4_rate': None,    # B_B unused
 
             # Collateral and liquidation
-            'token1_collateral_ratio': collateral_ratio_1A,
+            'token1_collateral_ratio': collateral_ratio_token1,
             'token3_collateral_ratio': 0.0,  # No borrowing on leg B
-            'token1_liquidation_threshold': liquidation_threshold_1A,
+            'token1_liquidation_threshold': liquidation_threshold_token1,
             'token3_liquidation_threshold': 0.0,  # No borrowing on leg B
 
             # Fees and liquidity
-            'token2_borrow_fee': borrow_fee_2A or 0.0,
+            'token2_borrow_fee': borrow_fee_token2 or 0.0,
             'token4_borrow_fee': None,  # B_B unused
-            'token2_available_borrow': available_borrow_2A,
+            'token2_available_borrow': available_borrow_token2,
             'token4_available_borrow': None,  # B_B unused
-            'token2_borrow_weight': kwargs.get('borrow_weight_2A', 1.0),
+            'token2_borrow_weight': kwargs.get('borrow_weight_token2', 1.0),
             'token4_borrow_weight': None,  # B_B unused
 
             # Metadata

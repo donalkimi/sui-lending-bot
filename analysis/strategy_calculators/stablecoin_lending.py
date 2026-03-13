@@ -60,25 +60,25 @@ class StablecoinLendingCalculator(StrategyCalculatorBase):
         """
         Calculate net APR for stablecoin lending.
 
-        APR = lend_total_apr_1A (base + reward already combined in database)
+        APR = rate_token1 (base + reward already combined in database)
 
         Args:
             positions: Not used (only one leg, no multiplier effects)
-            rates: Dict with 'lend_total_apr_1A'
+            rates: Dict with 'rate_token1'
             fees: Not used (no borrowing)
 
         Returns:
             Net APR as decimal (e.g., 0.04 = 4%)
 
         Raises:
-            ValueError: If lend_total_apr_1A is missing
+            ValueError: If rate_token1 is missing
         """
-        lend_total_apr = rates.get('lend_total_apr_1A')
+        lend_total_apr = rates.get('rate_token1')
 
         # Validate data quality - fail fast if missing
         if lend_total_apr is None:
             raise ValueError(
-                "Missing lend_total_apr_1A for stablecoin lending strategy. "
+                "Missing rate_token1 for stablecoin lending strategy. "
                 "This is a critical data quality issue."
             )
 
@@ -91,20 +91,20 @@ class StablecoinLendingCalculator(StrategyCalculatorBase):
         Calculate gross APR for stablecoin lending strategy.
 
         Formula:
-            gross_apr = L_A × lend_total_apr_1A
+            gross_apr = L_A × rate_token1
 
         Note: No borrowing, so gross_apr = net_apr for stablecoin strategies.
         """
         l_a = positions['l_a']
-        lend_total_1A = rates['lend_total_apr_1A']
+        lend_total_1A = rates['rate_token1']
 
         return l_a * lend_total_1A
 
     def analyze_strategy(self,
                         token1: str,
                         protocol_a: str,
-                        lend_total_apr_1A: float,
-                        price_1A: float,
+                        rate_token1: float,
+                        price_token1: float,
                         **kwargs) -> Dict[str, Any]:
         """
         Analyze stablecoin lending strategy.
@@ -112,34 +112,34 @@ class StablecoinLendingCalculator(StrategyCalculatorBase):
         Args:
             token1: Stablecoin symbol (e.g., 'USDC')
             protocol_a: Protocol name (e.g., 'navi')
-            lend_total_apr_1A: Total lending APR (base + reward)
-            price_1A: Token price (should be ~$1 for stablecoins)
+            rate_token1: Total lending APR (base + reward)
+            price_token1: Token price (should be ~$1 for stablecoins)
             **kwargs: Ignored (other strategies need more params)
 
         Returns:
             Strategy dict with all required fields
         """
         # Validate inputs
-        if lend_total_apr_1A is None:
+        if rate_token1 is None:
             return {
                 'valid': False,
-                'error': 'Missing lend_total_apr_1A'
+                'error': 'Missing rate_token1'
             }
 
-        if price_1A is None or price_1A <= 0:
+        if price_token1 is None or price_token1 <= 0:
             return {
                 'valid': False,
-                'error': 'Invalid or missing price_1A'
+                'error': 'Invalid or missing price_token1'
             }
 
         # Calculate positions (trivial)
         positions = self.calculate_positions()
 
         # Calculate ALL fee-adjusted APRs using base class methods
-        rates = {'lend_total_apr_1A': lend_total_apr_1A}
+        rates = {'rate_token1': rate_token1}
         fees = {
-            'borrow_fee_2A': 0.0,
-            'borrow_fee_3B': 0.0
+            'borrow_fee_token2': 0.0,
+            'borrow_fee_token4': 0.0
         }
         fee_adjusted_aprs = self.calculate_fee_adjusted_aprs(positions, rates, fees)
 
@@ -177,6 +177,7 @@ class StablecoinLendingCalculator(StrategyCalculatorBase):
 
             # APR metrics (all equal for stablecoin since no fees)
             'net_apr': apr_net,
+            'basis_adj_net_apr': apr_net,
             'apr5': apr5,
             'apr30': apr30,
             'apr90': apr90,
@@ -187,19 +188,19 @@ class StablecoinLendingCalculator(StrategyCalculatorBase):
             'max_size': float('inf'),
 
             # Prices (unused legs = None)
-            'token1_price': price_1A,
+            'token1_price': price_token1,
             'token2_price': None,
             'token3_price': None,
             'token4_price': None,
 
             # Token amounts (tokens per $1 deployed)
-            'token1_units': 1.0 / price_1A if price_1A > 0 else 0.0,
+            'token1_units': 1.0 / price_token1 if price_token1 > 0 else 0.0,
             'token2_units': None,
             'token3_units': None,
             'token4_units': None,
 
             # Rates (unused legs = None)
-            'token1_rate': lend_total_apr_1A,
+            'token1_rate': rate_token1,
             'token2_rate': None,
             'token3_rate': None,
             'token4_rate': None,

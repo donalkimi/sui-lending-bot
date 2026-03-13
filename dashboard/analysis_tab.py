@@ -213,12 +213,12 @@ def _render_rate_table(history_df: pd.DataFrame, strategy: dict) -> None:
 
         if is_perp_lending:
             # 2 legs (perp_lending) or 3 legs (perp_lending_recursive): spot lend + optional stablecoin borrow + perp short
-            record['Lend 1A'] = _fmt(row.get('lend_total_apr_1A'))
+            record['Lend 1A'] = _fmt(row.get('raw_rate_token1'))
             if strategy_type == 'perp_lending_recursive':
-                record['Borrow 2A'] = _fmt(row.get('borrow_total_apr_2A'))
-            record['Perp 3B'] = _fmt(row.get('perp_rate_3B'))
-            record['Perp 3B (8hr)'] = _fmt(row.get('avg8hr_perp_rate_3B'))
-            record['Perp 3B (24hr)'] = _fmt(row.get('avg24hr_perp_rate_3B'))
+                record['Borrow 2A'] = _fmt(row.get('raw_rate_token2'))
+            record['Perp 3B'] = _fmt(row.get('raw_perp_rate'))
+            record['Perp 3B (8hr)'] = _fmt(row.get('raw_avg8hr_perp_rate'))
+            record['Perp 3B (24hr)'] = _fmt(row.get('raw_avg24hr_perp_rate'))
             record['APR 5d'] = _fmt(row.get('apr5'))
             record['APR 30d'] = _fmt(row.get('apr30'))
             record['APR 90d'] = _fmt(row.get('apr90'))
@@ -228,11 +228,11 @@ def _render_rate_table(history_df: pd.DataFrame, strategy: dict) -> None:
 
         elif is_perp_borrowing:
             # 3 legs: stable lend + volatile borrow + perp long
-            record['Lend 1A'] = _fmt(row.get('lend_total_apr_1A'))
-            record['Borrow 2A'] = _fmt(row.get('borrow_total_apr_2A'))
-            record['Perp 3B'] = _fmt(row.get('perp_rate_3B'))
-            record['Perp 3B (8hr)'] = _fmt(row.get('avg8hr_perp_rate_3B'))
-            record['Perp 3B (24hr)'] = _fmt(row.get('avg24hr_perp_rate_3B'))
+            record['Lend 1A'] = _fmt(row.get('raw_rate_token1'))
+            record['Borrow 2A'] = _fmt(row.get('raw_rate_token2'))
+            record['Perp 3B'] = _fmt(row.get('raw_perp_rate'))
+            record['Perp 3B (8hr)'] = _fmt(row.get('raw_avg8hr_perp_rate'))
+            record['Perp 3B (24hr)'] = _fmt(row.get('raw_avg24hr_perp_rate'))
             record['APR 5d'] = _fmt(row.get('apr5'))
             record['APR 30d'] = _fmt(row.get('apr30'))
             record['APR 90d'] = _fmt(row.get('apr90'))
@@ -242,9 +242,9 @@ def _render_rate_table(history_df: pd.DataFrame, strategy: dict) -> None:
 
         else:
             # Spot strategies — avg columns will show "—"
-            record['Lend 1A'] = _fmt(row.get('lend_total_apr_1A'))
-            if row.get('borrow_total_apr_2A') is not None:
-                record['Borrow 2A'] = _fmt(row.get('borrow_total_apr_2A'))
+            record['Lend 1A'] = _fmt(row.get('raw_rate_token1'))
+            if row.get('raw_rate_token2') is not None:
+                record['Borrow 2A'] = _fmt(row.get('raw_rate_token2'))
 
         rows.append(record)
 

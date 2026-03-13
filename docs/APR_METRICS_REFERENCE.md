@@ -9,11 +9,11 @@ This codebase tracks **9 distinct APR/rate metrics** across strategy analysis, p
 | Metric | Variable Names | One-Line Summary |
 |--------|---------------|-----------------|
 | **Gross APR** | `gross_apr`, `apr_gross` | Raw earnings minus borrowing costs — before any fees |
-| **Net APR** | `net_apr`, `apr_net` | Gross APR minus all upfront fees (the "headline" rate) |
+| **Net APR** | `net_apr`, `apr_net` | Gross APR minus deterministic protocol fees (no basis cost) |
 | **APR 5/30/90** | `apr5`, `apr30`, `apr90` | Net APR assuming you exit after N days (fees hurt shorter holds) |
 | **Realized APR** | `realized_apr` | Actual annualized return from real PnL since position open |
 | **Current APR** | `current_apr` | Net APR recalculated live with today's rates |
-| **Basis-Adjusted APR** | `current_apr_incl_basis` | Current APR + unrealised spot/perp divergence (perp strategies only) |
+| **Basis-Adjusted APR** | `basis_adj_net_apr`, `basis_adj_current_apr` | Net APR minus basis cost — single source via strategy calculators |
 | **Blended APR** | `blended_apr` | Weighted average of net_apr, apr5, apr30, apr90 |
 | **Adjusted APR** | `adjusted_apr` | Blended APR × stablecoin multiplier (used for strategy ranking) |
 | **Entry APR snapshots** | `entry_net_apr`, `entry_apr5`, etc. | Frozen snapshot of APR metrics at position creation |
@@ -34,18 +34,18 @@ This codebase tracks **9 distinct APR/rate metrics** across strategy analysis, p
 
 | Strategy | Formula |
 |----------|---------|
-| Stablecoin lending | `L_A × lend_total_apr_1A` |
-| Recursive lending | `(L_A × lend_1A) + (L_B × lend_2B) - (B_A × borrow_2A) - (B_B × borrow_3B)` |
-| NoLoop cross-protocol | `(L_A × lend_1A) + (L_B × lend_2B) - (B_A × borrow_2A)` |
-| Perp lending | `L_A × lend_1A - B_B × funding_rate_3B` |
-| Perp borrowing | `-B_A × borrow_2A + B_B × funding_rate_3B` |
+| Stablecoin lending | `L_A × rate_token1` |
+| Recursive lending | `(L_A × rate_token1) + (L_B × rate_token3) - (B_A × rate_token2) - (B_B × rate_token4)` |
+| NoLoop cross-protocol | `(L_A × rate_token1) + (L_B × rate_token3) - (B_A × rate_token2)` |
+| Perp lending | `L_A × rate_token1 - B_B × funding_rate_token4` |
+| Perp borrowing | `-B_A × rate_token2 + B_B × funding_rate_token4` |
 
 Where:
 - `L_X` = leverage / size of lend leg as fraction of deployment
 - `B_X` = leverage / size of borrow leg as fraction of deployment
-- `lend_total_apr_1A` = total lending APR at Protocol A (base + rewards)
-- `borrow_total_apr_2A` = total borrowing APR at Protocol A
-- `funding_rate_3B` = perp funding rate at Protocol B (Bluefin), annualized
+- `rate_token1` = total lending APR at Protocol A (base + rewards)
+- `rate_token2` = total borrowing APR at Protocol A
+- `funding_rate_token4` = perp funding rate at Protocol B (Bluefin), annualized
 
 **Key files:**
 - Abstract definition: [analysis/strategy_calculators/base.py](analysis/strategy_calculators/base.py) (lines 126–153)
@@ -54,7 +54,7 @@ Where:
 - Perp borrowing: [analysis/strategy_calculators/perp_borrowing.py](analysis/strategy_calculators/perp_borrowing.py) (line 48)
 - Stablecoin: [analysis/strategy_calculators/stablecoin_lending.py](analysis/strategy_calculators/stablecoin_lending.py) (lines 87–96)
 - NoLoop: [analysis/strategy_calculators/noloop_cross_protocol.py](analysis/strategy_calculators/noloop_cross_protocol.py) (lines 151–158)
-- Live recalc: [analysis/position_statistics_calculator.py](analysis/position_statistics_calculator.py) (line 275)
+- Live recalc: [analysis/position_statistics_calculator.py](analysis/position_statistics_calculator.py) (via strategy calculator)
 
 **Where displayed:** Not shown directly in UI; intermediate for calculating net_apr.
 
@@ -62,7 +62,7 @@ Where:
 
 ## Section 2: Net APR
 
-**What it is:** Gross APR minus all upfront/one-time fees. This is the annualized return assuming you hold the position for exactly 1 year.
+**What it is:** Gross APR minus deterministic protocol fees only. Basis cost (market-dependent) is excluded — see Basis-Adjusted APR (Section 6).
 
 **Variable names:** `net_apr` (newer code), `apr_net` (older strategies) — same concept
 
@@ -71,16 +71,16 @@ Where:
 net_apr = gross_apr - total_fee_cost
 
 total_fee_cost =
-    b_a × borrow_fee_2A           # lending protocol borrow fee
-  + b_b × borrow_fee_3B           # lending protocol borrow fee (second leg)
+    b_a × borrow_fee_token2           # lending protocol borrow fee
+  + b_b × borrow_fee_token4           # lending protocol borrow fee (second leg)
   + position_multiplier × 2.0 × BLUEFIN_TAKER_FEE   # perp entry+exit (perp strategies)
-  + position_multiplier × basis_spread               # spot/perp spread friction (perp, if data available)
 ```
 
 **Fee breakdown:**
 - **Borrow fees:** One-time fee charged by lending protocol when opening a borrow position
 - **Perp trading fees:** Bluefin taker fee = 0.035% × 2 (entry + exit)
-- **Basis spread cost:** Round-trip bid/ask friction between spot and perp price
+
+**Note:** Basis spread cost was previously included in net_apr but has been moved to `basis_adj_net_apr` (see Section 6). This makes net_apr consistent between the allocation tab (undeployed strategies) and live positions.
 
 **Naming issue — `net_apr` vs `apr_net`:**
 
@@ -195,7 +195,7 @@ Where `total_pnl` = accumulated lending interest, funding payments, and other re
 current_apr = gross_apr(live_rates) - fee_cost(live_rates) - perp_trading_fee_apr
 ```
 
-This mirrors net_apr but uses live `lend_total_apr` and `borrow_total_apr` values from the rate tracker, not entry-time values.
+This mirrors net_apr but uses live `rate_token1`/`rate_token3` (lend) and `rate_token2`/`rate_token4` (borrow) values from the rate tracker, not entry-time values.
 
 **Key files:**
 - Calculation: [analysis/position_statistics_calculator.py](analysis/position_statistics_calculator.py) (lines 257–293)
@@ -205,27 +205,35 @@ This mirrors net_apr but uses live `lend_total_apr` and `borrow_total_apr` value
 
 ---
 
-## Section 6: Basis-Adjusted APR (Perp strategies only)
+## Section 6: Basis-Adjusted APR
 
-**What it is:** Current APR plus the unrealised gain/loss from spot/perp price divergence. Shows the "true" effective return for perp strategies when spot and perp prices have drifted apart since entry.
+**What it is:** Net APR minus basis cost (spot/perp spread friction). For non-perp strategies, equals net_apr. This is the "true" effective return accounting for market-dependent entry/exit costs.
 
-**Variable names:** `current_apr_incl_basis`, `basis_adjusted_current_apr`
+**Variable names:**
+- `basis_adj_net_apr` — for undeployed strategies (allocation tab)
+- `basis_adj_current_apr` — for live positions (positions tab)
+
+**Single source of truth:** `StrategyCalculatorBase.calculate_basis_adj_net_apr()` in [analysis/strategy_calculators/base.py](analysis/strategy_calculators/base.py). Both the allocation tab and live positions call the same function.
 
 **Formula:**
 ```
-basis_pnl = (live_perp_price - entry_perp_price) × perp_tokens
-          - (live_spot_price - entry_spot_price) × spot_tokens    [for perp_lending]
+# For undeployed strategies:
+basis_adj_net_apr = net_apr - basis_cost
+# where basis_cost = position_multiplier × basis_spread (round-trip bid/ask friction)
 
-basis_adjusted_apr = current_apr + (basis_pnl / deployment_usd)
+# For live positions:
+basis_adj_current_apr = current_apr - (basis_pnl / deployment_usd)
+# where basis_pnl = unrealised gain/loss from spot/perp price divergence since entry
 ```
 
-Note: `basis_pnl` is in dollars. Converting to APR here is NOT annualized — it's a direct ratio addition, representing "how much of my capital has the basis drift given me (or cost me) right now."
+Note: `basis_pnl` is in dollars. Converting to APR is NOT annualized — it's a direct ratio, representing "how much of my capital has the basis drift given me (or cost me) right now."
 
 **Key files:**
-- `basis_pnl` calc: [analysis/position_service.py](analysis/position_service.py) (lines 1155–1188)
-- `basis_adjusted_apr` calc: [analysis/position_service.py](analysis/position_service.py) (lines 1191–1220)
-- Display: [dashboard/position_renderers.py](dashboard/position_renderers.py) (lines 843–844)
-  - Format: `"Current 8.50% | Basis-adj 9.12%"`
+- `calculate_basis_adj_net_apr()`: [analysis/strategy_calculators/base.py](analysis/strategy_calculators/base.py) (concrete method on base class)
+- `basis_pnl` calc: [analysis/position_service.py](analysis/position_service.py) (`calculate_basis_pnl_at_timestamp`)
+- Live position stats: [analysis/position_statistics_calculator.py](analysis/position_statistics_calculator.py) (calls calculator)
+- Display: [dashboard/position_renderers.py](dashboard/position_renderers.py) — Format: `"Current 8.50% (basis-adj 9.12%)"`
+- Allocation tab: [dashboard/dashboard_renderer.py](dashboard/dashboard_renderer.py) — "Basis-Adj APR" column
 
 **Database column:** `position_statistics.basis_pnl` (stored in dollars, not APR)
 
@@ -366,7 +374,7 @@ These are rolling time-weighted averages of the **net APR** over 8-hour and 24-h
 
 ### Component Rate Breakdown
 
-**Variable names:** `lend_total_apr_1A`, `borrow_total_apr_2A`, `lend_reward_apr`, `borrow_base_apr`, etc.
+**Variable names:** `rate_token1`, `rate_token2`, `rate_token3`, `rate_token4`, `lend_reward_apr`, `borrow_base_apr`, etc.
 
 The raw per-protocol rates that feed into gross_apr:
 - `lend_base_apr`: Base lending rate (without rewards)
@@ -411,7 +419,7 @@ Config file: [config/settings.py](config/settings.py) (lines 58, 61, 109, 202–
 | `apr5` / `apr30` / `apr90` | Strategy calculators, positions table | decimal |
 | `realized_apr` | position_statistics table | decimal |
 | `current_apr` | position_statistics table | decimal |
-| `current_apr_incl_basis` | position_renderers (runtime) | decimal |
+| `basis_adj_current_apr` | position_statistics (pre-computed) | decimal |
 | `blended_apr` | portfolio_allocator | decimal |
 | `adjusted_apr` | portfolio_allocator | decimal |
 | `entry_net_apr` | positions table | decimal |
@@ -423,7 +431,7 @@ Config file: [config/settings.py](config/settings.py) (lines 58, 61, 109, 202–
 | `basis_pnl` | position_statistics table | USD dollars |
 | `basis_cost` / `basis_spread` / `basis_bid` / `basis_ask` / `basis_mid` | strategy calculators, spot_perp_basis table | decimal |
 | `days_to_breakeven` / `entry_days_to_breakeven` | positions table, strategy calculators | float (days) |
-| `lend_total_apr_1A` / `borrow_total_apr_2A` etc. | rate data, strategy inputs | decimal |
+| `rate_token1` / `rate_token2` / `rate_token3` / `rate_token4` | rate data, strategy inputs | decimal |
 
 ---
 
@@ -432,6 +440,6 @@ Config file: [config/settings.py](config/settings.py) (lines 58, 61, 109, 202–
 There is **no variable literally named `effective_apr`** in the codebase. The concept maps to two things:
 
 1. **`current_apr`** — what you'd call the "effective current APR" (live rates, fees deducted)
-2. **`current_apr_incl_basis`** / `basis_adjusted_current_apr` — the closest thing to a true "effective APR" for perp strategies, incorporating unrealised basis drift
+2. **`basis_adj_current_apr`** — the closest thing to a true "effective APR" for perp strategies, incorporating unrealised basis drift
 
 The display string `"Current X% | Basis-adj Y%"` in position modals is the only place this concept is surfaced to the user.

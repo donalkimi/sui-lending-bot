@@ -122,21 +122,43 @@ class StrategyCalculatorBase(ABC):
     @abstractmethod
     def calculate_net_apr(self, positions: Dict[str, float],
                          rates: Dict[str, float],
-                         fees: Dict[str, float],
-                         basis_cost: float = 0.0) -> float:
+                         fees: Dict[str, float]) -> float:
         """
-        Calculate net APR for this strategy.
+        Calculate net APR for this strategy (deterministic protocol fees only).
 
         Args:
             positions: Dict with l_a, b_a, l_b, b_b
             rates: Dict with lend_total_apr_*, borrow_total_apr_* (base + reward combined)
             fees: Dict with borrow_fee_* (nullable, may need fallback)
-            basis_cost: One-time round-trip spot/perp spread cost (decimal, default 0.0)
 
         Returns:
             Net APR as decimal (e.g., 0.0524 = 5.24%)
         """
         pass
+
+    def calculate_basis_adj_net_apr(
+        self,
+        positions: Dict[str, float],
+        rates: Dict[str, float],
+        fees: Dict[str, float],
+        basis_cost: float = 0.0
+    ) -> float:
+        """
+        Net APR minus basis cost (market-dependent spot/perp spread).
+
+        For non-perp strategies, callers pass basis_cost=0.0 (default) → returns net_apr unchanged.
+        For perp strategies, callers pass the actual basis cost → returns net_apr - basis_cost.
+
+        Args:
+            positions: Dict with l_a, b_a, l_b, b_b
+            rates: Dict with lend_total_apr_*, borrow_total_apr_*
+            fees: Dict with borrow_fee_*
+            basis_cost: Basis cost as fraction of deployment (decimal, default 0.0)
+
+        Returns:
+            Basis-adjusted net APR as decimal
+        """
+        return self.calculate_net_apr(positions, rates, fees) - basis_cost
 
     @abstractmethod
     def analyze_strategy(self, **kwargs) -> Dict[str, Any]:
@@ -204,8 +226,8 @@ class StrategyCalculatorBase(ABC):
 
         Args:
             positions: Dict with l_a, b_a, l_b, b_b multipliers
-            rates: Dict with lend_total_apr_1A, lend_total_apr_2B (if applicable),
-                   borrow_total_apr_2A, borrow_total_apr_3B (if applicable)
+            rates: Dict with rate_token1, rate_token3 (if applicable),
+                   rate_token2, rate_token4 (if applicable)
 
         Returns:
             Gross APR as decimal (e.g., 0.0524 = 5.24%)
@@ -223,8 +245,8 @@ class StrategyCalculatorBase(ABC):
                                gross_apr: float,
                                b_a: float,
                                b_b: float,
-                               borrow_fee_2A: float,
-                               borrow_fee_3B: float,
+                               borrow_fee_token2: float,
+                               borrow_fee_token4: float,
                                days: int) -> float:
         """
         Calculate time-adjusted APR for a specific time horizon.
@@ -236,14 +258,14 @@ class StrategyCalculatorBase(ABC):
             APR(N days) = (gross_apr × N/365 - total_fee_cost) × 365/N
 
             Derivation: earn N days of gross APR, subtract the one-time upfront cost, annualise.
-            Where total_fee_cost = b_a × fee_2A + b_b × fee_3B
+            Where total_fee_cost = b_a × fee_token2 + b_b × fee_token4
 
         Args:
             gross_apr: Gross APR (before fees) as decimal
             b_a: Borrow multiplier for leg 2A
             b_b: Borrow multiplier for leg 3B (0.0 for stablecoin/noloop)
-            borrow_fee_2A: Upfront fee for borrowing token2 (0.0 if None)
-            borrow_fee_3B: Upfront fee for borrowing token3 (0.0 if None)
+            borrow_fee_token2: Upfront fee for borrowing token2 (0.0 if None)
+            borrow_fee_token4: Upfront fee for borrowing token4 (0.0 if None)
             days: Time horizon (5, 30, 90, etc.)
 
         Returns:
@@ -256,15 +278,15 @@ class StrategyCalculatorBase(ABC):
             → annualise: -0.00049 × 365/5 = -0.036 (-3.6%)
             (Negative because fees exceed 5-day earnings)
         """
-        total_fee_cost = b_a * borrow_fee_2A + b_b * borrow_fee_3B
+        total_fee_cost = b_a * borrow_fee_token2 + b_b * borrow_fee_token4
         return (gross_apr * days / 365 - total_fee_cost) * 365 / days
 
     def calculate_days_to_breakeven(self,
                                     gross_apr: float,
                                     b_a: float,
                                     b_b: float,
-                                    borrow_fee_2A: float,
-                                    borrow_fee_3B: float) -> float:
+                                    borrow_fee_token2: float,
+                                    borrow_fee_token4: float) -> float:
         """
         Calculate days until upfront fees are recovered.
 
@@ -275,8 +297,8 @@ class StrategyCalculatorBase(ABC):
             gross_apr: Gross APR (before fees) as decimal
             b_a: Borrow multiplier for leg 2A
             b_b: Borrow multiplier for leg 3B (0.0 for stablecoin/noloop)
-            borrow_fee_2A: Upfront fee for borrowing token2 (0.0 if None)
-            borrow_fee_3B: Upfront fee for borrowing token3 (0.0 if None)
+            borrow_fee_token2: Upfront fee for borrowing token2 (0.0 if None)
+            borrow_fee_token4: Upfront fee for borrowing token4 (0.0 if None)
 
         Returns:
             Days to breakeven (0.0 if no fees or gross_apr <= 0)
@@ -288,7 +310,7 @@ class StrategyCalculatorBase(ABC):
         if gross_apr <= 0:
             return 0.0
 
-        total_fee_cost = b_a * borrow_fee_2A + b_b * borrow_fee_3B
+        total_fee_cost = b_a * borrow_fee_token2 + b_b * borrow_fee_token4
         if total_fee_cost == 0:
             return 0.0
 
@@ -307,7 +329,7 @@ class StrategyCalculatorBase(ABC):
         Args:
             positions: Dict with l_a, b_a, l_b, b_b multipliers
             rates: Dict with lending/borrowing APRs
-            fees: Dict with borrow_fee_2A, borrow_fee_3B (nullable)
+            fees: Dict with borrow_fee_token2, borrow_fee_token4 (nullable)
 
         Returns:
             Dict with:
@@ -327,27 +349,27 @@ class StrategyCalculatorBase(ABC):
         # Extract position multipliers and fees
         b_a = positions['b_a']
         b_b = positions['b_b']
-        borrow_fee_2A = fees.get('borrow_fee_2A')
-        if borrow_fee_2A is None:
-            logger.warning("Missing borrow_fee_2A in fees dict - assuming 0.0")
-            borrow_fee_2A = 0.0
-        borrow_fee_3B = fees.get('borrow_fee_3B')
-        if borrow_fee_3B is None:
-            logger.warning("Missing borrow_fee_3B in fees dict - assuming 0.0")
-            borrow_fee_3B = 0.0
+        borrow_fee_token2 = fees.get('borrow_fee_token2')
+        if borrow_fee_token2 is None:
+            logger.warning("Missing borrow_fee_token2 in fees dict - assuming 0.0")
+            borrow_fee_token2 = 0.0
+        borrow_fee_token4 = fees.get('borrow_fee_token4')
+        if borrow_fee_token4 is None:
+            logger.warning("Missing borrow_fee_token4 in fees dict - assuming 0.0")
+            borrow_fee_token4 = 0.0
 
         # Calculate annualized fee cost (for 365-day net APR)
-        total_fee_cost = b_a * borrow_fee_2A + b_b * borrow_fee_3B
+        total_fee_cost = b_a * borrow_fee_token2 + b_b * borrow_fee_token4
         apr_net = gross_apr - total_fee_cost
 
         # Calculate time-adjusted APRs
-        apr5 = self.calculate_apr_for_days(gross_apr, b_a, b_b, borrow_fee_2A, borrow_fee_3B, 5)
-        apr30 = self.calculate_apr_for_days(gross_apr, b_a, b_b, borrow_fee_2A, borrow_fee_3B, 30)
-        apr90 = self.calculate_apr_for_days(gross_apr, b_a, b_b, borrow_fee_2A, borrow_fee_3B, 90)
+        apr5 = self.calculate_apr_for_days(gross_apr, b_a, b_b, borrow_fee_token2, borrow_fee_token4, 5)
+        apr30 = self.calculate_apr_for_days(gross_apr, b_a, b_b, borrow_fee_token2, borrow_fee_token4, 30)
+        apr90 = self.calculate_apr_for_days(gross_apr, b_a, b_b, borrow_fee_token2, borrow_fee_token4, 90)
 
         # Calculate breakeven
         days_to_breakeven = self.calculate_days_to_breakeven(
-            gross_apr, b_a, b_b, borrow_fee_2A, borrow_fee_3B
+            gross_apr, b_a, b_b, borrow_fee_token2, borrow_fee_token4
         )
 
         return {

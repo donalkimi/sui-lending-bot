@@ -49,9 +49,9 @@ class PerpLendingRecursiveCalculator(PerpLendingCalculator):
         liquidation_distance: float,
         collateral_ratio_a: float = 0.0,   # unused (signature compat with parent)
         collateral_ratio_b: float = 0.0,   # unused
-        collateral_ratio_1A: float = 0.0,
-        liquidation_threshold_1A: float = 0.0,
-        borrow_weight_2A: float = 1.0,
+        collateral_ratio_token1: float = 0.0,
+        liquidation_threshold_token1: float = 0.0,
+        borrow_weight_token2: float = 1.0,
         **kwargs
     ) -> Dict[str, float]:
         """
@@ -63,8 +63,8 @@ class PerpLendingRecursiveCalculator(PerpLendingCalculator):
         """
         d       = liquidation_distance
         liq_max = d / (1.0 - d)
-        r_safe  = liquidation_threshold_1A / ((1.0 + liq_max) * borrow_weight_2A) if borrow_weight_2A > 0 else 0.0
-        r       = min(r_safe, collateral_ratio_1A)
+        r_safe  = liquidation_threshold_token1 / ((1.0 + liq_max) * borrow_weight_token2) if borrow_weight_token2 > 0 else 0.0
+        r       = min(r_safe, collateral_ratio_token1)
 
         q      = r * (1.0 - d)
         factor = 1.0 / (1.0 - q) if q < 1.0 else 1.0
@@ -88,20 +88,20 @@ class PerpLendingRecursiveCalculator(PerpLendingCalculator):
         parent has no concept of, and populates token2 fields.
         """
         # Extract B_A leg params from kwargs
-        borrow_total_apr_2A  = kwargs.get('borrow_total_apr_2A')
-        borrow_fee_2A        = kwargs.get('borrow_fee_2A') or 0.0
-        available_borrow_2A  = kwargs.get('available_borrow_2A')
-        borrow_weight_2A     = kwargs.get('borrow_weight_2A', 1.0)
-        collateral_ratio_1A     = kwargs.get('collateral_ratio_1A')
-        liquidation_threshold_1A = kwargs.get('liquidation_threshold_1A')
+        rate_token2          = kwargs.get('rate_token2')
+        borrow_fee_token2    = kwargs.get('borrow_fee_token2') or 0.0
+        available_borrow_token2  = kwargs.get('available_borrow_token2')
+        borrow_weight_token2     = kwargs.get('borrow_weight_token2', 1.0)
+        collateral_ratio_token1     = kwargs.get('collateral_ratio_token1')
+        liquidation_threshold_token1 = kwargs.get('liquidation_threshold_token1')
         token2               = kwargs.get('token2')
         token2_contract      = kwargs.get('token2_contract')
-        price_2A             = kwargs.get('price_2A')
+        price_token2         = kwargs.get('price_token2')
 
-        if borrow_total_apr_2A is None:
-            return {'valid': False, 'error': 'perp_lending_recursive: missing borrow_total_apr_2A'}
-        if collateral_ratio_1A is None or liquidation_threshold_1A is None:
-            return {'valid': False, 'error': 'perp_lending_recursive: missing collateral_ratio_1A or liquidation_threshold_1A'}
+        if rate_token2 is None:
+            return {'valid': False, 'error': 'perp_lending_recursive: missing rate_token2'}
+        if collateral_ratio_token1 is None or liquidation_threshold_token1 is None:
+            return {'valid': False, 'error': 'perp_lending_recursive: missing collateral_ratio_token1 or liquidation_threshold_token1'}
 
         # Run parent analysis — spot lend + perp short APRs computed with amplified positions
         result = super().analyze_strategy(*args, **kwargs)
@@ -113,12 +113,13 @@ class PerpLendingRecursiveCalculator(PerpLendingCalculator):
         l_a = result['l_a']
 
         # --- Subtract B_A stablecoin borrow cost (parent does not know about this leg) ---
-        borrow_cost_apr  = b_a * borrow_total_apr_2A
-        upfront_borrow_fee = b_a * borrow_fee_2A
+        borrow_cost_apr  = b_a * rate_token2
+        upfront_borrow_fee = b_a * borrow_fee_token2
 
         new_gross   = result['apr_gross'] - borrow_cost_apr
         new_upfront = result['total_upfront_fee'] + upfront_borrow_fee
         new_net     = result['net_apr'] - borrow_cost_apr - upfront_borrow_fee
+        new_basis_adj_net = result['basis_adj_net_apr'] - borrow_cost_apr - upfront_borrow_fee
 
         # Recalculate time-adjusted APRs with updated gross and upfront costs
         apr5  = (new_gross *  5 / 365 - new_upfront) * 365 /  5
@@ -127,8 +128,8 @@ class PerpLendingRecursiveCalculator(PerpLendingCalculator):
         days_to_breakeven = (new_upfront * 365.0 / new_gross) if new_gross > 0 else float('inf')
 
         # max_size: limited by available stablecoin borrow liquidity at Protocol A
-        if available_borrow_2A is not None and b_a > 0:
-            max_size = available_borrow_2A / b_a
+        if available_borrow_token2 is not None and b_a > 0:
+            max_size = available_borrow_token2 / b_a
         else:
             max_size = float('inf')
 
@@ -138,12 +139,13 @@ class PerpLendingRecursiveCalculator(PerpLendingCalculator):
         q = r * (1.0 - liquidation_distance)
         loop_amplifier = 1.0 / (1.0 - q) if q < 1.0 else float('inf')
 
-        # token2 units: stablecoin tokens per $1 deployed ≈ b_a / price_2A
-        token2_units = b_a / price_2A if price_2A and price_2A > 0 else None
+        # token2 units: stablecoin tokens per $1 deployed ≈ b_a / price_token2
+        token2_units = b_a / price_token2 if price_token2 and price_token2 > 0 else None
 
         result.update({
             # Adjusted APRs
             'net_apr':           new_net,
+            'basis_adj_net_apr': new_basis_adj_net,
             'apr_gross':         new_gross,
             'total_upfront_fee': new_upfront,
             'apr5':              apr5,
@@ -155,16 +157,16 @@ class PerpLendingRecursiveCalculator(PerpLendingCalculator):
             # Token2 identity (B_A = stablecoin borrow)
             'token2':          token2,
             'token2_contract': token2_contract,
-            'token2_price':    price_2A,
+            'token2_price':    price_token2,
             'token2_units':    token2_units,
-            'token2_rate':     borrow_total_apr_2A,
+            'token2_rate':     rate_token2,
 
             # Collateral / borrow params for liquidation calc and display
-            'token1_collateral_ratio':       collateral_ratio_1A,
-            'token1_liquidation_threshold':  liquidation_threshold_1A,
-            'token2_borrow_fee':             borrow_fee_2A,
-            'token2_available_borrow':       available_borrow_2A,
-            'token2_borrow_weight':          borrow_weight_2A,
+            'token1_collateral_ratio':       collateral_ratio_token1,
+            'token1_liquidation_threshold':  liquidation_threshold_token1,
+            'token2_borrow_fee':             borrow_fee_token2,
+            'token2_available_borrow':       available_borrow_token2,
+            'token2_borrow_weight':          borrow_weight_token2,
 
             # Both legs have liquidation risk (opposite price directions)
             'has_lending_liq_risk': True,

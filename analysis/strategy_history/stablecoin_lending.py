@@ -50,8 +50,8 @@ class StablecoinLendingHistoryHandler(HistoryHandlerBase):
             'token1': strategy['token1'],  # Symbol (required by calculator)
             'token1_contract': strategy['token1_contract'],
             'protocol_a': strategy['protocol_a'],
-            'lend_total_apr_1A': row['lend_total_apr'],
-            'price_1A': row['price_usd']
+            'rate_token1': row['lend_total_apr'],
+            'price_token1': row['price_usd']
         }
 
     def validate_strategy_dict(self, strategy: Dict) -> Tuple[bool, str]:

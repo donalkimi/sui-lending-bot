@@ -157,15 +157,15 @@ class RecursiveLendingCalculator(StrategyCalculatorBase):
         Calculate net APR for recursive lending strategy.
 
         Formula:
-            APR = (L_A × lend_total_apr_1A) + (L_B × lend_total_apr_2B)
-                  - (B_A × borrow_total_apr_2A) - (B_B × borrow_total_apr_3B)
-                  - (B_A × borrow_fee_2A) - (B_B × borrow_fee_3B)
+            APR = (L_A × rate_token1) + (L_B × rate_token3)
+                  - (B_A × rate_token2) - (B_B × rate_token4)
+                  - (B_A × borrow_fee_token2) - (B_B × borrow_fee_token4)
 
         Args:
             positions: Dict with l_a, b_a, l_b, b_b
-            rates: Dict with lend_total_apr_1A, lend_total_apr_2B,
-                   borrow_total_apr_2A, borrow_total_apr_3B
-            fees: Dict with borrow_fee_2A, borrow_fee_3B (nullable)
+            rates: Dict with rate_token1, rate_token3,
+                   rate_token2, rate_token4
+            fees: Dict with borrow_fee_token2, borrow_fee_token4 (nullable)
 
         Returns:
             Net APR as decimal
@@ -176,20 +176,20 @@ class RecursiveLendingCalculator(StrategyCalculatorBase):
         b_b = positions['b_b']
 
         # Extract rates
-        lend_total_1A = rates.get('lend_total_apr_1A')
-        lend_total_2B = rates.get('lend_total_apr_2B')
-        borrow_total_2A = rates.get('borrow_total_apr_2A')
-        borrow_total_3B = rates.get('borrow_total_apr_3B')
+        lend_total_1A = rates.get('rate_token1')
+        lend_total_2B = rates.get('rate_token3')
+        borrow_total_2A = rates.get('rate_token2')
+        borrow_total_3B = rates.get('rate_token4')
 
         # Validate critical rates
         if lend_total_1A is None:
-            raise ValueError("Missing lend_total_apr_1A")
+            raise ValueError("Missing rate_token1")
         if lend_total_2B is None:
-            raise ValueError("Missing lend_total_apr_2B")
+            raise ValueError("Missing rate_token3")
         if borrow_total_2A is None:
-            raise ValueError("Missing borrow_total_apr_2A")
+            raise ValueError("Missing rate_token2")
         if borrow_total_3B is None:
-            raise ValueError("Missing borrow_total_apr_3B")
+            raise ValueError("Missing rate_token4")
 
         # Earnings from lending
         earn_A = l_a * lend_total_1A
@@ -203,18 +203,18 @@ class RecursiveLendingCalculator(StrategyCalculatorBase):
         gross_apr = earn_A + earn_B - cost_A - cost_B
 
         # Borrow fees (with fallback and warnings)
-        borrow_fee_2A = fees.get('borrow_fee_2A')
-        if borrow_fee_2A is None:
-            logger.warning("Missing borrow_fee_2A - assuming 0.0")
-            borrow_fee_2A = 0.0
+        borrow_fee_token2 = fees.get('borrow_fee_token2')
+        if borrow_fee_token2 is None:
+            logger.warning("Missing borrow_fee_token2 - assuming 0.0")
+            borrow_fee_token2 = 0.0
 
-        borrow_fee_3B = fees.get('borrow_fee_3B')
-        if borrow_fee_3B is None:
-            logger.warning("Missing borrow_fee_3B - assuming 0.0")
-            borrow_fee_3B = 0.0
+        borrow_fee_token4 = fees.get('borrow_fee_token4')
+        if borrow_fee_token4 is None:
+            logger.warning("Missing borrow_fee_token4 - assuming 0.0")
+            borrow_fee_token4 = 0.0
 
         # Fee cost (annualized)
-        fee_cost = b_a * borrow_fee_2A + b_b * borrow_fee_3B
+        fee_cost = b_a * borrow_fee_token2 + b_b * borrow_fee_token4
 
         # Net APR (after fees)
         return gross_apr - fee_cost
@@ -226,10 +226,10 @@ class RecursiveLendingCalculator(StrategyCalculatorBase):
         Calculate gross APR for recursive lending strategy.
 
         Formula:
-            gross_apr = (L_A × lend_total_apr_1A) + (L_B × lend_total_apr_2B)
-                        - (B_A × borrow_total_apr_2A) - (B_B × borrow_total_apr_3B)
+            gross_apr = (L_A × rate_token1) + (L_B × rate_token3)
+                        - (B_A × rate_token2) - (B_B × rate_token4)
 
-        Note: Excludes upfront fees (borrow_fee_2A, borrow_fee_3B).
+        Note: Excludes upfront fees (borrow_fee_token2, borrow_fee_token4).
         """
         l_a = positions['l_a']
         b_a = positions['b_a']
@@ -237,10 +237,10 @@ class RecursiveLendingCalculator(StrategyCalculatorBase):
         b_b = positions['b_b']
 
         # Extract and validate rates
-        lend_total_1A = rates['lend_total_apr_1A']
-        lend_total_2B = rates['lend_total_apr_2B']
-        borrow_total_2A = rates['borrow_total_apr_2A']
-        borrow_total_3B = rates['borrow_total_apr_3B']
+        lend_total_1A = rates['rate_token1']
+        lend_total_2B = rates['rate_token3']
+        borrow_total_2A = rates['rate_token2']
+        borrow_total_3B = rates['rate_token4']
 
         # Earnings from lending
         earn_A = l_a * lend_total_1A
@@ -258,24 +258,24 @@ class RecursiveLendingCalculator(StrategyCalculatorBase):
                         token4: str,  # B_B leg: closing stablecoin (was token3)
                         protocol_a: str,
                         protocol_b: str,
-                        lend_total_apr_1A: float,
-                        borrow_total_apr_2A: float,
-                        lend_total_apr_2B: float,
-                        borrow_total_apr_3B: float,
-                        collateral_ratio_1A: float,
-                        collateral_ratio_2B: float,
-                        liquidation_threshold_1A: float,
-                        liquidation_threshold_2B: float,
-                        price_1A: float,
-                        price_2A: float,
-                        price_2B: float,
-                        price_3B: float,
-                        available_borrow_2A: float = None,
-                        available_borrow_3B: float = None,
-                        borrow_fee_2A: float = None,
-                        borrow_fee_3B: float = None,
-                        borrow_weight_2A: float = 1.0,
-                        borrow_weight_3B: float = 1.0,
+                        rate_token1: float,
+                        rate_token2: float,
+                        rate_token3: float,
+                        rate_token4: float,
+                        collateral_ratio_token1: float,
+                        collateral_ratio_token3: float,
+                        liquidation_threshold_token1: float,
+                        liquidation_threshold_token3: float,
+                        price_token1: float,
+                        price_token2: float,
+                        price_token3: float,
+                        price_token4: float,
+                        available_borrow_token2: float = None,
+                        available_borrow_token4: float = None,
+                        borrow_fee_token2: float = None,
+                        borrow_fee_token4: float = None,
+                        borrow_weight_token2: float = 1.0,
+                        borrow_weight_token4: float = 1.0,
                         **kwargs) -> Dict[str, Any]:
         """
         Complete analysis of recursive lending strategy.
@@ -285,13 +285,13 @@ class RecursiveLendingCalculator(StrategyCalculatorBase):
             token2: High-yield token (borrowed for yield)
             token4: Closing stablecoin (borrowed from Protocol B, converted to token1)
             protocol_a, protocol_b: Protocol names
-            lend_total_apr_1A, etc.: Total APRs (base + reward)
-            collateral_ratio_1A, collateral_ratio_2B: Max collateral factors
-            liquidation_threshold_1A, liquidation_threshold_2B: Liquidation LTVs
-            price_1A, price_2A, price_2B, price_3B: Token prices
-            available_borrow_2A, available_borrow_3B: Available borrow liquidity
-            borrow_fee_2A, borrow_fee_3B: Upfront borrow fees (nullable)
-            borrow_weight_2A, borrow_weight_3B: Borrow weight multipliers
+            rate_token1, etc.: Total APRs (base + reward)
+            collateral_ratio_token1, collateral_ratio_token3: Max collateral factors
+            liquidation_threshold_token1, liquidation_threshold_token3: Liquidation LTVs
+            price_token1, price_token2, price_token3, price_token4: Token prices
+            available_borrow_token2, available_borrow_token4: Available borrow liquidity
+            borrow_fee_token2, borrow_fee_token4: Upfront borrow fees (nullable)
+            borrow_weight_token2, borrow_weight_token4: Borrow weight multipliers
 
         Returns:
             Complete strategy dict
@@ -299,12 +299,12 @@ class RecursiveLendingCalculator(StrategyCalculatorBase):
         try:
             # Calculate position sizes
             positions = self.calculate_positions(
-                liquidation_threshold_a=liquidation_threshold_1A,
-                liquidation_threshold_b=liquidation_threshold_2B,
-                collateral_ratio_a=collateral_ratio_1A,
-                collateral_ratio_b=collateral_ratio_2B,
-                borrow_weight_a=borrow_weight_2A,
-                borrow_weight_b=borrow_weight_3B,
+                liquidation_threshold_a=liquidation_threshold_token1,
+                liquidation_threshold_b=liquidation_threshold_token3,
+                collateral_ratio_a=collateral_ratio_token1,
+                collateral_ratio_b=collateral_ratio_token3,
+                borrow_weight_a=borrow_weight_token2,
+                borrow_weight_b=borrow_weight_token4,
                 protocol_a=protocol_a,
                 protocol_b=protocol_b,
                 token1=token1,
@@ -313,25 +313,25 @@ class RecursiveLendingCalculator(StrategyCalculatorBase):
 
             # Calculate max deployable size based on liquidity constraints
             max_size = float('inf')
-            if available_borrow_2A is not None and available_borrow_3B is not None:
+            if available_borrow_token2 is not None and available_borrow_token4 is not None:
                 b_a = positions['b_a']
                 b_b = positions['b_b']
 
-                max_size_2A = available_borrow_2A / b_a if b_a > 0 else float('inf')
-                max_size_3B = available_borrow_3B / b_b if b_b > 0 else float('inf')
+                max_size_2A = available_borrow_token2 / b_a if b_a > 0 else float('inf')
+                max_size_3B = available_borrow_token4 / b_b if b_b > 0 else float('inf')
 
                 # Take the minimum (most restrictive constraint)
                 max_size = min(max_size_2A, max_size_3B)
 
             rates = {
-                'lend_total_apr_1A': lend_total_apr_1A,
-                'lend_total_apr_2B': lend_total_apr_2B,
-                'borrow_total_apr_2A': borrow_total_apr_2A,
-                'borrow_total_apr_3B': borrow_total_apr_3B
+                'rate_token1': rate_token1,
+                'rate_token3': rate_token3,
+                'rate_token2': rate_token2,
+                'rate_token4': rate_token4
             }
             fees = {
-                'borrow_fee_2A': borrow_fee_2A,
-                'borrow_fee_3B': borrow_fee_3B
+                'borrow_fee_token2': borrow_fee_token2,
+                'borrow_fee_token4': borrow_fee_token4
             }
             fee_adjusted_aprs = self.calculate_fee_adjusted_aprs(positions, rates, fees)
             apr_gross = fee_adjusted_aprs['apr_gross']
@@ -341,7 +341,7 @@ class RecursiveLendingCalculator(StrategyCalculatorBase):
             apr90 = fee_adjusted_aprs['apr90']
             days_to_breakeven = fee_adjusted_aprs['days_to_breakeven']
 
-            _t2_a = positions['b_a'] / price_2A if price_2A > 0 else 0.0
+            _t2_a = positions['b_a'] / price_token2 if price_token2 > 0 else 0.0
 
             # Extract contracts from kwargs (passed by rate_analyzer)
             token1_contract = kwargs.get('token1_contract')
@@ -371,6 +371,7 @@ class RecursiveLendingCalculator(StrategyCalculatorBase):
 
                 # APR metrics
                 'net_apr': net_apr,
+                'basis_adj_net_apr': net_apr,
                 'apr5': apr5,
                 'apr30': apr30,
                 'apr90': apr90,
@@ -381,36 +382,36 @@ class RecursiveLendingCalculator(StrategyCalculatorBase):
                 'max_size': max_size,
 
                 # Prices
-                'token1_price': price_1A,
-                'token2_price': price_2A,
-                'token3_price': price_2B,   # L_B: volatile token at protocol_B
-                'token4_price': price_3B,   # B_B: closing stablecoin
+                'token1_price': price_token1,
+                'token2_price': price_token2,
+                'token3_price': price_token3,   # L_B: volatile token at protocol_B
+                'token4_price': price_token4,   # B_B: closing stablecoin
 
                 # Token amounts (tokens per $1 deployed)
-                'token1_units': positions['l_a'] / price_1A if price_1A > 0 else 0.0,
+                'token1_units': positions['l_a'] / price_token1 if price_token1 > 0 else 0.0,
                 'token2_units': _t2_a,
                 'token3_units': _t2_a,      # same tokens as B_A (lend same volatile in B)
-                'token4_units': positions['b_b'] / price_3B if price_3B > 0 else 0.0,
+                'token4_units': positions['b_b'] / price_token4 if price_token4 > 0 else 0.0,
 
                 # Rates
-                'token1_rate': lend_total_apr_1A,
-                'token2_rate': borrow_total_apr_2A,
-                'token3_rate': lend_total_apr_2B,
-                'token4_rate': borrow_total_apr_3B,
+                'token1_rate': rate_token1,
+                'token2_rate': rate_token2,
+                'token3_rate': rate_token3,
+                'token4_rate': rate_token4,
 
                 # Collateral and liquidation
-                'token1_collateral_ratio': collateral_ratio_1A,
-                'token3_collateral_ratio': collateral_ratio_2B,
-                'token1_liquidation_threshold': liquidation_threshold_1A,
-                'token3_liquidation_threshold': liquidation_threshold_2B,
+                'token1_collateral_ratio': collateral_ratio_token1,
+                'token3_collateral_ratio': collateral_ratio_token3,
+                'token1_liquidation_threshold': liquidation_threshold_token1,
+                'token3_liquidation_threshold': liquidation_threshold_token3,
 
                 # Fees and liquidity
-                'token2_borrow_fee': borrow_fee_2A,
-                'token4_borrow_fee': borrow_fee_3B,
-                'token2_available_borrow': available_borrow_2A,
-                'token4_available_borrow': available_borrow_3B,
-                'token2_borrow_weight': borrow_weight_2A,
-                'token4_borrow_weight': borrow_weight_3B,
+                'token2_borrow_fee': borrow_fee_token2,
+                'token4_borrow_fee': borrow_fee_token4,
+                'token2_available_borrow': available_borrow_token2,
+                'token4_available_borrow': available_borrow_token4,
+                'token2_borrow_weight': borrow_weight_token2,
+                'token4_borrow_weight': borrow_weight_token4,
 
                 # Metadata
                 'valid': True,

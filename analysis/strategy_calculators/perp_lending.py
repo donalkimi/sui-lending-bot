@@ -70,13 +70,13 @@ class PerpLendingCalculator(StrategyCalculatorBase):
         Price PnL is tracked separately and NOT included in APR calculation.
 
         Formula:
-            gross_apr = L_A × lend_total_apr_1A - B_B × funding_costs_3B
+            gross_apr = L_A × rate_token1 - B_B × funding_costs_token4
 
         Note: funding_costs are negative when we earn (shorts earn funding)
 
         Args:
             positions: Dict with l_a, b_b
-            rates: Dict with lend_total_apr_1A, borrow_total_apr_3B (funding rate)
+            rates: Dict with rate_token1, rate_token4 (funding rate)
 
         Returns:
             Gross APR as decimal (e.g., 0.0524 = 5.24%)
@@ -84,8 +84,8 @@ class PerpLendingCalculator(StrategyCalculatorBase):
         l_a = positions['l_a']
         b_b = positions['b_b']
 
-        lend_apr_1a = rates.get('lend_total_apr_1A', 0.0)
-        funding_rate_3b = rates.get('borrow_total_apr_3B', 0.0)  # Perp funding rate
+        lend_apr_1a = rates.get('rate_token1', 0.0)
+        funding_rate_3b = rates.get('rate_token4', 0.0)  # Perp funding rate
 
         # Earnings (yield only, no price PnL)
         spot_earnings = l_a * lend_apr_1a
@@ -99,22 +99,20 @@ class PerpLendingCalculator(StrategyCalculatorBase):
         positions: Dict[str, float],
         rates: Dict[str, float],
         fees: Dict[str, float],
-        basis_cost: float = 0.0
     ) -> float:
         """
-        Calculate net APR for perp lending (after fees).
+        Calculate net APR for perp lending (after deterministic fees).
 
         NOTE: This calculates YIELD APR only (lending + funding).
         Price PnL is tracked separately and NOT included in APR calculation.
 
         Formula:
-            net_apr = gross_apr - (B_B × perp_fees) - basis_cost
+            net_apr = gross_apr - (B_B × perp_fees)
 
         Args:
             positions: Dict with l_a, b_b
-            rates: Dict with lend_total_apr_1A, borrow_total_apr_3B (funding rate)
+            rates: Dict with rate_token1, rate_token4 (funding rate)
             fees: Dict (not used, perp fees are fixed in settings)
-            basis_cost: One-time round-trip spot/perp spread cost (decimal, default 0.0)
 
         Returns:
             Net APR as decimal (e.g., 0.0524 = 5.24%)
@@ -124,7 +122,7 @@ class PerpLendingCalculator(StrategyCalculatorBase):
         b_b = positions['b_b']
         perp_fee = b_b * 2.0 * settings.BLUEFIN_TAKER_FEE  # One-time $$$ cost: fee_rate × B_B
 
-        return gross_apr - perp_fee - basis_cost
+        return gross_apr - perp_fee
 
     def calculate_price_pnl(
         self,
@@ -191,9 +189,9 @@ class PerpLendingCalculator(StrategyCalculatorBase):
         token1: str,
         protocol_a: str,
         protocol_b: str,
-        lend_total_apr_1A: float,
-        borrow_total_apr_3B: float,  # Perp funding rate
-        price_1A: float,
+        rate_token1: float,
+        rate_token4: float,  # Perp funding rate
+        price_token1: float,
         liquidation_distance: float = 0.20,
         **kwargs
     ) -> Dict:
@@ -204,9 +202,9 @@ class PerpLendingCalculator(StrategyCalculatorBase):
             token1: Spot token symbol (e.g., 'BTC', 'ETH')
             protocol_a: Lending protocol name (e.g., 'suilend', 'navi')
             protocol_b: Perp protocol name (always 'bluefin')
-            lend_total_apr_1A: Total lending APR for spot token
-            borrow_total_apr_3B: Perp funding rate (annualized)
-            price_1A: Spot token price
+            rate_token1: Total lending APR for spot token
+            rate_token4: Perp funding rate (annualized)
+            price_token1: Spot token price
             liquidation_distance: Safety buffer for perp short (default 0.20 = 20%)
             **kwargs: Additional params (token3, prices, contracts, etc.)
 
@@ -214,7 +212,7 @@ class PerpLendingCalculator(StrategyCalculatorBase):
             Strategy dict with all required fields
         """
         # Validate inputs
-        if lend_total_apr_1A is None or price_1A is None or price_1A <= 0:
+        if rate_token1 is None or price_token1 is None or price_token1 <= 0:
             return {
                 'valid': False,
                 'error': 'Invalid or missing required data'
@@ -224,10 +222,10 @@ class PerpLendingCalculator(StrategyCalculatorBase):
         token4 = kwargs.get('token4', f'{token1}-PERP')
         token1_contract = kwargs.get('token1_contract')
         token4_contract = kwargs.get('token4_contract')
-        price_3B = kwargs.get('price_3B', price_1A)  # Default perp price = spot price
+        price_token4 = kwargs.get('price_token4', price_token1)  # Default perp price = spot price
 
         # Calculate positions — **kwargs passed through so subclasses can receive
-        # extra params (e.g. collateral_ratio_1A, liquidation_threshold_1A for recursive variant)
+        # extra params (e.g. collateral_ratio_token1, liquidation_threshold_token1 for recursive variant)
         positions = self.calculate_positions(
             liquidation_distance=liquidation_distance,
             collateral_ratio_a=0.0,  # Not used by base class
@@ -237,8 +235,8 @@ class PerpLendingCalculator(StrategyCalculatorBase):
 
         # Build rates dict for APR calculation
         rates = {
-            'lend_total_apr_1A': lend_total_apr_1A,
-            'borrow_total_apr_3B': borrow_total_apr_3B
+            'rate_token1': rate_token1,
+            'rate_token4': rate_token4
         }
 
         # Calculate APRs
@@ -248,8 +246,8 @@ class PerpLendingCalculator(StrategyCalculatorBase):
         l_a = positions['l_a']
         b_b = positions['b_b']
 
-        spot_lending_apr = l_a * lend_total_apr_1A
-        funding_rate_apr = b_b * borrow_total_apr_3B
+        spot_lending_apr = l_a * rate_token1
+        funding_rate_apr = b_b * rate_token4
 
         # One-time $$$ costs (as fraction of deployment_usd)
         perp_fee   = b_b * 2.0 * settings.BLUEFIN_TAKER_FEE  # fee_rate × B_B
@@ -263,8 +261,9 @@ class PerpLendingCalculator(StrategyCalculatorBase):
         basis_ask    = kwargs.get('basis_ask')   # exit-side basis for perp_lending (cover short at ask)
         basis_cost   = b_b * basis_spread if basis_spread is not None else 0.0  # basis_spread × B_B
 
-        net_apr = self.calculate_net_apr(positions=positions, rates=rates, fees={},
-                                         basis_cost=basis_cost)
+        net_apr = self.calculate_net_apr(positions=positions, rates=rates, fees={})
+        basis_adj_net_apr = self.calculate_basis_adj_net_apr(positions=positions, rates=rates, fees={},
+                                                             basis_cost=basis_cost)
 
         # Time-adjusted APRs: earn N days of gross APR, subtract the one-time upfront cost, annualise.
         # Formula: APR(N days) = (gross_apr × N/365 - total_upfront_fee) × 365/N
@@ -278,7 +277,7 @@ class PerpLendingCalculator(StrategyCalculatorBase):
         leverage = 1.0 / liquidation_distance
         liq_price_multiplier = 1.0 + (1.0 / leverage)
 
-        _t1_a = l_a / price_1A if price_1A > 0 else 0.0
+        _t1_a = l_a / price_token1 if price_token1 > 0 else 0.0
 
         return {
             # Token identity (universal leg convention)
@@ -307,6 +306,7 @@ class PerpLendingCalculator(StrategyCalculatorBase):
 
             # APR metrics
             'net_apr': net_apr,
+            'basis_adj_net_apr': basis_adj_net_apr,
             'apr_gross': gross_apr,
             'spot_lending_apr': spot_lending_apr,
             'funding_rate_apr': funding_rate_apr,
@@ -332,10 +332,10 @@ class PerpLendingCalculator(StrategyCalculatorBase):
             'max_size': float('inf'),
 
             # Prices (unused legs = None)
-            'token1_price': price_1A,
+            'token1_price': price_token1,
             'token2_price': None,
             'token3_price': None,
-            'token4_price': price_3B,   # B_B: perp price
+            'token4_price': price_token4,   # B_B: perp price
 
             # Token amounts (tokens per $1 deployed)
             'token1_units': _t1_a,
@@ -344,10 +344,10 @@ class PerpLendingCalculator(StrategyCalculatorBase):
             'token4_units': _t1_a,  # market neutral: perp short = spot token count
 
             # Rates (unused legs = None)
-            'token1_rate': lend_total_apr_1A,
+            'token1_rate': rate_token1,
             'token2_rate': None,
             'token3_rate': None,
-            'token4_rate': borrow_total_apr_3B,  # B_B: perp funding rate
+            'token4_rate': rate_token4,  # B_B: perp funding rate
 
             # Validation
             'valid': True,

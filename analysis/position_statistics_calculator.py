@@ -267,43 +267,43 @@ def calculate_position_statistics(
     else:
         realized_apr = 0.0
 
-    # 7. Calculate current APR from live rates (universal leg convention — no strategy branching)
-    # token1=L_A, token2=B_A, token3=L_B, token4=B_B; None contract = leg unused → 0.0
-    lend_1A = get_rate_func(position['token1_contract'], position['protocol_a'], 'lend')
+    # 7. Calculate current APR via strategy calculator (single source of truth)
+    from analysis.strategy_calculators import get_calculator
 
-    borrow_2A = get_rate_func(position['token2_contract'], position['protocol_a'], 'borrow') \
-                if position.get('token2_contract') else 0.0
-    borrow_fee_2A_current = get_borrow_fee_func(position['token2_contract'], position['protocol_a']) \
-                            if position.get('token2_contract') else 0.0
+    calc = get_calculator(position['strategy_type'])
 
-    lend_2B = get_rate_func(position['token3_contract'], position['protocol_b'], 'lend') \
-              if position.get('token3_contract') else 0.0
+    positions_dict = {'l_a': l_a, 'b_a': b_a, 'l_b': l_b, 'b_b': b_b}
 
-    borrow_3B = get_rate_func(position['token4_contract'], position['protocol_b'], 'borrow') \
-                if position.get('token4_contract') else 0.0
-    borrow_fee_3B_current = get_borrow_fee_func(position['token4_contract'], position['protocol_b']) \
-                            if position.get('token4_contract') else 0.0
+    # Fetch live rates for each leg
+    _rate_1A = get_rate_func(position['token1_contract'], position['protocol_a'], 'lend')
+    _rate_2A = get_rate_func(position['token2_contract'], position['protocol_a'], 'borrow') \
+               if position.get('token2_contract') else 0.0
+    _rate_3  = get_rate_func(position['token3_contract'], position['protocol_b'], 'lend') \
+               if position.get('token3_contract') else 0.0
+    _rate_4  = get_rate_func(position['token4_contract'], position['protocol_b'], 'borrow') \
+               if position.get('token4_contract') else 0.0
 
-    # Calculate gross APR (weighted average of all legs)
-    gross_apr = (l_a * lend_1A) + (l_b * lend_2B) - (b_a * borrow_2A) - (b_b * borrow_3B)
+    # Universal token naming — one key per token, no aliases needed
+    rates_dict = {
+        'rate_token1': _rate_1A,
+        'rate_token2': _rate_2A,
+        'rate_token3': _rate_3,
+        'rate_token4': _rate_4,
+    }
+    fees_dict = {
+        'borrow_fee_token2': get_borrow_fee_func(position['token2_contract'], position['protocol_a'])
+                              if position.get('token2_contract') else 0.0,
+        'borrow_fee_token4': get_borrow_fee_func(position['token4_contract'], position['protocol_b'])
+                              if position.get('token4_contract') else 0.0,
+    }
 
-    # Calculate fee cost (borrow protocol fees)
-    fee_cost = b_a * borrow_fee_2A_current + b_b * borrow_fee_3B_current
+    current_apr = calc.calculate_net_apr(positions_dict, rates_dict, fees_dict)
 
-    # Perp trading fees: annualised entry + exit taker fee cost
-    # perp_lending:             perp leg = b_b (short perp)
-    # perp_borrowing/recursive: perp leg = l_b (long perp)
-    # all other strategies:     0.0
-    _strategy_type = position.get('strategy_type', '')
-    if _strategy_type == 'perp_lending':
-        perp_trading_fee_apr = b_b * 2.0 * settings.BLUEFIN_TAKER_FEE
-    elif _strategy_type in ('perp_borrowing', 'perp_borrowing_recursive'):
-        perp_trading_fee_apr = l_b * 2.0 * settings.BLUEFIN_TAKER_FEE
-    else:
-        perp_trading_fee_apr = 0.0
-
-    # Calculate NET current APR
-    current_apr = gross_apr - fee_cost - perp_trading_fee_apr
+    # Basis-adjusted APR: for perp strategies, subtract basis cost (basis_pnl / deployment_usd)
+    basis_cost_apr = (basis_pnl / deployment_usd) if deployment_usd > 0 else 0.0
+    basis_adj_current_apr = calc.calculate_basis_adj_net_apr(
+        positions_dict, rates_dict, fees_dict, basis_cost=basis_cost_apr
+    )
 
     # 8. Return statistics dict
     return {
@@ -317,6 +317,7 @@ def calculate_position_statistics(
         'current_value': current_value,
         'realized_apr': realized_apr,
         'current_apr': current_apr,
+        'basis_adj_current_apr': basis_adj_current_apr,
         'live_pnl': live_pnl,
         'realized_pnl': rebalanced_pnl,  # Note: variable is called rebalanced_pnl in calculation
         'basis_pnl': basis_pnl,           # 0 for non-perp strategies (never None)

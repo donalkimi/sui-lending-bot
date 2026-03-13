@@ -17,8 +17,8 @@ class PerpBorrowingCalculator(StrategyCalculatorBase):
 
     Where:
         liq_max = liquidation_distance / (1 - liquidation_distance)
-        r_safe  = liquidation_threshold_1A / ((1 + liq_max) * borrow_weight_2A)
-        r       = min(r_safe, collateral_ratio_1A)
+        r_safe  = liquidation_threshold_token1 / ((1 + liq_max) * borrow_weight_token2)
+        r       = min(r_safe, collateral_ratio_token1)
 
     Liquidation risks:
         - Protocol A: token2 price rises (debt value exceeds collateral)
@@ -34,14 +34,14 @@ class PerpBorrowingCalculator(StrategyCalculatorBase):
     def calculate_positions(
         self,
         liquidation_distance: float,
-        liquidation_threshold_1A: float,
-        collateral_ratio_1A: float,
-        borrow_weight_2A: float = 1.0,
+        liquidation_threshold_token1: float,
+        collateral_ratio_token1: float,
+        borrow_weight_token2: float = 1.0,
         **kwargs
     ) -> Dict[str, float]:
         liq_max = liquidation_distance / (1.0 - liquidation_distance)
-        r_safe  = liquidation_threshold_1A / ((1.0 + liq_max) * borrow_weight_2A)
-        r       = min(r_safe, collateral_ratio_1A)
+        r_safe  = liquidation_threshold_token1 / ((1.0 + liq_max) * borrow_weight_token2)
+        r       = min(r_safe, collateral_ratio_token1)
 
         return {'l_a': 1.0, 'b_a': r, 'l_b': r, 'b_b': 0.0}
 
@@ -49,26 +49,24 @@ class PerpBorrowingCalculator(StrategyCalculatorBase):
         """
         gross = L_A × lend_1A + L_B × lend_3B − B_A × borrow_2A
 
-        lend_total_apr_3B is the stored Bluefin rate for the long perp.
+        rate_token3 is the stored Bluefin rate for the long perp.
         Positive = longs earn. Negative = longs pay.
         """
-        earnings = (positions['l_a'] * rates['lend_total_apr_1A']
-                  + positions['l_b'] * rates['lend_total_apr_3B'])
-        costs    =  positions['b_a'] * rates['borrow_total_apr_2A']
+        earnings = (positions['l_a'] * rates['rate_token1']
+                  + positions['l_b'] * rates['rate_token3'])
+        costs    =  positions['b_a'] * rates['rate_token2']
         return earnings - costs
 
-    def calculate_net_apr(self, positions: Dict, rates: Dict, fees: Dict,
-                          basis_cost: float = 0.0) -> float:
+    def calculate_net_apr(self, positions: Dict, rates: Dict, fees: Dict) -> float:
         """
         net = gross
             − L_B × 2 × BLUEFIN_TAKER_FEE   (long perp entry + exit)
-            − B_A × borrow_fee_2A             (upfront borrow fee at Protocol A)
-            − basis_cost                       (round-trip spot/perp spread × L_B)
+            − B_A × borrow_fee_token2             (upfront borrow fee at Protocol A)
         """
         gross      = self.calculate_gross_apr(positions, rates)
         perp_fees  = positions['l_b'] * 2.0 * settings.BLUEFIN_TAKER_FEE
-        borrow_fee = (fees.get('borrow_fee_2A') or 0.0) * positions['b_a']
-        return gross - perp_fees - borrow_fee - basis_cost
+        borrow_fee = (fees.get('borrow_fee_token2') or 0.0) * positions['b_a']
+        return gross - perp_fees - borrow_fee
 
     def calculate_price_pnl(
         self,
@@ -89,8 +87,8 @@ class PerpBorrowingCalculator(StrategyCalculatorBase):
 
         Args:
             positions: {'b_a': ..., 'l_b': ..., ...}
-            entry_prices: {'spot': price_2A_at_entry, 'perp': price_3B_at_entry}
-            current_prices: {'spot': current_price_2A, 'perp': current_price_3B}
+            entry_prices: {'spot': price_token2_at_entry, 'perp': price_token4_at_entry}
+            current_prices: {'spot': current_price_token2, 'perp': current_price_token4}
             deployment_usd: total deployment in USD
 
         Returns:
@@ -136,44 +134,44 @@ class PerpBorrowingCalculator(StrategyCalculatorBase):
         token3: str,
         protocol_a: str,
         protocol_b: str,
-        lend_total_apr_1A: float,
-        borrow_total_apr_2A: float,
-        lend_total_apr_3B: float,
-        collateral_ratio_1A: float,
-        liquidation_threshold_1A: float,
-        price_1A: float,
-        price_2A: float,
-        price_3B: float,
+        rate_token1: float,
+        rate_token2: float,
+        rate_token3: float,
+        collateral_ratio_token1: float,
+        liquidation_threshold_token1: float,
+        price_token1: float,
+        price_token2: float,
+        price_token4: float,
         liquidation_distance: float = 0.20,
         **kwargs
     ) -> Dict[str, Any]:
         # Validate required inputs
         missing = [n for n, v in [
-            ('lend_total_apr_1A', lend_total_apr_1A),
-            ('borrow_total_apr_2A', borrow_total_apr_2A),
-            ('lend_total_apr_3B', lend_total_apr_3B),
-            ('collateral_ratio_1A', collateral_ratio_1A),
-            ('liquidation_threshold_1A', liquidation_threshold_1A),
+            ('rate_token1', rate_token1),
+            ('rate_token2', rate_token2),
+            ('rate_token3', rate_token3),
+            ('collateral_ratio_token1', collateral_ratio_token1),
+            ('liquidation_threshold_token1', liquidation_threshold_token1),
         ] if v is None]
         if missing:
             return {'valid': False, 'error': f"Missing: {', '.join(missing)}"}
 
-        borrow_weight_2A = kwargs.get('borrow_weight_2A', 1.0)
-        borrow_fee_2A    = kwargs.get('borrow_fee_2A') or 0.0
-        available_borrow = kwargs.get('available_borrow_2A')
+        borrow_weight_token2 = kwargs.get('borrow_weight_token2', 1.0)
+        borrow_fee_token2    = kwargs.get('borrow_fee_token2') or 0.0
+        available_borrow = kwargs.get('available_borrow_token2')
 
         positions = self.calculate_positions(
             liquidation_distance=liquidation_distance,
-            liquidation_threshold_1A=liquidation_threshold_1A,
-            collateral_ratio_1A=collateral_ratio_1A,
-            borrow_weight_2A=borrow_weight_2A,
+            liquidation_threshold_token1=liquidation_threshold_token1,
+            collateral_ratio_token1=collateral_ratio_token1,
+            borrow_weight_token2=borrow_weight_token2,
         )
         rates = {
-            'lend_total_apr_1A':   lend_total_apr_1A,
-            'borrow_total_apr_2A': borrow_total_apr_2A,
-            'lend_total_apr_3B':   lend_total_apr_3B,
+            'rate_token1':   rate_token1,
+            'rate_token2': rate_token2,
+            'rate_token3':   rate_token3,
         }
-        fees = {'borrow_fee_2A': borrow_fee_2A}
+        fees = {'borrow_fee_token2': borrow_fee_token2}
 
         l_a, b_a, l_b = positions['l_a'], positions['b_a'], positions['l_b']
         gross_apr = self.calculate_gross_apr(positions, rates)
@@ -187,12 +185,13 @@ class PerpBorrowingCalculator(StrategyCalculatorBase):
         basis_bid    = kwargs.get('basis_bid')   # exit-side basis (close long at perp_bid, buy spot)
         basis_cost = l_b * basis_spread if basis_spread is not None else 0.0
 
-        net_apr = self.calculate_net_apr(positions, rates, fees, basis_cost=basis_cost)
+        net_apr = self.calculate_net_apr(positions, rates, fees)
+        basis_adj_net_apr = self.calculate_basis_adj_net_apr(positions, rates, fees, basis_cost=basis_cost)
 
         # Time-adjusted APRs: earn N days of gross APR, subtract the one-time upfront cost, annualise.
         # Formula: APR(N days) = (gross_apr × N/365 - total_upfront_fee) × 365/N
         perp_fee = l_b * 2.0 * settings.BLUEFIN_TAKER_FEE
-        total_upfront_fee = b_a * borrow_fee_2A + perp_fee + basis_cost
+        total_upfront_fee = b_a * borrow_fee_token2 + perp_fee + basis_cost
         apr5  = (gross_apr * 5  / 365 - total_upfront_fee) * 365 / 5
         apr30 = (gross_apr * 30 / 365 - total_upfront_fee) * 365 / 30
         apr90 = (gross_apr * 90 / 365 - total_upfront_fee) * 365 / 90
@@ -200,7 +199,7 @@ class PerpBorrowingCalculator(StrategyCalculatorBase):
 
         max_size = (available_borrow / b_a) if (available_borrow is not None and b_a > 0) else float('inf')
 
-        _t2_a = b_a / price_2A if price_2A > 0 else 0.0
+        _t2_a = b_a / price_token2 if price_token2 > 0 else 0.0
 
         return {
             # Identity (universal leg convention)
@@ -222,9 +221,10 @@ class PerpBorrowingCalculator(StrategyCalculatorBase):
             # APR
             'apr_gross': gross_apr,
             'net_apr':   net_apr,
-            'stablecoin_lending_apr': l_a * lend_total_apr_1A,
-            'token2_borrow_apr':      b_a * borrow_total_apr_2A,
-            'funding_rate_apr':       l_b * lend_total_apr_3B,
+            'basis_adj_net_apr': basis_adj_net_apr,
+            'stablecoin_lending_apr': l_a * rate_token1,
+            'token2_borrow_apr':      b_a * rate_token2,
+            'funding_rate_apr':       l_b * rate_token3,
             'perp_fees_apr':          l_b * 2.0 * settings.BLUEFIN_TAKER_FEE,
             'basis_spread':           basis_spread,
             'basis_mid':              basis_mid,
@@ -245,31 +245,31 @@ class PerpBorrowingCalculator(StrategyCalculatorBase):
             'max_size':             max_size,
 
             # Prices
-            'token1_price': price_1A,
-            'token2_price': price_2A,
-            'token3_price': price_3B,   # L_B: perp price (bug fix: was price_2A)
-            'token4_price': None,       # B_B unused (bug fix: was price_3B)
+            'token1_price': price_token1,
+            'token2_price': price_token2,
+            'token3_price': price_token4,   # L_B: perp price (bug fix: was price_token2)
+            'token4_price': None,       # B_B unused
 
             # Token amounts (tokens per $1 deployed)
-            'token1_units': l_a / price_1A if price_1A > 0 else 0.0,
+            'token1_units': l_a / price_token1 if price_token1 > 0 else 0.0,
             'token2_units': _t2_a,
             'token3_units': _t2_a,  # L_B: perp contracts = borrowed token count (bug fix: was 0.0)
             'token4_units': None,   # B_B unused (bug fix: was _t2_a)
 
             # Rates
-            'token1_rate': lend_total_apr_1A,
-            'token2_rate': borrow_total_apr_2A,
-            'token3_rate': lend_total_apr_3B,   # L_B: perp funding rate (bug fix: was 0.0)
-            'token4_rate': None,                # B_B unused (bug fix: was lend_total_apr_3B)
+            'token1_rate': rate_token1,
+            'token2_rate': rate_token2,
+            'token3_rate': rate_token3,   # L_B: perp funding rate (bug fix: was 0.0)
+            'token4_rate': None,                # B_B unused
 
             # Collateral / liquidation
-            'token1_collateral_ratio':      collateral_ratio_1A,
-            'token1_liquidation_threshold': liquidation_threshold_1A,
+            'token1_collateral_ratio':      collateral_ratio_token1,
+            'token1_liquidation_threshold': liquidation_threshold_token1,
 
             # Fees / liquidity
-            'token2_borrow_fee':       borrow_fee_2A,
+            'token2_borrow_fee':       borrow_fee_token2,
             'token2_available_borrow': available_borrow,
-            'token2_borrow_weight':    borrow_weight_2A,
+            'token2_borrow_weight':    borrow_weight_token2,
             'token4_available_borrow':  None,  # B_B unused
 
             # Metadata

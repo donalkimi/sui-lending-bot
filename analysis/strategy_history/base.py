@@ -67,10 +67,10 @@ class HistoryHandlerBase(ABC):
 
         Returns:
             Dict with keys needed by calculator.analyze_strategy():
-            - lend_total_apr_1A, borrow_total_apr_2A, etc.
-            - price_1A, price_2A, etc.
-            - collateral_ratio_1A, liquidation_threshold_1A (if applicable)
-            - borrow_fee_2A, borrow_fee_3B (if applicable)
+            - rate_token1, rate_token2, etc.
+            - price_token1, price_token2, etc.
+            - collateral_ratio_token1, liquidation_threshold_token1 (if applicable)
+            - borrow_fee_token2, borrow_fee_token4 (if applicable)
 
             Returns None if required data is missing (timestamp will be skipped)
         """

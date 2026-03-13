@@ -29,15 +29,15 @@ class PerpBorrowingRecursiveCalculator(PerpBorrowingCalculator):
     def calculate_positions(
         self,
         liquidation_distance: float,
-        liquidation_threshold_1A: float,
-        collateral_ratio_1A: float,
-        borrow_weight_2A: float = 1.0,
+        liquidation_threshold_token1: float,
+        collateral_ratio_token1: float,
+        borrow_weight_token2: float = 1.0,
         **kwargs
     ) -> Dict[str, float]:
         # Step 1: same base r as non-looped
         liq_max = liquidation_distance / (1.0 - liquidation_distance)
-        r_safe  = liquidation_threshold_1A / ((1.0 + liq_max) * borrow_weight_2A)
-        r       = min(r_safe, collateral_ratio_1A)
+        r_safe  = liquidation_threshold_token1 / ((1.0 + liq_max) * borrow_weight_token2)
+        r       = min(r_safe, collateral_ratio_token1)
 
         # Step 2: geometric series amplifier
         # q = r(1-d), converges for any r ∈ (0,1), d ∈ (0,1)

@@ -108,26 +108,26 @@ class RecursiveLendingHistoryHandler(HistoryHandlerBase):
                 'protocol_b': strategy['protocol_b'],
 
                 # Leg 1A - lending
-                'lend_total_apr_1A': leg_1A['lend_total_apr'],
-                'price_1A': leg_1A['price_usd'],
-                'collateral_ratio_1A': leg_1A['collateral_ratio'],              # Direct access
-                'liquidation_threshold_1A': leg_1A['liquidation_threshold'],    # Direct access
+                'rate_token1': leg_1A['lend_total_apr'],
+                'price_token1': leg_1A['price_usd'],
+                'collateral_ratio_token1': leg_1A['collateral_ratio'],              # Direct access
+                'liquidation_threshold_token1': leg_1A['liquidation_threshold'],    # Direct access
 
                 # Leg 2A - borrowing
-                'borrow_total_apr_2A': leg_2A['borrow_total_apr'],
-                'price_2A': leg_2A['price_usd'],
-                'borrow_fee_2A': leg_2A['borrow_fee'],                          # Direct access
+                'rate_token2': leg_2A['borrow_total_apr'],
+                'price_token2': leg_2A['price_usd'],
+                'borrow_fee_token2': leg_2A['borrow_fee'],                          # Direct access
 
                 # Leg 2B - lending
-                'lend_total_apr_2B': leg_2B['lend_total_apr'],
-                'price_2B': leg_2B['price_usd'],
-                'collateral_ratio_2B': leg_2B['collateral_ratio'],              # Direct access
-                'liquidation_threshold_2B': leg_2B['liquidation_threshold'],    # Direct access
+                'rate_token3': leg_2B['lend_total_apr'],
+                'price_token3': leg_2B['price_usd'],
+                'collateral_ratio_token3': leg_2B['collateral_ratio'],              # Direct access
+                'liquidation_threshold_token3': leg_2B['liquidation_threshold'],    # Direct access
 
                 # Leg 3B - borrowing
-                'borrow_total_apr_3B': leg_3B['borrow_total_apr'],
-                'price_3B': leg_3B['price_usd'],
-                'borrow_fee_3B': leg_3B['borrow_fee'],                          # Direct access
+                'rate_token4': leg_3B['borrow_total_apr'],
+                'price_token4': leg_3B['price_usd'],
+                'borrow_fee_token4': leg_3B['borrow_fee'],                          # Direct access
 
                 # Optional config
                 'liquidation_distance': strategy.get('liquidation_distance', 0.20)  # OK - optional config

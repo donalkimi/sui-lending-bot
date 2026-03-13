@@ -44,6 +44,7 @@ config/credentials.json
 *.swp
 *.swo
 *~
+CLAUDE.md
 
 # OS
 .DS_Store
