@@ -895,12 +895,18 @@ gross_apr = spot_earnings - funding_costs  # Subtract cost (negative cost = add 
 
 **Core Principle:** Each position multiplier maps to a dedicated token slot universally across all strategy types. Code must never branch on strategy_type to determine which token to use for a leg lookup.
 
-| Weight | DB slot | Token | Protocol |
-|--------|---------|-------|----------|
-| `L_A` | `1A` cols | `token1` | `protocol_A` |
-| `B_A` | `2A` cols | `token2` (NULL if unused) | `protocol_A` |
-| `L_B` | `2B` cols | `token3` (NULL if unused) | `protocol_B` |
-| `B_B` | `3B` cols | `token4` (NULL if unused) | `protocol_B` |
+**Canonical slot names: `token1`, `token2`, `token3`, `token4`**
+
+These are the universal identifiers for the four leg slots. All new code must use this naming.
+
+| Weight | Canonical slot | Legacy DB suffix | Protocol |
+|--------|----------------|-----------------|----------|
+| `L_A` | `token1` | `_1a` cols (legacy) | `protocol_A` |
+| `B_A` | `token2` (NULL if unused) | `_2a` cols (legacy) | `protocol_A` |
+| `L_B` | `token3` (NULL if unused) | `_2b` cols (legacy) | `protocol_B` |
+| `B_B` | `token4` (NULL if unused) | `_3b` cols (legacy) | `protocol_B` |
+
+**Legacy naming (`_1a`, `_2a`, `_2b`, `_3b`):** This suffix scheme exists in current DB column names (e.g., `entry_lend_rate_1a`, `entry_token_amount_2b`) and throughout the existing codebase. It is the OLD format and will be migrated to `token1/2/3/4` naming across the codebase over time. Do not introduce new code using the legacy suffix scheme.
 
 **Why:**
 - Eliminates all strategy-type branching in rate/price lookups

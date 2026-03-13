@@ -725,6 +725,8 @@ def _get_rebalance_actions(
         )
     except Exception as e:
         print(f"⚠️ [REBALANCE-ACTION] {position.get('strategy_type', '?')}: {e}")
+        print(f"    l_a={position.get('l_a')} b_a={position.get('b_a')} l_b={position.get('l_b')} b_b={position.get('b_b')}")
+        print(f"    token_amounts: t1={position.get('entry_token1_amount')} t2={position.get('entry_token2_amount')} t3={position.get('entry_token3_amount')} t4={position.get('entry_token4_amount')}")
         return None, None, None, None
 
 
@@ -1632,7 +1634,7 @@ class RecursiveLendingRenderer(StrategyRendererBase):
         token1_collateral_ratio = _modal_sf(strategy, 'token1_collateral_ratio')
         token3_collateral_ratio = _modal_sf(strategy, 'token3_collateral_ratio')
         token2_available_borrow = _modal_sf(strategy, 'token2_available_borrow')
-        available_borrow_3b = _modal_sf(strategy, 'available_borrow_3b')
+        available_borrow_3b = _modal_sf(strategy, 'token4_available_borrow')
 
         T1_A = _modal_sf(strategy, 'token1_units')
         T2_A = _modal_sf(strategy, 'token2_units')

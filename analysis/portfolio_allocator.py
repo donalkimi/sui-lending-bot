@@ -8,7 +8,7 @@ This module implements constraint-based portfolio allocation:
 4. Greedily select strategies respecting token/protocol exposure limits
 """
 
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 import pandas as pd
 import numpy as np
 from config.settings import DEFAULT_ALLOCATION_CONSTRAINTS
@@ -527,16 +527,22 @@ class PortfolioAllocator:
             if len(selected) >= max_strategies:
                 break
 
-            # Recalculate max_size for CURRENT strategy using current available_borrow matrix
+            # Recalculate max_size for CURRENT strategy using current available_borrow matrix.
+            # Only applies to strategies with a spot borrow leg (token2 or token4).
+            # Perp_lending and stablecoin_lending have no spot borrow leg (both are None)
+            # and must NOT have their max_size recalculated from the shared matrix.
             if enable_iterative_updates and available_borrow is not None:
-                strategy = strategy.copy()
-
-                # Recalculate max_size based on current available_borrow
-                updated_max_size = self._calculate_max_size_from_available_borrow(
-                    strategy,
-                    available_borrow
+                has_borrow_leg = (
+                    pd.notna(strategy.get('token2_available_borrow')) or
+                    pd.notna(strategy.get('token4_available_borrow'))
                 )
-                strategy['max_size'] = updated_max_size
+                if has_borrow_leg:
+                    strategy = strategy.copy()
+                    updated_max_size = self._calculate_max_size_from_available_borrow(
+                        strategy,
+                        available_borrow
+                    )
+                    strategy['max_size'] = updated_max_size
 
             # Capture state before allocation
             remaining_capital = portfolio_size - allocated_capital
@@ -557,6 +563,7 @@ class PortfolioAllocator:
                 'token1': strategy['token1'],
                 'token2': strategy['token2'],
                 'token3': strategy['token3'],
+                'token4': strategy.get('token4'),
                 'protocol_a': strategy['protocol_a'],
                 'protocol_b': strategy['protocol_b'],
                 'adjusted_apr': strategy['adjusted_apr'],
@@ -746,7 +753,7 @@ class PortfolioAllocator:
         tokens_list = sorted(list(tokens_set))
         protocols_list = sorted(list(protocols_set))
         matrix = pd.DataFrame(index=tokens_list, columns=protocols_list, dtype=float)
-        matrix[:] = 0.0  # Initialize with zeros
+        matrix[:] = float('nan')  # Initialize with NaN (means "no data", not "depleted")
 
         # Populate matrix with available_borrow values
         # Use max() aggregation when multiple strategies report different values
@@ -755,20 +762,28 @@ class PortfolioAllocator:
             # Process token2 on protocol_a
             token2 = row.get('token2')
             protocol_a = row.get('protocol_a')
-            available_2a = row.get('token2_available_borrow', 0.0)
+            available_2a = row.get('token2_available_borrow')  # No default — returns None if missing
 
             if pd.notna(token2) and pd.notna(protocol_a) and pd.notna(available_2a):
                 current_value = matrix.loc[token2, protocol_a]
-                matrix.loc[token2, protocol_a] = max(current_value, float(available_2a))
+                # Handle NaN cell: if NaN, just set; if numeric, take max
+                if pd.isna(current_value):
+                    matrix.loc[token2, protocol_a] = float(available_2a)
+                else:
+                    matrix.loc[token2, protocol_a] = max(current_value, float(available_2a))
 
             # Process token4 (B_B) on protocol_b (skip if None — unused leg)
             token4 = row.get('token4')
             protocol_b = row.get('protocol_b')
-            available_3b = row.get('available_borrow_3b', 0.0)
+            available_3b = row.get('token4_available_borrow')  # No default — returns None if missing
 
             if pd.notna(token4) and pd.notna(protocol_b) and pd.notna(available_3b):
                 current_value = matrix.loc[token4, protocol_b]
-                matrix.loc[token4, protocol_b] = max(current_value, float(available_3b))
+                # Handle NaN cell: if NaN, just set; if numeric, take max
+                if pd.isna(current_value):
+                    matrix.loc[token4, protocol_b] = float(available_3b)
+                else:
+                    matrix.loc[token4, protocol_b] = max(current_value, float(available_3b))
 
         return matrix
 
@@ -891,10 +906,14 @@ class PortfolioAllocator:
             if token2 in available_borrow.index and protocol_a in available_borrow.columns:
                 available_2a = available_borrow.loc[token2, protocol_a]
             else:
-                available_2a = 0.0
+                available_2a = float('nan')  # Not in matrix = no data = no constraint
 
             if b_a > 0:
-                constraint_2a = available_2a / b_a
+                # NaN available_2a means no liquidity data → no constraint
+                if pd.isna(available_2a):
+                    constraint_2a = float('inf')
+                else:
+                    constraint_2a = available_2a / b_a
             else:
                 constraint_2a = float('inf')
 
@@ -903,10 +922,14 @@ class PortfolioAllocator:
                 if token4 in available_borrow.index and protocol_b in available_borrow.columns:
                     available_3b = available_borrow.loc[token4, protocol_b]
                 else:
-                    available_3b = 0.0
+                    available_3b = float('nan')  # Not in matrix = no data = no constraint
 
                 if b_b > 0:
-                    constraint_3b = available_3b / b_b
+                    # NaN available_3b means no liquidity data → no constraint
+                    if pd.isna(available_3b):
+                        constraint_3b = float('inf')
+                    else:
+                        constraint_3b = available_3b / b_b
                 else:
                     constraint_3b = float('inf')
             else:
@@ -918,9 +941,11 @@ class PortfolioAllocator:
             return max(0.0, max_size)
 
         except Exception as e:
-            print(f"⚠️  Warning: Failed to recalculate max_size for strategy: {e}")
-            # Return 0 to be conservative (don't allocate if can't calculate)
-            return 0.0
+            raise RuntimeError(
+                f"Failed to recalculate max_size for strategy "
+                f"(token1={strategy.get('token1')}, token2={strategy.get('token2')}, "
+                f"protocol_a={strategy.get('protocol_a')}, protocol_b={strategy.get('protocol_b')}): {e}"
+            ) from e
 
     def _recalculate_max_sizes(
         self,

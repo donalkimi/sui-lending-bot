@@ -214,7 +214,7 @@ class StablecoinLendingCalculator(StrategyCalculatorBase):
             'token2_borrow_fee': None,
             'token4_borrow_fee': None,
             'token2_available_borrow': None,
-            'available_borrow_3b': None,
+            'token4_available_borrow': None,
             'token2_borrow_weight': None,
             'token4_borrow_weight': None,
 

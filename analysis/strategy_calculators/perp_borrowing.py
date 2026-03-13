@@ -198,7 +198,7 @@ class PerpBorrowingCalculator(StrategyCalculatorBase):
         apr90 = (gross_apr * 90 / 365 - total_upfront_fee) * 365 / 90
         days_to_breakeven = (total_upfront_fee * 365.0 / gross_apr) if gross_apr > 0 else float('inf')
 
-        max_size = (available_borrow / b_a) if (available_borrow and b_a > 0) else float('inf')
+        max_size = (available_borrow / b_a) if (available_borrow is not None and b_a > 0) else float('inf')
 
         _t2_a = b_a / price_2A if price_2A > 0 else 0.0
 
@@ -270,7 +270,7 @@ class PerpBorrowingCalculator(StrategyCalculatorBase):
             'token2_borrow_fee':       borrow_fee_2A,
             'token2_available_borrow': available_borrow,
             'token2_borrow_weight':    borrow_weight_2A,
-            'available_borrow_3b':     None,  # B_B unused
+            'token4_available_borrow':  None,  # B_B unused
 
             # Metadata
             'valid':         True,

@@ -127,7 +127,7 @@ class PositionService:
         protocol_a: str,
         protocol_b: str,
         deployment_usd: float,
-        strategy_type: str = 'recursive_lending',
+        strategy_type: str,
         is_paper_trade: bool = True,
         execution_time: int = -1,
         user_id: Optional[str] = None,
@@ -154,7 +154,7 @@ class PositionService:
             protocol_a: First protocol name
             protocol_b: Second protocol name
             deployment_usd: USD amount to deploy
-            strategy_type: Strategy type ('recursive_lending', 'stablecoin_lending', 'noloop_cross_protocol_lending')
+            strategy_type: Strategy type — required, no default (see config/settings.py for valid values)
             is_paper_trade: True for Phase 1 (paper), False for Phase 2 (real capital)
             execution_time: Unix timestamp when executed (-1 = pending execution)
             user_id: Optional user ID for multi-user support (Phase 2)
@@ -171,6 +171,9 @@ class PositionService:
             ValueError: If timestamp is missing
             TypeError: If timestamp is not int
         """
+        if not strategy_type:
+            raise ValueError("strategy_type is required — received empty string or None")
+
         # Validate timestamp - use to_seconds() to convert at boundary (pandas Series -> int)
         # This follows DESIGN_NOTES.md principle #5: convert at boundaries
         entry_timestamp_raw = strategy_row.get('timestamp')

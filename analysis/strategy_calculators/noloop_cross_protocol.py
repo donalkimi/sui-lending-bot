@@ -270,7 +270,7 @@ class NoLoopCrossProtocolCalculator(StrategyCalculatorBase):
 
         # Calculate max size based on available borrow liquidity
         max_size = float('inf')
-        if available_borrow_2A is not None and available_borrow_2A > 0:
+        if available_borrow_2A is not None:
             # Max deployment limited by borrow liquidity
             # deployment × b_a = borrow amount in USD
             # borrow amount in USD ≤ available_borrow_2A
@@ -342,7 +342,7 @@ class NoLoopCrossProtocolCalculator(StrategyCalculatorBase):
             'token2_borrow_fee': borrow_fee_2A or 0.0,
             'token4_borrow_fee': None,  # B_B unused
             'token2_available_borrow': available_borrow_2A,
-            'available_borrow_3b': None,  # B_B unused
+            'token4_available_borrow': None,  # B_B unused
             'token2_borrow_weight': kwargs.get('borrow_weight_2A', 1.0),
             'token4_borrow_weight': None,  # B_B unused
 

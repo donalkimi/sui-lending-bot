@@ -127,7 +127,7 @@ class PerpLendingRecursiveCalculator(PerpLendingCalculator):
         days_to_breakeven = (new_upfront * 365.0 / new_gross) if new_gross > 0 else float('inf')
 
         # max_size: limited by available stablecoin borrow liquidity at Protocol A
-        if available_borrow_2A and b_a > 0:
+        if available_borrow_2A is not None and b_a > 0:
             max_size = available_borrow_2A / b_a
         else:
             max_size = float('inf')

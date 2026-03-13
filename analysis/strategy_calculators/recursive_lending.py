@@ -408,7 +408,7 @@ class RecursiveLendingCalculator(StrategyCalculatorBase):
                 'token2_borrow_fee': borrow_fee_2A,
                 'token4_borrow_fee': borrow_fee_3B,
                 'token2_available_borrow': available_borrow_2A,
-                'available_borrow_3b': available_borrow_3B,
+                'token4_available_borrow': available_borrow_3B,
                 'token2_borrow_weight': borrow_weight_2A,
                 'token4_borrow_weight': borrow_weight_3B,
 
@@ -485,6 +485,12 @@ class RecursiveLendingCalculator(StrategyCalculatorBase):
         # Deltas vs current segment opening amounts
         delta1 = exit_token1 - float(position['entry_token1_amount'])
         delta2 = exit_token2 - float(position['entry_token2_amount'])
+        if position['entry_token3_amount'] is None:
+            raise ValueError(
+                f"entry_token3_amount is NULL for recursive_lending position (l_b={l_b}) — "
+                f"this leg must always have a token amount. "
+                f"Position likely has wrong strategy_type or was deployed with l_b=0."
+            )
         delta3 = exit_token3 - float(position['entry_token3_amount'])
         delta4 = exit_token4 - float(position['entry_token4_amount'] or 0)
 

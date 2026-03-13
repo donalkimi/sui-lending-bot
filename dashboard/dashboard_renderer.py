@@ -82,7 +82,17 @@ def initialize_allocator_settings():
         if last_used:
             st.session_state.allocation_constraints = last_used['allocator_constraints']
             st.session_state.sidebar_filters = last_used.get('sidebar_filters', {})
-            print("✅ Loaded last used settings from database")
+
+            # Merge saved stablecoin preferences with defaults to include any new stablecoins
+            from config.stablecoins import DEFAULT_STABLECOIN_PREFERENCES
+            saved_prefs = st.session_state.allocation_constraints.get('stablecoin_preferences', {})
+            merged_prefs = {
+                symbol: saved_prefs.get(symbol, DEFAULT_STABLECOIN_PREFERENCES[symbol])
+                for symbol in DEFAULT_STABLECOIN_PREFERENCES
+            }
+            st.session_state.allocation_constraints['stablecoin_preferences'] = merged_prefs
+
+            print("✅ Loaded last used settings from database (merged with current stablecoin defaults)")
             return
     except Exception as e:
         print(f"⚠️  Warning: Failed to load last used settings: {e}")
@@ -224,6 +234,7 @@ def display_strategy_details(strategy_row: Union[pd.Series, Dict[str, Any]], dep
     token1_contract = strategy_row.get('token1_contract', '')
     token2_contract = strategy_row.get('token2_contract', '')
     token3_contract = strategy_row.get('token3_contract', '')
+    token4 = strategy_row.get('token4')
 
     # USD values
     l_a = strategy_row.get('l_a', 0.0)
@@ -258,7 +269,7 @@ def display_strategy_details(strategy_row: Union[pd.Series, Dict[str, Any]], dep
 
     # Prepare liquidity constraints message (detailed view)
     available_borrow_2A = strategy_row.get('token2_available_borrow')
-    available_borrow_3B = strategy_row.get('available_borrow_3b')
+    available_borrow_3B = strategy_row.get('token4_available_borrow')
 
     liquidity_details = []
     if available_borrow_2A is not None and not pd.isna(available_borrow_2A):
@@ -267,7 +278,7 @@ def display_strategy_details(strategy_row: Union[pd.Series, Dict[str, Any]], dep
 
     if available_borrow_3B is not None and not pd.isna(available_borrow_3B):
         constraint_3B = available_borrow_3B / b_b if b_b > 0 else float('inf')
-        liquidity_details.append(f"• {token3} on {protocol_b}: ${available_borrow_3B:,.2f} available → max ${constraint_3B:,.2f}")
+        liquidity_details.append(f"• {token4 or token3} on {protocol_b}: ${available_borrow_3B:,.2f} available → max ${constraint_3B:,.2f}")
 
     liquidity_constraints_message = None
     if liquidity_details:
@@ -322,11 +333,11 @@ def display_strategy_details(strategy_row: Union[pd.Series, Dict[str, Any]], dep
         }
     ]
 
-    # Add 4th row (Borrow token3 from Protocol B)
+    # Add 4th row (Borrow token4 from Protocol B)
     table_data.append({
         'Protocol': protocol_b,
-        'Token': token3,
-        'Contract': format_contract(token3_contract),
+        'Token': token4 or token3,
+        'Contract': format_contract(strategy_row.get('token4_contract', '')),
         'Action': 'Borrow',
         'Rate': f"{token4_rate * 100:.2f}%",
         'Weight': f"{b_b:.2f}",
@@ -891,7 +902,7 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
         try:
             # Build strategy dict for get_strategy_history()
             strategy_dict = {
-                'strategy_type': strategy.get('strategy_type', 'recursive_lending'),
+                'strategy_type': strategy['strategy_type'],
                 'token1': strategy.get('token1'),  # Symbol (e.g., 'USDC')
                 'token2': strategy.get('token2'),  # Symbol (e.g., 'SUI')
                 'token3': strategy.get('token3'),  # L_B slot
@@ -919,7 +930,8 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
                 # Generate chart
                 from analysis.strategy_history.chart_utils import create_history_chart, format_history_table
 
-                chart_title = f"{strategy['token1']}/{strategy['token2']}/{strategy['token3']} - {strategy['protocol_a']}/{strategy['protocol_b']}"
+                token4_suffix = f"/{strategy.get('token4', '')}" if strategy.get('token4') and strategy.get('token4') != strategy['token3'] else ""
+                chart_title = f"{strategy['token1']}/{strategy['token2']}/{strategy['token3']}{token4_suffix} - {strategy['protocol_a']}/{strategy['protocol_b']}"
                 chart = create_history_chart(
                     history_df,
                     title=chart_title,
@@ -984,7 +996,7 @@ def show_strategy_modal(strategy: Dict, timestamp_seconds: int):
                 protocol_a=strategy['protocol_a'],
                 protocol_b=strategy['protocol_b'],
                 deployment_usd=deployment_usd,
-                strategy_type=_st or 'recursive_lending',
+                strategy_type=_st,
                 is_paper_trade=True,
                 notes="",
             )
@@ -1752,6 +1764,7 @@ def render_pending_position_instructions(position: pd.Series, service: PositionS
     position_id = position['position_id']
     position_short_id = position_id[:8]
     token1, token2, token3 = position['token1'], position['token2'], position['token3']
+    token4 = position.get('token4') or token3  # B_B leg; falls back to token3 when b_b=0
     protocol_a, protocol_b = position['protocol_a'], position['protocol_b']
     deployment_usd = float(position['deployment_usd'])
 
@@ -1790,7 +1803,7 @@ def render_pending_position_instructions(position: pd.Series, service: PositionS
     ranges_3b = calculate_acceptable_ranges(price_3b, rate_3b)
 
     # Build title
-    token_flow = f"{token1} → {token2} → {token3}"
+    token_flow = f"{token1} → {token2} → {token3}" + (f" → {token4}" if b_b > 0 and token4 != token3 else "")
     protocol_pair = f"{protocol_a} ↔ {protocol_b}"
     created_at = position['created_at']
     title = f"Position {position_short_id} | {token_flow} | {protocol_pair} | ${deployment_usd:,.0f} | Created: {created_at}"
@@ -1839,11 +1852,11 @@ def render_pending_position_instructions(position: pd.Series, service: PositionS
         st.markdown(f"- **Acceptable Rate:** ≥ {ranges_2b['rate_low'] * 100:.2f}%")
         st.markdown("")
 
-        # Leg 4: Borrow token3 from Protocol B
-        st.markdown(f"**Leg 4: Borrow {token3} from {protocol_b}**")
-        st.markdown(f"- **Action:** Borrow **{amt_3b:,.6f} {token3}** from {protocol_b}")
+        # Leg 4: Borrow token4 from Protocol B
+        st.markdown(f"**Leg 4: Borrow {token4} from {protocol_b}**")
+        st.markdown(f"- **Action:** Borrow **{amt_3b:,.6f} {token4}** from {protocol_b}")
         st.markdown(f"- **Expected USD Value:** ${borrow_3b_usd:,.2f}")
-        st.markdown(f"- **Expected Price:** ${price_3b:.6f} USD per {token3}")
+        st.markdown(f"- **Expected Price:** ${price_3b:.6f} USD per {token4}")
         st.markdown(f"- **Acceptable Price:** ≤ ${ranges_3b['price_high']:.6f} USD")
         st.markdown(f"- **Expected Rate:** {rate_3b * 100:.2f}%")
         st.markdown(f"- **Acceptable Rate:** ≤ {ranges_3b['rate_high'] * 100:.2f}%")
@@ -1885,7 +1898,7 @@ Leg 3: Lend {amt_2b:,.6f} {token2} to {protocol_b}
   Expected price: ${price_2b:.6f}, rate: {rate_2b*100:.2f}%
   Acceptable price: ≥${ranges_2b['price_low']:.6f}, rate: ≥{ranges_2b['rate_low']*100:.2f}%
 
-Leg 4: Borrow {amt_3b:,.6f} {token3} from {protocol_b}
+Leg 4: Borrow {amt_3b:,.6f} {token4} from {protocol_b}
   Expected price: ${price_3b:.6f}, rate: {rate_3b*100:.2f}%
   Acceptable price: ≤${ranges_3b['price_high']:.6f}, rate: ≤{ranges_3b['rate_high']*100:.2f}%
   Fee: {fee_3b*100:.3f}%"""
@@ -2482,6 +2495,12 @@ def render_allocation_tab(all_strategies_df: pd.DataFrame):
         from config.settings import DEFAULT_ALLOCATION_CONSTRAINTS
         st.session_state.allocation_constraints = DEFAULT_ALLOCATION_CONSTRAINTS.copy()
 
+    # DEBUG: verify stablecoin preferences loaded correctly
+    from config.stablecoins import DEFAULT_STABLECOIN_PREFERENCES
+    print(f"[DEBUG] DEFAULT_STABLECOIN_PREFERENCES ({len(DEFAULT_STABLECOIN_PREFERENCES)} entries): {DEFAULT_STABLECOIN_PREFERENCES}")
+    session_prefs = st.session_state.allocation_constraints.get('stablecoin_preferences', {})
+    print(f"[DEBUG] session_state stablecoin_preferences ({len(session_prefs)} entries): {session_prefs}")
+
     constraints = st.session_state.allocation_constraints
 
     st.markdown("---")
@@ -2910,18 +2929,19 @@ def render_allocation_tab(all_strategies_df: pd.DataFrame):
                 }
                 display_df['strategy_type'] = display_df['strategy_type'].map(strategy_type_map)
 
-                # Format for display
-                display_df['net_apr'] = display_df['net_apr'].apply(lambda x: f"{x*100:.2f}%")
-                display_df['apr5'] = display_df['apr5'].apply(lambda x: f"{x*100:.2f}%" if pd.notna(x) else "N/A")
-                display_df['apr30'] = display_df['apr30'].apply(lambda x: f"{x*100:.2f}%" if pd.notna(x) else "N/A")
-                display_df['blended_apr'] = display_df['blended_apr'].apply(lambda x: f"{x*100:.2f}%")
-                display_df['stablecoin_multiplier'] = display_df['stablecoin_multiplier'].apply(lambda x: f"{x:.2f}x")
-                display_df['adjusted_apr'] = display_df['adjusted_apr'].apply(lambda x: f"{x*100:.2f}%")
+                # Convert to percentage values (as numbers for proper sorting in dataframe)
+                display_df['net_apr'] = display_df['net_apr'] * 100
+                display_df['apr5'] = display_df['apr5'] * 100
+                display_df['apr30'] = display_df['apr30'] * 100
+                display_df['blended_apr'] = display_df['blended_apr'] * 100
+                display_df['adjusted_apr'] = display_df['adjusted_apr'] * 100
 
                 # Format max_size column if present
                 try:
                     if 'max_size' in display_df.columns:
-                        display_df['max_size'] = display_df['max_size'].apply(lambda x: f"${x:,.0f}" if pd.notna(x) else "N/A")
+                        display_df['max_size'] = display_df['max_size'].apply(
+                            lambda x: "Unlimited" if pd.notna(x) and x == float('inf') else (f"${x:,.0f}" if pd.notna(x) else "N/A")
+                        )
                 except KeyError as e:
                     print(f"⚠️  KeyError formatting 'max_size': {e}")
                     print(f"    Available columns in display_df: {list(display_df.columns)}")
@@ -2947,8 +2967,20 @@ def render_allocation_tab(all_strategies_df: pd.DataFrame):
                 # Show count
                 st.info(f"📊 Showing **{len(display_df)}** strategies meeting confidence threshold")
 
-                # Display table with fixed height
-                st.dataframe(display_df, height=400, width='stretch')
+                # Display table with fixed height and proper numeric column formatting
+                st.dataframe(
+                    display_df,
+                    height=400,
+                    width='stretch',
+                    column_config={
+                        'Net APR':      st.column_config.NumberColumn(format="%.2f%%"),
+                        'APR5':         st.column_config.NumberColumn(format="%.2f%%"),
+                        'APR30':        st.column_config.NumberColumn(format="%.2f%%"),
+                        'Blended APR':  st.column_config.NumberColumn(format="%.2f%%"),
+                        'Adjusted APR': st.column_config.NumberColumn(format="%.2f%%"),
+                        'Stable Mult':  st.column_config.NumberColumn(format="%.2fx"),
+                    }
+                )
 
         except Exception as e:
             st.error(f"❌ Error calculating strategy rankings: {str(e)}")
@@ -3091,14 +3123,15 @@ def render_stablecoin_preferences(constraints: Dict) -> Dict:
     )
 
     # Get current preferences from constraints or use defaults
-    from config.settings import DEFAULT_STABLECOIN_PREFERENCES
+    from config.stablecoins import DEFAULT_STABLECOIN_PREFERENCES
     stablecoin_prefs = constraints.get(
         'stablecoin_preferences',
         DEFAULT_STABLECOIN_PREFERENCES.copy()
     )
 
     # Create editable inputs for each stablecoin in 3 columns
-    stablecoin_list = sorted(stablecoin_prefs.keys())
+    # Use DEFAULT_STABLECOIN_PREFERENCES keys to ensure ALL stablecoins get input fields
+    stablecoin_list = sorted(DEFAULT_STABLECOIN_PREFERENCES.keys())
     num_cols = 3
     cols = st.columns(num_cols)
 
@@ -3106,15 +3139,17 @@ def render_stablecoin_preferences(constraints: Dict) -> Dict:
     for i, stablecoin in enumerate(stablecoin_list):
         col = cols[i % num_cols]
         with col:
+            # Use session state value if exists, otherwise use default from stablecoins.py
+            current_value = stablecoin_prefs.get(stablecoin, DEFAULT_STABLECOIN_PREFERENCES[stablecoin])
             updated_prefs[stablecoin] = st.number_input(
                 f"{stablecoin}",
                 min_value=0.0,
                 max_value=1.0,
-                value=float(stablecoin_prefs[stablecoin]),
+                value=float(current_value),
                 step=0.05,
                 format="%.2f",
                 help=f"Multiplier for strategies containing {stablecoin}. "
-                     f"Current: {stablecoin_prefs[stablecoin]:.2f}x",
+                     f"Current: {current_value:.2f}x",
                 key=f"stablecoin_pref_{stablecoin}"
             )
 

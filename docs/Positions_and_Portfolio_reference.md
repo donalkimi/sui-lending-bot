@@ -991,21 +991,34 @@ Database Layer
 
 ### Constraint Configuration
 
-Constraints are configured in the **Allocation Tab** (Tab 2). Defaults are stored in `config/settings.py`:
+Constraints are configured in the **Allocation Tab** (Tab 2). Defaults are stored in `config/settings.py` (stablecoin preference multipliers are defined in `config/stablecoins.py`):
 
 ```python
+# config/stablecoins.py — default multipliers
+DEFAULT_STABLECOIN_PREFERENCES = {
+    'USDC': 1.00,      # Preferred stablecoin (no penalty)
+    'USDY': 0.95,      # 5% APR penalty
+    'AUSD': 0.90,      # 10% APR penalty
+    'FDUSD': 0.90,     # 10% APR penalty
+    'suiUSDT': 0.90,   # 10% APR penalty
+    'suiUSDe': 0.90,   # 10% APR penalty
+    'USDsui': 0.90,    # 10% APR penalty
+}
+
+# config/settings.py
 DEFAULT_ALLOCATION_CONSTRAINTS = {
-    'token_exposure_limit': 0.30,      # 30%
-    'protocol_exposure_limit': 0.40,   # 40%
-    'max_strategies': 10,
-    'min_apy_confidence': 0.0,         # Not yet implemented
+    'token_exposure_limit': 0.30,       # 30%
+    'protocol_exposure_limit': 0.40,    # 40%
+    'max_single_allocation_pct': 0.40,  # 40%
+    'max_strategies': 5,
+    'min_apy_confidence': 0.70,
     'apr_weights': {
-        'net_apr': 0.25,
-        'apr5':    0.25,
-        'apr30':   0.25,
-        'apr90':   0.25
+        'net_apr': 0.30,
+        'apr5':    0.30,
+        'apr30':   0.30,
+        'apr90':   0.10
     },
-    'stablecoin_preferences': {},      # Empty by default
+    'stablecoin_preferences': DEFAULT_STABLECOIN_PREFERENCES,  # From config/stablecoins.py
     'token_exposure_overrides': {}     # Empty by default
 }
 ```
@@ -1032,6 +1045,7 @@ DEFAULT_ALLOCATION_CONSTRAINTS = {
 
 **5. Stablecoin Preferences**
 - Input: `{token_symbol: multiplier}` where multiplier is 0.0-1.0
+- Default multipliers defined in `config/stablecoins.py` (`DEFAULT_STABLECOIN_PREFERENCES`)
 - Purpose: De-prioritize strategies containing certain stablecoins
 - Example: `{"USDC": 0.8}` applies 20% penalty to strategies with USDC
 - If strategy contains multiple stablecoins from preferences, uses **lowest** multiplier
@@ -2539,14 +2553,15 @@ adjusted_apr = blended_apr × stablecoin_multiplier
 ### Key Constants
 
 ```python
-# config/settings.py
+# config/settings.py (stablecoin multipliers from config/stablecoins.py)
 DEFAULT_ALLOCATION_CONSTRAINTS = {
     'token_exposure_limit': 0.30,
     'protocol_exposure_limit': 0.40,
-    'max_strategies': 10,
-    'min_apy_confidence': 0.0,
-    'apr_weights': {'net_apr': 0.25, 'apr5': 0.25, 'apr30': 0.25, 'apr90': 0.25},
-    'stablecoin_preferences': {},
+    'max_single_allocation_pct': 0.40,
+    'max_strategies': 5,
+    'min_apy_confidence': 0.70,
+    'apr_weights': {'net_apr': 0.30, 'apr5': 0.30, 'apr30': 0.30, 'apr90': 0.10},
+    'stablecoin_preferences': DEFAULT_STABLECOIN_PREFERENCES,  # From config/stablecoins.py
     'token_exposure_overrides': {}
 }
 

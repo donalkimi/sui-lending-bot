@@ -239,6 +239,7 @@ class PortfolioService:
                     user_id=user_id,
                     notes=f"Portfolio: {portfolio_name}",
                     portfolio_id=portfolio_id,  # Link to portfolio
+                    strategy_type=_st,
                 )
                 created_positions.append(position_id)
 

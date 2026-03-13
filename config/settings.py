@@ -184,18 +184,7 @@ ENABLED_PROTOCOLS = [
 # Once validated, this will be removed and iterative updates will be always-on
 DEBUG_ENABLE_ITERATIVE_LIQUIDITY_UPDATES = get_bool_env('DEBUG_ENABLE_ITERATIVE_LIQUIDITY_UPDATES', default=True)
 
-# Stablecoin preference multipliers (1.0 = preferred, lower = penalty)
-# Applied to strategy APR when ranking for portfolio allocation
-# Uses canonical stablecoin list from config/stablecoins.py
-DEFAULT_STABLECOIN_PREFERENCES = {
-    'USDC': 1.00,      # Preferred stablecoin (no penalty)
-    'USDY': 0.95,      # 5% APR penalty
-    'AUSD': 0.90,      # 10% APR penalty
-    'FDUSD': 0.90,     # 10% APR penalty
-    'suiUSDT': 0.90,   # 10% APR penalty
-    'suiUSDe': 0.90,   # 10% APR penalty
-    'USDsui': 0.90,   # 10% APR penalty
-}
+from config.stablecoins import DEFAULT_STABLECOIN_PREFERENCES  # noqa: E402
 
 # Default allocation constraints for portfolio construction
 DEFAULT_ALLOCATION_CONSTRAINTS = {

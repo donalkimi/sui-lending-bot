@@ -22,3 +22,22 @@ STABLECOIN_SYMBOLS = set(STABLECOINS.keys())
 
 # Extract just the contracts for matching by address
 STABLECOIN_CONTRACTS = set(STABLECOINS.values())
+
+# Stablecoin preference multipliers (1.0 = preferred, lower = penalty)
+# Applied to strategy APR when ranking for portfolio allocation.
+# - Any entry not in STABLECOINS is dropped (STABLECOINS is the source of truth)
+# - Any stablecoin in STABLECOINS missing here defaults to 1.0 (no penalty)
+_BASE_STABLECOIN_PREFERENCES = {
+    'USDC': 1.00,      # Preferred stablecoin (no penalty)
+    'USDY': 0.95,      # 5% APR penalty
+    'AUSD': 0.90,      # 10% APR penalty
+    'FDUSD': 0.90,     # 10% APR penalty
+    'suiUSDT': 0.90,   # 10% APR penalty
+    'suiUSDe': 0.90,   # 10% APR penalty
+    'USDsui': 0.90,    # 10% APR penalty
+}
+
+DEFAULT_STABLECOIN_PREFERENCES = {
+    symbol: _BASE_STABLECOIN_PREFERENCES.get(symbol, 1.0)
+    for symbol in STABLECOINS
+}
