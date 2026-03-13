@@ -2497,10 +2497,8 @@ def render_allocation_tab(all_strategies_df: pd.DataFrame):
 
     # DEBUG: verify stablecoin preferences loaded correctly
     from config.stablecoins import DEFAULT_STABLECOIN_PREFERENCES
-    print(f"[DEBUG] DEFAULT_STABLECOIN_PREFERENCES ({len(DEFAULT_STABLECOIN_PREFERENCES)} entries): {DEFAULT_STABLECOIN_PREFERENCES}")
     session_prefs = st.session_state.allocation_constraints.get('stablecoin_preferences', {})
-    print(f"[DEBUG] session_state stablecoin_preferences ({len(session_prefs)} entries): {session_prefs}")
-
+    
     constraints = st.session_state.allocation_constraints
 
     st.markdown("---")
@@ -2902,7 +2900,7 @@ def render_allocation_tab(all_strategies_df: pd.DataFrame):
                 # Display table - select columns (check if max_size_usd exists)
                 base_columns = [
                     'strategy_type',
-                    'token1', 'token2', 'token3',
+                    'token1', 'token2', 'token3', 'token4',
                     'protocol_a', 'protocol_b',
                     'net_apr', 'apr5', 'apr30', 'blended_apr', 'stablecoin_multiplier', 'adjusted_apr'
                 ]
@@ -2949,7 +2947,7 @@ def render_allocation_tab(all_strategies_df: pd.DataFrame):
                 # Rename columns
                 column_names = [
                     'Strategy Type',
-                    'Token1', 'Token2', 'Token3',
+                    'Token1', 'Token2', 'Token3', 'Token4',
                     'Protocol A', 'Protocol B',
                     'Net APR', 'APR5', 'APR30', 'Blended APR', 'Stable Mult', 'Adjusted APR'
                 ]
